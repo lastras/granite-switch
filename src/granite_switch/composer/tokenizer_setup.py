@@ -1,0 +1,338 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Tokenizer configuration for adapter control tokens and chat templates.
+
+Extracted from ``compose_granite_switch.py`` to provide testable units for
+token management and chat template modification.
+"""
+
+import json
+import os
+import re
+from typing import Dict, List, Optional, Tuple
+
+
+def _decode_alora_invocation_text(adapter_path: str, tokenizer) -> str:
+    """Decode alora_invocation_tokens from adapter_config.json to a string.
+
+    The activation control token must be inserted immediately before the first
+    token of the invocation sequence. Decoding the full sequence gives the text
+    span to search for in the rendered message content.
+
+    Raises:
+        FileNotFoundError: If adapter_config.json is not found at adapter_path.
+        ValueError: If alora_invocation_tokens is missing or empty.
+    """
+    config_path = os.path.join(adapter_path, "adapter_config.json")
+    with open(config_path) as f:
+        adapter_config = json.load(f)
+
+    token_ids = adapter_config.get("alora_invocation_tokens")
+    if not token_ids:
+        raise ValueError(
+            f"alora_invocation_tokens is missing or empty in {config_path}"
+        )
+
+    return tokenizer.decode(token_ids, skip_special_tokens=False)
+
+
+def add_control_tokens(
+    tokenizer,
+    discovered_adapters: List[Tuple[Optional[str], str, str, Optional[str]]],
+) -> Tuple[List[int], List[str]]:
+    """Add control tokens to the tokenizer for each adapter.
+
+    Each adapter gets one control token: ``<|adapter_name|>`` which activates that adapter.
+
+    Args:
+        tokenizer: HuggingFace tokenizer.
+        discovered_adapters: List of ``(adapter_path, adapter_name, technology, source)`` tuples.
+
+    Returns:
+        ``(adapter_token_ids, special_tokens)``
+
+        adapter_token_ids has length ``num_adapters``.
+    """
+    print(f"\nAdding control tokens for {len(discovered_adapters)} adapter(s)...")
+
+    special_tokens = []
+    for adapter_info in discovered_adapters:
+        adapter_name = adapter_info[1]
+        special_tokens.append(f"<|{adapter_name}|>")
+
+    print(f"  Tokens to add: {special_tokens}")
+    num_added = tokenizer.add_special_tokens(
+        {"additional_special_tokens": special_tokens}
+    )
+    new_vocab_size = len(tokenizer)
+    print(f"Added {num_added} special tokens")
+    print(f"  New vocabulary size: {new_vocab_size}")
+
+    # Get token IDs
+    print("\nToken ID mapping:")
+    adapter_token_ids = []
+    for adapter_info in discovered_adapters:
+        adapter_name = adapter_info[1]
+        token_name = f"<|{adapter_name}|>"
+        token_id = tokenizer.convert_tokens_to_ids(token_name)
+        adapter_token_ids.append(token_id)
+        print(f"  {token_name}: {token_id}")
+
+    return adapter_token_ids, special_tokens
+
+
+def configure_chat_template(
+    tokenizer,
+    discovered_adapters: List[Tuple[Optional[str], str, str, Optional[str]]],
+):
+    """Inject adapter control token mappings into a Granite chat template.
+
+    Modifies the tokenizer's chat template so that callers can pass
+    ``adapter_name="..."`` to ``apply_chat_template()`` and have the
+    correct control token inserted automatically:
+
+    * **LoRA** adapters: token at the **beginning** of the sequence.
+    * **ALoRA** adapters: token immediately before ``alora_invocation_tokens``
+      in the last user message (e.g. before ``<requirements>`` for the
+      requirement-checker), or right before the generation prompt for adapters
+      whose invocation sequence is the assistant role token sequence and
+      therefore does not appear in any user message.
+
+    ALoRA placement uses a two-pass Jinja2 approach embedded in the template:
+
+    * **Pass 1** (before the message loop): scans messages for the last user
+      message containing the decoded invocation text; stores its index in
+      ``ns.alora_target_idx`` (stays ``-1`` when not found).
+    * **Pass 2** (inside the message loop): when the current message is the
+      target, splits ``content.val`` on the invocation text and rejoins with
+      the control token inserted before the final occurrence.
+    * **Fallback** (before ``add_generation_prompt``): fires when
+      ``ns.alora_target_idx == -1``, covering adapters whose invocation
+      sequence is the assistant role tokens.
+
+    The injection targets Granite-specific template patterns
+    (``namespace()``, ``add_generation_prompt``, etc.).  The caller is
+    responsible for gating invocation to Granite models only.
+
+    Args:
+        tokenizer: HuggingFace tokenizer with a chat_template to modify.
+        discovered_adapters: List of ``(adapter_path, adapter_name, technology, source)`` tuples.
+    """
+    print("\nConfiguring chat template with adapter support...")
+
+    if tokenizer.chat_template is None:
+        print(
+            "Warning: Base model does not have a chat template, "
+            "skipping adapter configuration"
+        )
+        return
+
+    base_chat_template = tokenizer.chat_template
+
+    # Build adapter mapping. For ALoRA adapters, decode alora_invocation_tokens
+    # so the template can locate the right insertion point at render time.
+    adapter_mapping: Dict[str, Dict[str, str]] = {}
+    for adapter_info in discovered_adapters:
+        adapter_path = adapter_info[0]
+        adapter_name = adapter_info[1]
+        technology = adapter_info[2]
+        entry: Dict[str, str] = {
+            "token": f"<|{adapter_name}|>",
+            "type": technology,
+        }
+        if technology == "alora" and adapter_path is not None:
+            entry["invocation_text"] = _decode_alora_invocation_text(
+                adapter_path, tokenizer
+            )
+        adapter_mapping[adapter_name] = entry
+
+    mapping_entries = []
+    for adapter_name, info in adapter_mapping.items():
+        if "invocation_text" in info:
+            mapping_entries.append(
+                f"    '{adapter_name}': {{'token': '{info['token']}', "
+                f"'type': '{info['type']}', "
+                f"'invocation_text': '{info['invocation_text']}'}}"
+            )
+        else:
+            mapping_entries.append(
+                f"    '{adapter_name}': {{'token': '{info['token']}', 'type': '{info['type']}'}}"
+            )
+    adapter_map_def = (
+        "{%- set adapter_map = {\n"
+        + ",\n".join(mapping_entries)
+        + "\n} %}\n"
+    )
+
+    adapter_lookup = """{#- Look up adapter token, type, and invocation text from adapter_name -#}
+{%- set adapter_token = '' %}
+{%- set adapter_type = '' %}
+{%- set adapter_invocation_text = '' %}
+{%- if adapter_name is defined and adapter_name in adapter_map %}
+{%- set adapter_token = adapter_map[adapter_name]['token'] %}
+{%- set adapter_type = adapter_map[adapter_name]['type'] %}
+{%- if adapter_map[adapter_name]['type'] == 'alora' %}
+{%- set adapter_invocation_text = adapter_map[adapter_name]['invocation_text'] %}
+{%- endif %}
+{%- endif %}
+
+"""
+
+    lora_prefix_insertion = """{#- For lora adapters: insert activation token at the very beginning -#}
+{%- if adapter_token and adapter_type == 'lora' %}
+{{- adapter_token }}
+{%- endif %}
+
+"""
+
+    # Pass 1: scan messages before the main loop to find the target user message.
+    # We iterate with a different loop variable (_msg) to avoid shadowing `message`.
+    # Using the last occurrence (not first) so multi-turn conversations always
+    # activate on the final user turn, which is the one being answered.
+    alora_pass1 = """{#- ALoRA Pass 1: find the last user message containing the invocation text.
+     ns.alora_target_idx stays -1 when the invocation sequence is the assistant role
+     token sequence (not present in any user message); the fallback insertion below
+     handles that case. -#}
+{%- if ns.adapter_type == 'alora' and ns.adapter_invocation_text %}
+    {%- for _msg in messages %}
+        {%- if _msg.role == 'user' %}
+            {%- if _msg.content is string and ns.adapter_invocation_text in _msg.content %}
+                {%- set ns.alora_target_idx = loop.index0 %}
+            {%- elif _msg.content is not string and _msg.content is iterable %}
+                {%- set _msg_idx = loop.index0 %}
+                {%- for _entry in _msg.content %}
+                    {%- if _entry.type == 'text' and ns.adapter_invocation_text in _entry.text %}
+                        {%- set ns.alora_target_idx = _msg_idx %}
+                    {%- endif %}
+                {%- endfor %}
+            {%- endif %}
+        {%- endif %}
+    {%- endfor %}
+{%- endif %}
+"""
+
+    # Pass 2: runs inside the main message loop after content.val is assembled.
+    # rsplit(..., 1) splits on the last occurrence so the token lands in the
+    # right place when the invocation text appears more than once in the message.
+    alora_pass2 = """    {#- ALoRA Pass 2: inject activation token before invocation text in the target message -#}
+    {%- if loop.index0 == ns.alora_target_idx %}
+        {%- set _parts = content.val.rsplit(ns.adapter_invocation_text, 1) %}
+        {%- if _parts | length > 1 %}
+            {%- set content.val = _parts[0] + ns.adapter_token + ns.adapter_invocation_text + _parts[1] %}
+        {%- endif %}
+    {%- endif %}
+"""
+
+    # Fallback for adapters whose invocation sequence is the assistant role tokens:
+    # Pass 1 never sets alora_target_idx >= 0 for those, so we emit here instead.
+    alora_insertion = """{#- ALoRA fallback: insert activation token right before generation prompt.
+     Only fires when Pass 1 found no user message with the invocation text
+     (alora_target_idx == -1), meaning the adapter activates at the assistant
+     role token boundary rather than inside a user message. -#}
+{%- if ns.adapter_token and ns.adapter_type == 'alora' and ns.alora_target_idx == -1 %}
+{{- ns.adapter_token }}
+{%- endif %}
+"""
+
+    # Build the modified template
+    modified_chat_template = adapter_map_def + adapter_lookup
+
+    # Find insertion point for lora prefix (after ns is defined, before system message)
+    message_start_patterns = [
+        r"(\{%- if messages\[0\])",
+        r"(\{%- if system_message)",
+        r"(\{%- for message in)",
+    ]
+
+    insertion_point = None
+    for pattern in message_start_patterns:
+        match = re.search(pattern, base_chat_template)
+        if match:
+            insertion_point = match.start()
+            break
+
+    if insertion_point is not None:
+        modified_chat_template += (
+            base_chat_template[:insertion_point]
+            + lora_prefix_insertion
+            + base_chat_template[insertion_point:]
+        )
+    else:
+        modified_chat_template += lora_prefix_insertion + base_chat_template
+
+    # Merge adapter variables into the ns namespace so they survive loop iterations.
+    # alora_target_idx initializes to -1; Pass 1 updates it at render time.
+    ns_pattern = r"(\{%- set ns = namespace\([^)]+)\)"
+    match = re.search(ns_pattern, modified_chat_template)
+    if match:
+        ns_def = match.group(1)
+        if not ns_def.strip().endswith("("):
+            ns_def += ","
+        ns_def += (
+            "\n                       adapter_token=adapter_token,"
+            "\n                       adapter_type=adapter_type,"
+            "\n                       adapter_invocation_text=adapter_invocation_text,"
+            "\n                       alora_target_idx=-1"
+            "\n                       )"
+        )
+        modified_chat_template = (
+            modified_chat_template[: match.start()]
+            + ns_def
+            + modified_chat_template[match.end() :]
+        )
+        modified_chat_template = modified_chat_template.replace(
+            "{%- if adapter_token and adapter_type ==",
+            "{%- if ns.adapter_token and ns.adapter_type ==",
+        )
+        modified_chat_template = modified_chat_template.replace(
+            "{{- adapter_token }}", "{{- ns.adapter_token }}"
+        )
+
+    # Inject Pass 1 immediately before the main message loop
+    for_loop_pattern = r"(\{%- for message in messages %\})"
+    match = re.search(for_loop_pattern, modified_chat_template)
+    if match:
+        insertion_point = match.start()
+        modified_chat_template = (
+            modified_chat_template[:insertion_point]
+            + alora_pass1
+            + modified_chat_template[insertion_point:]
+        )
+
+    # Inject Pass 2 inside the loop, after content.val is built, before role dispatch
+    user_role_pattern = r"(\{%- if \(message\.role == 'user'\) or)"
+    match = re.search(user_role_pattern, modified_chat_template)
+    if match:
+        insertion_point = match.start()
+        modified_chat_template = (
+            modified_chat_template[:insertion_point]
+            + alora_pass2
+            + modified_chat_template[insertion_point:]
+        )
+
+    # Insert alora fallback before generation prompt
+    gen_prompt_pattern = r"(\{%- if add_generation_prompt %\})"
+    match = re.search(gen_prompt_pattern, modified_chat_template)
+    if match:
+        insertion_point = match.start()
+        modified_chat_template = (
+            modified_chat_template[:insertion_point]
+            + alora_insertion
+            + modified_chat_template[insertion_point:]
+        )
+    else:
+        modified_chat_template += "\n" + alora_insertion
+
+    tokenizer.chat_template = modified_chat_template
+    print(
+        f"Chat template configured with {len(adapter_mapping)} adapter mappings:"
+    )
+    for adapter_name, info in adapter_mapping.items():
+        if "invocation_text" in info:
+            placement = f"before '{info['invocation_text']}' in last user message"
+        else:
+            placement = "before generation prompt (fallback)"
+        print(f"  - {adapter_name}: {info['token']} ({info['type']}) → {placement}")
+    print("Adapter token insertion logic added:")
+    print("  - LoRA tokens: inserted at BEGINNING of sequence")
+    print("  - ALoRA tokens (user-message invocation): before invocation text in last user message")
+    print("  - ALoRA tokens (role-token invocation): before generation prompt")

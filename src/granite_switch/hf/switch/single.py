@@ -1,0 +1,198 @@
+# SPDX-License-Identifier: Apache-2.0
+"""SingleSwitch using single-head attention for adapter selection.
+
+This switch uses a single-head attention mechanism with a single active
+dimension (dim 0) inside a head_dim-wide vector:
+- Control tokens: key[0]=+gain, query[0]=1, value[0]=adapter_id
+- Other tokens: key[0]=-gain, query[0]=1, value[0]=0
+
+Uses HuggingFace's attention backends (FlashAttention, SDPA, etc.) for
+efficient computation, matching the pattern used in GraniteLoRAEmbeddedAttention.
+
+Uses the modern HuggingFace Cache API for KV caching (required for incremental decoding).
+"""
+
+import torch
+import torch.nn as nn
+from typing import Optional
+from transformers.cache_utils import Cache
+from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+from transformers.models.granite.modeling_granite import eager_attention_forward
+
+
+class SingleSwitch(nn.Module):
+    """Single-head attention-based switch for adapter selection.
+
+    Uses a single attention head with a single active dimension (dim 0)
+    inside a head_dim-wide vector:
+    - Control tokens: k[0]=+gain, q[0]=1, v[0]=adapter_id
+    - Other tokens: k[0]=-gain, q[0]=1, v[0]=0
+
+    The dot product Q·K is exactly ±gain regardless of head_dim, matching vLLM.
+
+    This computes cumulative sums via causal attention over control tokens.
+    Uses HuggingFace's attention backends (same as GraniteLoRAEmbeddedAttention)
+    to get FlashAttention, SDPA, etc. for free.
+
+    Uses the modern Cache API for KV caching (required for incremental decoding).
+    The switch is assigned layer_idx=-1 to differentiate it from decoder layers.
+
+    Args:
+        num_adapters: Number of LoRA adapters
+        config: Model configuration (for attention backend selection)
+        control_token_gain: Attention gain for control/non-control token separation (default: 15)
+        switch_head_dim: Head dimension for switch attention (default: from GraniteSwitchConfig)
+    """
+
+    def __init__(
+        self,
+        num_adapters: int,
+        config=None,
+        control_token_gain: float = 15.0,
+        switch_head_dim: int = 32,
+        layer_idx: int = 0,
+    ):
+        super().__init__()
+        self.num_adapters = num_adapters
+        self.control_token_gain = control_token_gain
+        self.config = config
+
+        # Use expanded_head_dim to align with decoder layers across both backends.
+        if config is not None and hasattr(config, 'expanded_head_dim') and getattr(config, 'num_adapters', 0) > 0:
+            self.head_dim = config.expanded_head_dim
+        elif config is not None:
+            self.head_dim = config.hidden_size // config.num_attention_heads
+        else:
+            self.head_dim = switch_head_dim
+
+        self.num_heads = 1
+        self.num_key_value_heads = 1
+        self.num_key_value_groups = self.num_heads // self.num_key_value_heads  # Should be 1
+        self.scaling = 1.0  # No scaling needed for cumsum attention
+
+        # For attention backend compatibility
+        self.attention_dropout = 0.0
+        self.is_causal = True
+
+        # Layer index for cache - assigned by the model
+        # Switch is layer 0, decoder layers are 1 to num_hidden_layers
+        self.layer_idx = layer_idx
+
+    @property
+    def num_cache_layers(self) -> int:
+        """Number of cache slots used."""
+        return 1
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        adapter_token_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        past_key_values: Optional[Cache] = None,
+        cache_position: Optional[torch.LongTensor] = None,
+    ) -> torch.Tensor:
+        """
+        Compute adapter indices using single-head attention mechanism.
+
+        The switch uses the same head_dim as decoder layers to share the model's Cache object,
+        ensuring standard HuggingFace behavior where past_key_values is exposed and managed
+        by the caller.
+
+        Args:
+            input_ids: Input token IDs [batch, seq_len]
+            adapter_token_ids: Activating control token IDs [num_adapters]
+                              Single token per adapter (no base token slot):
+                              - adapter_token_ids[i] = token to activate adapter i+1
+                              Output 0 = base (implicit default). SingleSwitch has no mechanism
+                              to transition back to base mid-sequence.
+            attention_mask: Optional attention mask [batch, 1, seq_len, seq_len]
+            past_key_values: Optional Cache object (shared with model's decoder layers)
+            cache_position: Position indices for caching [seq_len]
+
+        Returns:
+            adapter_indices: [batch, seq_len] where 0 = base, 1+ = adapters
+        """
+        bsz, q_len = input_ids.shape
+        device = input_ids.device
+
+        # ======================================================================
+        # Prepare Q, K, V tensors  (single active dimension: dim 0)
+        # ======================================================================
+        # Only dim 0 carries signal; remaining dims are zero padding required
+        # by the attention backend's head_dim constraint.  This gives
+        # Q·K = 1 * (±gain) = ±gain, independent of head_dim.
+        query_states = torch.zeros((bsz, self.num_heads, q_len, self.head_dim), device=device)
+        query_states[:, :, :, 0] = 1.0
+
+        key_states = torch.zeros((bsz, self.num_heads, q_len, self.head_dim), device=device)
+        key_states[:, :, :, 0] = -self.control_token_gain
+
+        value_states = torch.zeros((bsz, self.num_heads, q_len, self.head_dim), device=device)
+
+        # Set keys and values for control tokens
+        for adapter_idx in range(self.num_adapters):
+            token_id = adapter_token_ids[adapter_idx]
+            adapter_id = adapter_idx + 1  # 1-indexed
+
+            mask = input_ids == token_id  # [batch, seq_len]
+
+            # Key dim 0: flip from -gain to +gain
+            key_states[:, 0, :, 0][mask] = self.control_token_gain
+
+            # Value dim 0: set adapter_id
+            value_states[:, 0, :, 0][mask] = float(adapter_id)
+
+        # ======================================================================
+        # KV Cache with modern Cache API (same pattern as GraniteLoRAEmbeddedAttention)
+        # ======================================================================
+        if past_key_values is not None:
+            # Cache will internally handle concatenation with past key/values
+            # For switch, we don't have RoPE, so cache_kwargs doesn't include sin/cos
+            cache_kwargs = {"cache_position": cache_position}
+            key_states, value_states = past_key_values.update(
+                key_states, value_states, self.layer_idx, cache_kwargs
+            )
+
+        # ======================================================================
+        # Compute attention using HuggingFace backend
+        # ======================================================================
+        # Call HuggingFace attention backend (same as GraniteLoRAEmbeddedAttention)
+        # This gets us FlashAttention, SDPA, FlexAttention, etc. for free
+        attention_interface = eager_attention_forward
+        if self.config is not None and hasattr(self.config, '_attn_implementation'):
+            if self.config._attn_implementation != "eager":
+                attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+
+        attn_output, _ = attention_interface(
+            self,
+            query_states,
+            key_states,
+            value_states,
+            attention_mask,
+            dropout=0.0,
+            scaling=self.scaling,
+            sliding_window=None,
+        )
+
+        # ======================================================================
+        # Compute adapter indices
+        # ======================================================================
+        # attn_output shape: [batch, seq_len, num_heads, head_dim]
+        # num_heads = 1 in this case, and we only care about 
+        # the first dimension out of those head_dim
+        # Extract only first dimension (where adapter_id is stored)
+        # Shape: [batch, seq_len, 1, head_dim] -> [batch, seq_len]
+        attn_output = attn_output[:, :, 0, 0]  # [batch, seq_len]
+ 
+        # Round to get integer adapter indices
+        adapter_indices = torch.round(attn_output).long()
+
+        # Clamp to valid range [0, num_adapters]
+        adapter_indices = torch.clamp(adapter_indices, 0, self.num_adapters)
+
+        # Ensure output shape matches input shape
+        assert adapter_indices.shape == input_ids.shape, (
+            f"adapter_indices shape {adapter_indices.shape} must match input_ids shape {input_ids.shape}"
+        )
+
+        return adapter_indices

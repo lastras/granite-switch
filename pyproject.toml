@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "granite-switch"
+version = "0.1.0"
+description = "Granite Switch: Embedded LoRA adapter switching for Granite models"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "torch>=2.0.0",
+    "transformers>=5.5.1",
+]
+
+[project.optional-dependencies]
+hf = ["accelerate>=0.20.0"]
+vllm = ["vllm>=0.19.1,<0.20.0"]
+vllm20 = ["vllm>=0.20.0,<0.21.0"]
+compose = ["huggingface_hub", "pyyaml", "tqdm", "safetensors"]
+build = ["huggingface_hub", "pyyaml", "tqdm", "safetensors"]  # Backward compatibility alias for compose
+dev = ["pytest", "granite-switch[hf,vllm,compose]"]
+dev-vllm20 = ["pytest", "granite-switch[hf,vllm20,compose]"]
+test = ["pytest"]
+
+[project.entry-points."vllm.general_plugins"]
+register_granite_switch = "granite_switch.vllm:register"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--ignore=tests/_legacy", "-m", "not deep"]
+markers = [
+    "gpu: requires CUDA GPU",
+    "vllm: requires vLLM installed",
+    "slow: takes > 30s",
+    "deep: expensive code-theory tests (m=8 / 256-dim); run with: pytest -m deep",
+    "requires_model: needs a real model checkpoint",
+]
+
+[tool.uv]
+conflicts = [
+    [
+        { extra = "vllm" },
+        { extra = "vllm20" },
+    ],
+    [
+        { extra = "dev" },
+        { extra = "vllm20" },
+    ],
+    [
+        { extra = "dev" },
+        { extra = "dev-vllm20" },
+    ],
+    [
+        { extra = "dev-vllm20" },
+        { extra = "vllm" },
+    ],
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
