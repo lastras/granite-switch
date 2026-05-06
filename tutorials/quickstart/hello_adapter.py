@@ -36,7 +36,7 @@ from pathlib import Path
 
 import torch
 
-# ── Guardian judge instructions for think / no-think modes ───────────────
+# ── Guardian prompt protocol ──────────────────────────────────────────────
 
 GUARDIAN_JUDGE_THINK = (
     "<think>As a judge agent, carefully analyze whether the provided text meets the "
@@ -56,7 +56,7 @@ GUARDIAN_JUDGE_NOTHINK = (
 def build_guardian_block(criteria, think=False):
     judge_instruction = GUARDIAN_JUDGE_THINK if think else GUARDIAN_JUDGE_NOTHINK
     return (
-        f"{judge_instruction}\n\n"
+        f"<guardian>{judge_instruction}\n\n"
         f"### Criteria: {criteria}\n\n"
         f"### Scoring Schema: If the last assistant's text meets the criteria, "
         f"return 'yes'; otherwise, return 'no'."
