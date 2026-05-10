@@ -51,6 +51,8 @@ python -m granite_switch.composer.compose_granite_switch \
   --output ./my-model
 ```
 
+Use the **[Adapter Composer](https://generative-computing.github.io/granite-switch/adapter_catalog.html)** to browse available adapters, compare benchmarks, and generate a ready-to-run compose command.
+
 This downloads the base model, embeds compatible LoRA adapters (with a preference towards activated LoRA), adds control tokens and a chat template, and produces a model directory that works with both HuggingFace and vLLM.
 
 For convenience, you can find already composed Granite Switch models for the Granite 4.1 model family here:
