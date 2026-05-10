@@ -5,6 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Granite Libraries — Adapter Catalog</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <!-- Carbon Web Components v2 (White theme, no extra theme script needed) -->
+  <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/tag/latest/button.min.js"></script>
+  <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/tag/latest/tag.min.js"></script>
+  <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/tag/latest/select.min.js"></script>
+  <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/tag/latest/content-switcher.min.js"></script>
+  <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/tag/latest/code-snippet.min.js"></script>
+  <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/tag/latest/link.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -32,34 +39,7 @@
 
     header p { color: #525252; font-size: 0.95rem; }
 
-    .selector-row {
-      display: flex;
-      align-items: center;
-      gap: 1rem;
-      margin-bottom: 1.5rem;
-    }
-
-    .selector-row label {
-      font-weight: 500;
-      font-size: 0.9rem;
-      color: #393939;
-      white-space: nowrap;
-    }
-
-    #adapter-select {
-      flex: 1;
-      max-width: 380px;
-      padding: 0.5rem 2.25rem 0.5rem 0.75rem;
-      border: 1px solid #8d8d8d;
-      background: #fff
-        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M5 6L0 0h10z' fill='%23161616'/%3E%3C/svg%3E")
-        no-repeat right 0.75rem center;
-      appearance: none;
-      font-size: 0.95rem;
-      color: #161616;
-      cursor: pointer;
-      border-radius: 0;
-    }
+    .selector-row { margin-bottom: 1.5rem; }
 
     /* ── Adapter panel ── */
     .panel {
@@ -82,63 +62,13 @@
     .panel-actions {
       display: flex;
       align-items: center;
-      gap: 0.75rem;
-      padding-top: 0.25rem;
+      gap: 0.5rem;
+      padding-top: 0.125rem;
       flex-shrink: 0;
     }
 
-    .readme-link {
-      font-size: 0.8rem;
-      color: #0f62fe;
-      text-decoration: none;
-      white-space: nowrap;
-    }
-    .readme-link:hover { text-decoration: underline; }
-
-    /* Add-to-composition button */
-    .add-btn {
-      font-size: 0.8rem;
-      padding: 0.3rem 0.75rem;
-      border: 1px solid #0f62fe;
-      color: #0f62fe;
-      background: transparent;
-      cursor: pointer;
-      white-space: nowrap;
-      transition: background 0.1s, color 0.1s, border-color 0.1s;
-    }
-    .add-btn:hover { background: #edf5ff; }
-
-    .add-btn.in-cart {
-      background: #0f62fe;
-      color: #fff;
-      border-color: #0f62fe;
-    }
-    .add-btn.in-cart:hover {
-      background: #da1e28;
-      border-color: #da1e28;
-    }
-
-    /* ── Badges ── */
     .badges { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 1rem; }
 
-    .badge {
-      display: inline-block;
-      padding: 0.2rem 0.55rem;
-      border-radius: 2px;
-      font-size: 0.72rem;
-      font-weight: 600;
-      letter-spacing: 0.03em;
-      text-transform: uppercase;
-    }
-
-    .badge-rag      { background: #d0e2ff; color: #0043ce; }
-    .badge-core     { background: #e8daff; color: #6929c4; }
-    .badge-guardian { background: #d9fbfb; color: #005d5d; }
-    .badge-lora     { background: #dde1ff; color: #001141; }
-    .badge-alora    { background: #defbe6; color: #044317; }
-    .badge-stage    { background: #f4f4f4; color: #393939; border: 1px solid #c6c6c6; text-transform: none; font-weight: 500; }
-
-    /* ── Description ── */
     .description {
       color: #393939;
       font-size: 0.925rem;
@@ -181,30 +111,14 @@
       color: #161616;
     }
 
-    .cart-count {
-      font-weight: 400;
-      color: #525252;
-      margin-left: 0.4rem;
-    }
+    .cart-count { font-weight: 400; color: #525252; margin-left: 0.4rem; }
 
-    .cart-clear-btn {
-      font-size: 0.78rem;
-      color: #da1e28;
-      background: none;
-      border: none;
-      cursor: pointer;
-      padding: 0;
-    }
-    .cart-clear-btn:hover { text-decoration: underline; }
-
-    /* Cart empty state */
     .cart-empty {
       padding: 1.25rem 1.5rem;
       color: #8d8d8d;
       font-size: 0.875rem;
     }
 
-    /* Cart adapter list */
     .cart-items {
       padding: 0.75rem 1.25rem;
       display: flex;
@@ -222,84 +136,23 @@
 
     .cart-item-name { flex: 1; color: #161616; }
 
-    .cart-item-remove {
-      background: none;
-      border: none;
-      color: #8d8d8d;
-      cursor: pointer;
-      font-size: 0.75rem;
-      padding: 0.1rem 0.25rem;
-      line-height: 1;
-    }
-    .cart-item-remove:hover { color: #da1e28; }
-
-    /* Model selector (inside cart) */
-    .model-selector-row {
+    .selector-option-row {
       display: flex;
       align-items: center;
-      gap: 0.75rem;
+      gap: 1rem;
       padding: 0.875rem 1.25rem;
       border-bottom: 1px solid #e0e0e0;
     }
 
-    .model-selector-label {
+    .selector-option-label {
       font-size: 0.8rem;
       font-weight: 500;
       color: #525252;
       white-space: nowrap;
+      min-width: 5rem;
     }
 
-    .model-btns { display: flex; gap: 0; }
-
-    .model-btn {
-      padding: 0.25rem 0.65rem;
-      font-size: 0.8rem;
-      border: 1px solid #c6c6c6;
-      border-right: none;
-      background: #fff;
-      color: #393939;
-      cursor: pointer;
-    }
-    .model-btn:last-child { border-right: 1px solid #c6c6c6; }
-    .model-btn:hover { background: #e8e8e8; }
-    .model-btn.active {
-      background: #0f62fe;
-      color: #fff;
-      border-color: #0f62fe;
-      z-index: 1;
-    }
-
-    /* Command box */
-    .command-section { padding: 1rem 1.25rem; }
-
-    .command-box {
-      background: #161616;
-      color: #f4f4f4;
-      font-family: 'IBM Plex Mono', 'Menlo', 'Courier New', monospace;
-      font-size: 0.775rem;
-      padding: 0.875rem 1rem;
-      line-height: 1.7;
-      white-space: pre;
-      overflow-x: auto;
-      margin-bottom: 0.625rem;
-    }
-
-    .command-footer {
-      display: flex;
-      align-items: center;
-      justify-content: flex-end;
-    }
-
-    .copy-btn {
-      font-size: 0.8rem;
-      padding: 0.3rem 0.9rem;
-      background: #0f62fe;
-      color: #fff;
-      border: none;
-      cursor: pointer;
-    }
-    .copy-btn:hover { background: #0353e9; }
-    .copy-btn.copied { background: #24a148; }
+    .command-section { padding: 1rem 1.25rem 1.25rem; }
   </style>
 </head>
 <body>
@@ -310,27 +163,26 @@
   </header>
 
   <div class="selector-row">
-    <label for="adapter-select">Select adapter</label>
-    <select id="adapter-select">
-      <optgroup label="RAG Library">
-        <option value="query-rewrite">Query Rewrite</option>
-        <option value="query-clarification">Query Clarification</option>
-        <option value="answerability">Answerability</option>
-        <option value="hallucination-detection">Hallucination Detection</option>
-        <option value="citations">Citations</option>
-      </optgroup>
-      <optgroup label="Core Library">
-        <option value="context-attribution">Context Attribution</option>
-        <option value="requirement-check">Requirement Check</option>
-        <option value="uncertainty">Uncertainty</option>
-      </optgroup>
-      <optgroup label="Guardian Library">
-        <option value="guardian-core">Guardian Core</option>
-        <option value="factuality-detection">Factuality Detection</option>
-        <option value="factuality-correction">Factuality Correction</option>
-        <option value="policy-guardrails">Policy Guardrails</option>
-      </optgroup>
-    </select>
+    <cds-select id="adapter-select" label-text="Select adapter">
+      <cds-select-item-group label="RAG Library">
+        <cds-select-item value="query-rewrite">Query Rewrite</cds-select-item>
+        <cds-select-item value="query-clarification">Query Clarification</cds-select-item>
+        <cds-select-item value="answerability">Answerability</cds-select-item>
+        <cds-select-item value="hallucination-detection">Hallucination Detection</cds-select-item>
+        <cds-select-item value="citations">Citations</cds-select-item>
+      </cds-select-item-group>
+      <cds-select-item-group label="Core Library">
+        <cds-select-item value="context-attribution">Context Attribution</cds-select-item>
+        <cds-select-item value="requirement-check">Requirement Check</cds-select-item>
+        <cds-select-item value="uncertainty">Uncertainty</cds-select-item>
+      </cds-select-item-group>
+      <cds-select-item-group label="Guardian Library">
+        <cds-select-item value="guardian-core">Guardian Core</cds-select-item>
+        <cds-select-item value="factuality-detection">Factuality Detection</cds-select-item>
+        <cds-select-item value="factuality-correction">Factuality Correction</cds-select-item>
+        <cds-select-item value="policy-guardrails">Policy Guardrails</cds-select-item>
+      </cds-select-item-group>
+    </cds-select>
   </div>
 
   <div id="panel" class="panel"></div>
@@ -341,8 +193,8 @@
       <span class="cart-header-title">
         Composition<span id="cart-count" class="cart-count"></span>
       </span>
-      <button class="cart-clear-btn" id="cart-clear-btn" onclick="clearCart()"
-              style="display:none">Clear all</button>
+      <cds-button id="cart-clear-btn" kind="danger--ghost" size="sm"
+                  onclick="clearCart()" style="display:none">Clear all</cds-button>
     </div>
     <div id="cart-body"></div>
   </div>
@@ -366,6 +218,10 @@ const MODEL_IDS = {
   '4.1-8B':    'ibm-granite/granite-4.1-8b',
   '4.1-30B':   'ibm-granite/granite-4.1-30b',
 };
+
+// Carbon tag type mappings
+const LIB_TAG  = { RAG: 'blue', Core: 'purple', Guardian: 'teal' };
+const FLAV_TAG = { lora: 'cool-gray', alora: 'green' };
 
 // ── Adapter data ──────────────────────────────────────────────────────────────
 //
@@ -680,18 +536,18 @@ const C = {
 // ── State ─────────────────────────────────────────────────────────────────────
 let chart = null;
 let cart  = new Set();
-let selectedModel     = 'ibm-granite/granite-4.1-3b';  // default
-let selectedBuildType = 'prefer-alora';                // 'prefer-alora' | 'all-lora'
+let currentId         = 'query-rewrite';
+let selectedModel     = 'ibm-granite/granite-4.1-3b';
+let selectedBuildType = 'prefer-alora';
 
 // ── Cart ──────────────────────────────────────────────────────────────────────
 
 function toggleCart(id) {
   cart.has(id) ? cart.delete(id) : cart.add(id);
-  // Update the add button in place — no chart re-render needed.
   const btn = document.getElementById('add-btn');
   if (btn) {
     const inCart = cart.has(id);
-    btn.className = 'add-btn' + (inCart ? ' in-cart' : '');
+    btn.setAttribute('kind', inCart ? 'primary' : 'tertiary');
     btn.textContent = inCart ? '✓ Added' : '+ Add to composition';
   }
   renderCart();
@@ -699,10 +555,9 @@ function toggleCart(id) {
 
 function removeFromCart(id) {
   cart.delete(id);
-  // Sync add button if this adapter is currently displayed.
   const btn = document.getElementById('add-btn');
-  if (btn && sel.value === id) {
-    btn.className = 'add-btn';
+  if (btn && currentId === id) {
+    btn.setAttribute('kind', 'tertiary');
     btn.textContent = '+ Add to composition';
   }
   renderCart();
@@ -711,7 +566,10 @@ function removeFromCart(id) {
 function clearCart() {
   cart.clear();
   const btn = document.getElementById('add-btn');
-  if (btn) { btn.className = 'add-btn'; btn.textContent = '+ Add to composition'; }
+  if (btn) {
+    btn.setAttribute('kind', 'tertiary');
+    btn.textContent = '+ Add to composition';
+  }
   renderCart();
 }
 
@@ -760,23 +618,21 @@ function generateCommand() {
   return lines.join('\n');
 }
 
-function copyCommand() {
-  const cmd = generateCommand();
-  if (!cmd) return;
-  navigator.clipboard.writeText(cmd).then(() => {
-    const btn = document.querySelector('.copy-btn');
-    if (!btn) return;
-    btn.textContent = 'Copied!';
-    btn.className = 'copy-btn copied';
-    setTimeout(() => { btn.textContent = 'Copy'; btn.className = 'copy-btn'; }, 2000);
+function attachCartListeners() {
+  const modelSw = document.querySelector('cds-content-switcher[data-role="model"]');
+  modelSw?.addEventListener('cds-content-switcher-item-selected', e => {
+    setModel(e.detail.item.value);
+  });
+  const buildSw = document.querySelector('cds-content-switcher[data-role="build"]');
+  buildSw?.addEventListener('cds-content-switcher-item-selected', e => {
+    setBuildType(e.detail.item.value);
   });
 }
 
 function renderCart() {
-  // Update header count and clear button visibility.
-  const countEl   = document.getElementById('cart-count');
-  const clearBtn  = document.getElementById('cart-clear-btn');
-  const bodyEl    = document.getElementById('cart-body');
+  const countEl  = document.getElementById('cart-count');
+  const clearBtn = document.getElementById('cart-clear-btn');
+  const bodyEl   = document.getElementById('cart-body');
 
   if (countEl)  countEl.textContent = cart.size > 0 ? ` (${cart.size})` : '';
   if (clearBtn) clearBtn.style.display = cart.size > 0 ? '' : 'none';
@@ -788,31 +644,28 @@ function renderCart() {
   }
 
   // Adapter list
-  const libClass = { RAG: 'badge-rag', Core: 'badge-core', Guardian: 'badge-guardian' };
   const itemsHtml = Object.keys(ADAPTERS)
     .filter(id => cart.has(id))
     .map(id => {
       const a = ADAPTERS[id];
       return `<div class="cart-item">
-        <span class="badge ${libClass[a.library]}">${a.library}</span>
+        <cds-tag type="${LIB_TAG[a.library]}" size="sm">${a.library}</cds-tag>
         <span class="cart-item-name">${a.name}</span>
-        <button class="cart-item-remove" onclick="removeFromCart('${id}')" title="Remove">✕</button>
+        <cds-button kind="ghost" size="sm" onclick="removeFromCart('${id}')" title="Remove">✕</cds-button>
       </div>`;
     }).join('');
 
-  // Model selector buttons
-  const modelBtnsHtml = Object.entries(MODEL_IDS).map(([label, hfId]) =>
-    `<button class="model-btn${selectedModel === hfId ? ' active' : ''}"
-             onclick="setModel('${hfId}')">${label}</button>`
+  // Model content-switcher
+  const modelItemsHtml = Object.entries(MODEL_IDS).map(([label, hfId]) =>
+    `<cds-content-switcher-item value="${hfId}"${selectedModel === hfId ? ' selected' : ''}>${label}</cds-content-switcher-item>`
   ).join('');
 
-  // Build type buttons
-  const buildTypeBtnsHtml = [
+  // Build type content-switcher
+  const buildItemsHtml = [
     { value: 'prefer-alora', label: 'Prefer aLoRA' },
     { value: 'all-lora',     label: 'All LoRAs' },
   ].map(opt =>
-    `<button class="model-btn${selectedBuildType === opt.value ? ' active' : ''}"
-             onclick="setBuildType('${opt.value}')">${opt.label}</button>`
+    `<cds-content-switcher-item value="${opt.value}"${selectedBuildType === opt.value ? ' selected' : ''}>${opt.label}</cds-content-switcher-item>`
   ).join('');
 
   // Command
@@ -820,50 +673,49 @@ function renderCart() {
 
   bodyEl.innerHTML = `
     <div class="cart-items">${itemsHtml}</div>
-    <div class="model-selector-row">
-      <span class="model-selector-label">Base model</span>
-      <div class="model-btns">${modelBtnsHtml}</div>
+    <div class="selector-option-row">
+      <span class="selector-option-label">Base model</span>
+      <cds-content-switcher data-role="model">${modelItemsHtml}</cds-content-switcher>
     </div>
-    <div class="model-selector-row">
-      <span class="model-selector-label">Build type</span>
-      <div class="model-btns">${buildTypeBtnsHtml}</div>
+    <div class="selector-option-row">
+      <span class="selector-option-label">Build type</span>
+      <cds-content-switcher data-role="build">${buildItemsHtml}</cds-content-switcher>
     </div>
     <div class="command-section">
-      <pre class="command-box">${cmd}</pre>
-      <div class="command-footer">
-        <button class="copy-btn" onclick="copyCommand()">Copy</button>
-      </div>
+      <cds-code-snippet type="multi">${cmd}</cds-code-snippet>
     </div>
   `;
+
+  attachCartListeners();
 }
 
 // ── Adapter panel ─────────────────────────────────────────────────────────────
 
 function render(id) {
+  currentId = id;
   const a = ADAPTERS[id];
   if (!a) return;
 
-  const libClass = { RAG: 'badge-rag', Core: 'badge-core', Guardian: 'badge-guardian' }[a.library];
-  const inCart   = cart.has(id);
+  const inCart = cart.has(id);
 
   const flavorHtml = a.flavors
-    .map(f => `<span class="badge ${f === 'lora' ? 'badge-lora' : 'badge-alora'}">${f === 'lora' ? 'LoRA' : 'aLoRA'}</span>`)
+    .map(f => `<cds-tag type="${FLAV_TAG[f]}" size="sm">${f === 'lora' ? 'LoRA' : 'aLoRA'}</cds-tag>`)
     .join('');
 
   document.getElementById('panel').innerHTML = `
     <div class="panel-top">
       <h2 class="panel-title">${a.name}</h2>
       <div class="panel-actions">
-        <a class="readme-link" href="${a.readmeUrl}" target="_blank" rel="noopener">Adapter README ↗</a>
-        <button id="add-btn" class="add-btn${inCart ? ' in-cart' : ''}"
-                onclick="toggleCart('${id}')">
+        <cds-link href="${a.readmeUrl}" target="_blank" rel="noopener">Adapter README ↗</cds-link>
+        <cds-button id="add-btn" kind="${inCart ? 'primary' : 'tertiary'}" size="sm"
+                    onclick="toggleCart('${id}')">
           ${inCart ? '✓ Added' : '+ Add to composition'}
-        </button>
+        </cds-button>
       </div>
     </div>
     <div class="badges">
-      <span class="badge ${libClass}">${a.library} Library</span>
-      <span class="badge badge-stage">${a.stage}</span>
+      <cds-tag type="${LIB_TAG[a.library]}" size="sm">${a.library} Library</cds-tag>
+      <cds-tag type="warm-gray" size="sm">${a.stage}</cds-tag>
       ${flavorHtml}
     </div>
     <p class="description">${a.description}</p>
@@ -963,15 +815,19 @@ function hexToRgba(hex, alpha) {
 // ── Init ──────────────────────────────────────────────────────────────────────
 const sel = document.getElementById('adapter-select');
 
-sel.addEventListener('change', e => {
-  history.replaceState(null, '', '#' + e.target.value);
-  render(e.target.value);
+sel.addEventListener('cds-select-changed', e => {
+  const val = e.detail.value;
+  history.replaceState(null, '', '#' + val);
+  render(val);
 });
 
 const initial = window.location.hash.slice(1);
-if (initial && ADAPTERS[initial]) sel.value = initial;
+if (initial && ADAPTERS[initial]) {
+  sel.setAttribute('value', initial);
+  currentId = initial;
+}
 
-render(sel.value);
+render(currentId);
 renderCart();
 </script>
 </body>
