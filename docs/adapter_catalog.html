@@ -680,7 +680,8 @@ const C = {
 // ── State ─────────────────────────────────────────────────────────────────────
 let chart = null;
 let cart  = new Set();
-let selectedModel = 'ibm-granite/granite-4.1-3b';  // default
+let selectedModel     = 'ibm-granite/granite-4.1-3b';  // default
+let selectedBuildType = 'prefer-alora';                // 'prefer-alora' | 'all-lora'
 
 // ── Cart ──────────────────────────────────────────────────────────────────────
 
@@ -719,6 +720,11 @@ function setModel(hfId) {
   renderCart();
 }
 
+function setBuildType(type) {
+  selectedBuildType = type;
+  renderCart();
+}
+
 function generateCommand() {
   if (cart.size === 0) return null;
 
@@ -745,6 +751,9 @@ function generateCommand() {
   ];
   if (!allSelected) {
     lines.push(`  --include-adapters ${includeNames.join(' ')} \\`);
+  }
+  if (selectedBuildType === 'all-lora') {
+    lines.push('  --technology-filter lora \\');
   }
   lines.push('  --output ./my-model');
 
@@ -797,6 +806,15 @@ function renderCart() {
              onclick="setModel('${hfId}')">${label}</button>`
   ).join('');
 
+  // Build type buttons
+  const buildTypeBtnsHtml = [
+    { value: 'prefer-alora', label: 'Prefer aLoRA' },
+    { value: 'all-lora',     label: 'All LoRAs' },
+  ].map(opt =>
+    `<button class="model-btn${selectedBuildType === opt.value ? ' active' : ''}"
+             onclick="setBuildType('${opt.value}')">${opt.label}</button>`
+  ).join('');
+
   // Command
   const cmd = generateCommand();
 
@@ -805,6 +823,10 @@ function renderCart() {
     <div class="model-selector-row">
       <span class="model-selector-label">Base model</span>
       <div class="model-btns">${modelBtnsHtml}</div>
+    </div>
+    <div class="model-selector-row">
+      <span class="model-selector-label">Build type</span>
+      <div class="model-btns">${buildTypeBtnsHtml}</div>
     </div>
     <div class="command-section">
       <pre class="command-box">${cmd}</pre>
