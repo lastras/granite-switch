@@ -9,7 +9,6 @@
   <link rel="stylesheet" href="https://unpkg.com/@carbon/styles@1/css/styles.min.css">
   <!-- Carbon Web Components v2 -->
   <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/tag/latest/button.min.js"></script>
-  <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/tag/latest/select.min.js"></script>
   <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/tag/latest/content-switcher.min.js"></script>
   <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/tag/latest/link.min.js"></script>
   <style>
@@ -213,26 +212,35 @@
   </header>
 
   <div class="selector-row">
-    <cds-select id="adapter-select" label-text="Select adapter" value="query-rewrite">
-      <cds-select-item-group label="RAG Library">
-        <cds-select-item value="query-rewrite">Query Rewrite</cds-select-item>
-        <cds-select-item value="query-clarification">Query Clarification</cds-select-item>
-        <cds-select-item value="answerability">Answerability</cds-select-item>
-        <cds-select-item value="hallucination-detection">Hallucination Detection</cds-select-item>
-        <cds-select-item value="citations">Citations</cds-select-item>
-      </cds-select-item-group>
-      <cds-select-item-group label="Core Library">
-        <cds-select-item value="context-attribution">Context Attribution</cds-select-item>
-        <cds-select-item value="requirement-check">Requirement Check</cds-select-item>
-        <cds-select-item value="uncertainty">Uncertainty</cds-select-item>
-      </cds-select-item-group>
-      <cds-select-item-group label="Guardian Library">
-        <cds-select-item value="guardian-core">Guardian Core</cds-select-item>
-        <cds-select-item value="factuality-detection">Factuality Detection</cds-select-item>
-        <cds-select-item value="factuality-correction">Factuality Correction</cds-select-item>
-        <cds-select-item value="policy-guardrails">Policy Guardrails</cds-select-item>
-      </cds-select-item-group>
-    </cds-select>
+    <div class="cds--select">
+      <label class="cds--label" for="adapter-select">Select adapter</label>
+      <div class="cds--select-input-wrapper">
+        <select id="adapter-select" class="cds--select-input">
+          <optgroup label="RAG Library">
+            <option value="query-rewrite">Query Rewrite</option>
+            <option value="query-clarification">Query Clarification</option>
+            <option value="answerability">Answerability</option>
+            <option value="hallucination-detection">Hallucination Detection</option>
+            <option value="citations">Citations</option>
+          </optgroup>
+          <optgroup label="Core Library">
+            <option value="context-attribution">Context Attribution</option>
+            <option value="requirement-check">Requirement Check</option>
+            <option value="uncertainty">Uncertainty</option>
+          </optgroup>
+          <optgroup label="Guardian Library">
+            <option value="guardian-core">Guardian Core</option>
+            <option value="factuality-detection">Factuality Detection</option>
+            <option value="factuality-correction">Factuality Correction</option>
+            <option value="policy-guardrails">Policy Guardrails</option>
+          </optgroup>
+        </select>
+        <svg class="cds--select__arrow" focusable="false" aria-hidden="true"
+             xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+          <path d="M8 11L3 6 3.7 5.3 8 9.6 12.3 5.3 13 6z"/>
+        </svg>
+      </div>
+    </div>
   </div>
 
   <div id="panel" class="panel"></div>
@@ -800,24 +808,11 @@ function buildChart(a) {
   const n = a.models.length;
   const datasets = [];
 
-  if (a.prompted) {
-    datasets.push({
-      type: 'bar', label: 'Prompted (zero-shot)', data: a.prompted,
-      backgroundColor: C.prompted.bg, borderColor: C.prompted.border, borderWidth: 1, order: 3,
-    });
-  }
-
-  datasets.push({
-    type: 'bar', label: 'LoRA adapter', data: a.lora,
-    backgroundColor: C.lora.bg, borderColor: C.lora.border, borderWidth: 1, order: 2,
-  });
-
-  if (a.alora) {
-    datasets.push({
-      type: 'bar', label: 'aLoRA adapter', data: a.alora,
-      backgroundColor: C.alora.bg, borderColor: C.alora.border, borderWidth: 1, order: 2,
-    });
-  }
+  // Group order (left → right within each bar group):
+  //   1. Non-IBM baselines: external bar + reference lines
+  //   2. Prompted (IBM model, no adapter)
+  //   3. aLoRA adapter
+  //   4. LoRA adapter
 
   if (a.externalBar) {
     datasets.push({
@@ -827,8 +822,8 @@ function buildChart(a) {
     });
   }
 
-  // Flat horizontal reference lines via a hidden non-offset x-axis so they
-  // span the full chart width (not just center-to-center of bar groups).
+  // Flat horizontal reference lines span the full chart width via a hidden
+  // non-offset x-axis.  order: 1 keeps them rendered on top of the bars.
   (a.external || []).forEach(ext => {
     datasets.push({
       type: 'line', xAxisID: 'x2', label: ext.label,
@@ -836,6 +831,25 @@ function buildChart(a) {
       borderColor: ext.color, borderWidth: 2, borderDash: [7, 4],
       pointRadius: 0, pointHoverRadius: 0, fill: false, order: 1,
     });
+  });
+
+  if (a.prompted) {
+    datasets.push({
+      type: 'bar', label: 'Prompted (zero-shot)', data: a.prompted,
+      backgroundColor: C.prompted.bg, borderColor: C.prompted.border, borderWidth: 1, order: 3,
+    });
+  }
+
+  if (a.alora) {
+    datasets.push({
+      type: 'bar', label: 'aLoRA adapter', data: a.alora,
+      backgroundColor: C.alora.bg, borderColor: C.alora.border, borderWidth: 1, order: 2,
+    });
+  }
+
+  datasets.push({
+    type: 'bar', label: 'LoRA adapter', data: a.lora,
+    backgroundColor: C.lora.bg, borderColor: C.lora.border, borderWidth: 1, order: 2,
   });
 
   chart = new Chart(ctx, {
@@ -880,25 +894,18 @@ function hexToRgba(hex, alpha) {
 // ── Init ──────────────────────────────────────────────────────────────────────
 const sel = document.getElementById('adapter-select');
 
-// Deduplicate: cds-select-changed and the native change event may both fire.
-let _lastRenderedId = null;
-function handleSelectChange(val) {
-  if (!val || !ADAPTERS[val] || val === _lastRenderedId) return;
-  _lastRenderedId = val;
+sel.addEventListener('change', () => {
+  const val = sel.value;
+  if (!val || !ADAPTERS[val]) return;
   currentId = val;
   history.replaceState(null, '', '#' + val);
   render(val);
-}
-
-sel.addEventListener('cds-select-changed', e => handleSelectChange(e.detail?.value || e.detail));
-sel.addEventListener('change', e => handleSelectChange(sel.value));
+});
 
 const initial = window.location.hash.slice(1);
 if (initial && ADAPTERS[initial]) {
-  sel.setAttribute('value', initial);
+  sel.value = initial;
   currentId = initial;
-  // Also set after cds-select upgrades (module scripts are deferred)
-  customElements.whenDefined('cds-select').then(() => { sel.value = initial; });
 }
 
 render(currentId);
