@@ -5,7 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Granite Libraries — Adapter Catalog</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-  <!-- Carbon Web Components v2 (White theme, no extra theme script needed) -->
+  <!-- Carbon design tokens (White theme) — required for web components to render correctly -->
+  <link rel="stylesheet" href="https://unpkg.com/@carbon/styles@1/css/styles.min.css">
+  <!-- Carbon Web Components v2 -->
   <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/tag/latest/button.min.js"></script>
   <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/tag/latest/tag.min.js"></script>
   <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/tag/latest/select.min.js"></script>
@@ -193,8 +195,7 @@
       <span class="cart-header-title">
         Composition<span id="cart-count" class="cart-count"></span>
       </span>
-      <cds-button id="cart-clear-btn" kind="danger--ghost" size="sm"
-                  onclick="clearCart()" style="display:none">Clear all</cds-button>
+      <cds-button id="cart-clear-btn" kind="danger--ghost"                  onclick="clearCart()" style="display:none">Clear all</cds-button>
     </div>
     <div id="cart-body"></div>
   </div>
@@ -649,7 +650,7 @@ function renderCart() {
     .map(id => {
       const a = ADAPTERS[id];
       return `<div class="cart-item">
-        <cds-tag type="${LIB_TAG[a.library]}" size="sm">${a.library}</cds-tag>
+        <cds-tag type="${LIB_TAG[a.library]}">${a.library}</cds-tag>
         <span class="cart-item-name">${a.name}</span>
         <cds-button kind="ghost" size="sm" onclick="removeFromCart('${id}')" title="Remove">✕</cds-button>
       </div>`;
@@ -699,7 +700,7 @@ function render(id) {
   const inCart = cart.has(id);
 
   const flavorHtml = a.flavors
-    .map(f => `<cds-tag type="${FLAV_TAG[f]}" size="sm">${f === 'lora' ? 'LoRA' : 'aLoRA'}</cds-tag>`)
+    .map(f => `<cds-tag type="${FLAV_TAG[f]}">${f === 'lora' ? 'LoRA' : 'aLoRA'}</cds-tag>`)
     .join('');
 
   document.getElementById('panel').innerHTML = `
@@ -707,15 +708,14 @@ function render(id) {
       <h2 class="panel-title">${a.name}</h2>
       <div class="panel-actions">
         <cds-link href="${a.readmeUrl}" target="_blank" rel="noopener">Adapter README ↗</cds-link>
-        <cds-button id="add-btn" kind="${inCart ? 'primary' : 'tertiary'}" size="sm"
-                    onclick="toggleCart('${id}')">
+        <cds-button id="add-btn" kind="${inCart ? 'primary' : 'tertiary'}"                    onclick="toggleCart('${id}')">
           ${inCart ? '✓ Added' : '+ Add to composition'}
         </cds-button>
       </div>
     </div>
     <div class="badges">
-      <cds-tag type="${LIB_TAG[a.library]}" size="sm">${a.library} Library</cds-tag>
-      <cds-tag type="warm-gray" size="sm">${a.stage}</cds-tag>
+      <cds-tag type="${LIB_TAG[a.library]}">${a.library} Library</cds-tag>
+      <cds-tag type="warm-gray">${a.stage}</cds-tag>
       ${flavorHtml}
     </div>
     <p class="description">${a.description}</p>
