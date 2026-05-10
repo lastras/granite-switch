@@ -9,10 +9,8 @@
   <link rel="stylesheet" href="https://unpkg.com/@carbon/styles@1/css/styles.min.css">
   <!-- Carbon Web Components v2 -->
   <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/tag/latest/button.min.js"></script>
-  <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/tag/latest/tag.min.js"></script>
   <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/tag/latest/select.min.js"></script>
   <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/tag/latest/content-switcher.min.js"></script>
-  <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/tag/latest/code-snippet.min.js"></script>
   <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/tag/latest/link.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -154,7 +152,57 @@
       min-width: 5rem;
     }
 
-    .command-section { padding: 1rem 1.25rem 1.25rem; }
+    .command-section { padding: 1.25rem 1.5rem 1.5rem; }
+
+    /* ── Badges (spans, not cds-tag — cds-tag has a 7.5rem internal max-width
+       in its Shadow DOM that we cannot override from the light DOM) ── */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 0 0.75rem;
+      height: 1.5rem;
+      border-radius: 0.75rem;
+      font-size: 0.75rem;
+      font-weight: 400;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .badge-blue      { background: #d0e2ff; color: #0043ce; }
+    .badge-purple    { background: #e8daff; color: #6929c4; }
+    .badge-teal      { background: #d9fbfb; color: #005d5d; }
+    .badge-cool-gray { background: #dde1ff; color: #121619; }
+    .badge-green     { background: #defbe6; color: #044317; }
+    .badge-gray      { background: #f4f4f4; color: #525252; border: 1px solid #c6c6c6; }
+
+    /* ── Command box (custom pre gives full padding control) ── */
+    .command-box {
+      background: #161616;
+      color: #f4f4f4;
+      font-family: 'IBM Plex Mono', 'Menlo', 'Courier New', monospace;
+      font-size: 0.8rem;
+      line-height: 1.7;
+      padding: 1rem 1.25rem;
+      white-space: pre;
+      overflow-x: auto;
+      margin-bottom: 0.75rem;
+    }
+
+    .command-footer {
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    .copy-btn {
+      font-size: 0.875rem;
+      padding: 0.5rem 1rem;
+      background: #0f62fe;
+      color: #fff;
+      border: none;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .copy-btn:hover  { background: #0353e9; }
+    .copy-btn.copied { background: #24a148; }
   </style>
 </head>
 <body>
@@ -165,7 +213,7 @@
   </header>
 
   <div class="selector-row">
-    <cds-select id="adapter-select" label-text="Select adapter">
+    <cds-select id="adapter-select" label-text="Select adapter" value="query-rewrite">
       <cds-select-item-group label="RAG Library">
         <cds-select-item value="query-rewrite">Query Rewrite</cds-select-item>
         <cds-select-item value="query-clarification">Query Clarification</cds-select-item>
@@ -220,9 +268,9 @@ const MODEL_IDS = {
   '4.1-30B':   'ibm-granite/granite-4.1-30b',
 };
 
-// Carbon tag type mappings
-const LIB_TAG  = { RAG: 'blue', Core: 'purple', Guardian: 'teal' };
-const FLAV_TAG = { lora: 'cool-gray', alora: 'green' };
+// Badge CSS-class mappings (custom spans — cds-tag has a fixed internal max-width)
+const LIB_BADGE  = { RAG: 'badge-blue', Core: 'badge-purple', Guardian: 'badge-teal' };
+const FLAV_BADGE = { lora: 'badge-cool-gray', alora: 'badge-green' };
 
 // ── Adapter data ──────────────────────────────────────────────────────────────
 //
@@ -619,6 +667,18 @@ function generateCommand() {
   return lines.join('\n');
 }
 
+function copyCommand() {
+  const cmd = generateCommand();
+  if (!cmd) return;
+  navigator.clipboard.writeText(cmd).then(() => {
+    const btn = document.querySelector('.copy-btn');
+    if (!btn) return;
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+
 function attachCartListeners() {
   const modelSw = document.querySelector('cds-content-switcher[data-role="model"]');
   modelSw?.addEventListener('cds-content-switcher-item-selected', e => {
@@ -650,15 +710,17 @@ function renderCart() {
     .map(id => {
       const a = ADAPTERS[id];
       return `<div class="cart-item">
-        <cds-tag type="${LIB_TAG[a.library]}">${a.library}</cds-tag>
+        <span class="badge ${LIB_BADGE[a.library]}">${a.library}</span>
         <span class="cart-item-name">${a.name}</span>
         <cds-button kind="ghost" size="sm" onclick="removeFromCart('${id}')" title="Remove">✕</cds-button>
       </div>`;
     }).join('');
 
-  // Model content-switcher
+  // Model content-switcher — value on parent controls the highlighted item;
+  // onclick on each item is the primary interaction handler (more reliable than
+  // waiting for cds-content-switcher-item-selected after an innerHTML rebuild).
   const modelItemsHtml = Object.entries(MODEL_IDS).map(([label, hfId]) =>
-    `<cds-content-switcher-item value="${hfId}"${selectedModel === hfId ? ' selected' : ''}>${label}</cds-content-switcher-item>`
+    `<cds-content-switcher-item value="${hfId}" onclick="setModel('${hfId}')">${label}</cds-content-switcher-item>`
   ).join('');
 
   // Build type content-switcher
@@ -666,7 +728,7 @@ function renderCart() {
     { value: 'prefer-alora', label: 'Prefer aLoRA' },
     { value: 'all-lora',     label: 'All LoRAs' },
   ].map(opt =>
-    `<cds-content-switcher-item value="${opt.value}"${selectedBuildType === opt.value ? ' selected' : ''}>${opt.label}</cds-content-switcher-item>`
+    `<cds-content-switcher-item value="${opt.value}" onclick="setBuildType('${opt.value}')">${opt.label}</cds-content-switcher-item>`
   ).join('');
 
   // Command
@@ -676,14 +738,17 @@ function renderCart() {
     <div class="cart-items">${itemsHtml}</div>
     <div class="selector-option-row">
       <span class="selector-option-label">Base model</span>
-      <cds-content-switcher data-role="model">${modelItemsHtml}</cds-content-switcher>
+      <cds-content-switcher value="${selectedModel}" data-role="model">${modelItemsHtml}</cds-content-switcher>
     </div>
     <div class="selector-option-row">
       <span class="selector-option-label">Build type</span>
-      <cds-content-switcher data-role="build">${buildItemsHtml}</cds-content-switcher>
+      <cds-content-switcher value="${selectedBuildType}" data-role="build">${buildItemsHtml}</cds-content-switcher>
     </div>
     <div class="command-section">
-      <cds-code-snippet type="multi">${cmd}</cds-code-snippet>
+      <pre class="command-box">${cmd}</pre>
+      <div class="command-footer">
+        <button class="copy-btn" onclick="copyCommand()">Copy</button>
+      </div>
     </div>
   `;
 
@@ -700,7 +765,7 @@ function render(id) {
   const inCart = cart.has(id);
 
   const flavorHtml = a.flavors
-    .map(f => `<cds-tag type="${FLAV_TAG[f]}">${f === 'lora' ? 'LoRA' : 'aLoRA'}</cds-tag>`)
+    .map(f => `<span class="badge ${FLAV_BADGE[f]}">${f === 'lora' ? 'LoRA' : 'aLoRA'}</span>`)
     .join('');
 
   document.getElementById('panel').innerHTML = `
@@ -714,8 +779,8 @@ function render(id) {
       </div>
     </div>
     <div class="badges">
-      <cds-tag type="${LIB_TAG[a.library]}">${a.library} Library</cds-tag>
-      <cds-tag type="warm-gray">${a.stage}</cds-tag>
+      <span class="badge ${LIB_BADGE[a.library]}">${a.library} Library</span>
+      <span class="badge badge-gray">${a.stage}</span>
       ${flavorHtml}
     </div>
     <p class="description">${a.description}</p>
@@ -815,16 +880,25 @@ function hexToRgba(hex, alpha) {
 // ── Init ──────────────────────────────────────────────────────────────────────
 const sel = document.getElementById('adapter-select');
 
-sel.addEventListener('cds-select-changed', e => {
-  const val = e.detail.value;
+// Deduplicate: cds-select-changed and the native change event may both fire.
+let _lastRenderedId = null;
+function handleSelectChange(val) {
+  if (!val || !ADAPTERS[val] || val === _lastRenderedId) return;
+  _lastRenderedId = val;
+  currentId = val;
   history.replaceState(null, '', '#' + val);
   render(val);
-});
+}
+
+sel.addEventListener('cds-select-changed', e => handleSelectChange(e.detail?.value || e.detail));
+sel.addEventListener('change', e => handleSelectChange(sel.value));
 
 const initial = window.location.hash.slice(1);
 if (initial && ADAPTERS[initial]) {
   sel.setAttribute('value', initial);
   currentId = initial;
+  // Also set after cds-select upgrades (module scripts are deferred)
+  customElements.whenDefined('cds-select').then(() => { sel.value = initial; });
 }
 
 render(currentId);
