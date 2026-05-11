@@ -13,7 +13,7 @@ Browse the full set of ready-to-use adapters in the [Granite Libraries collectio
 
 - **Composable** — Combine independently trained adapters into one checkpoint, whether IBM's or yours. Swap, upgrade, or customize without retraining.
 - **Fast** — Built on IBM's Activated LoRA technology for efficient KV cache reuse, low latency, and high inference throughput.
-- **Accurate** — Task-specific adapters can match and even surpass the accuracy of significantly larger generalist models, while requiring only a fraction of the serving cost. For concrete benchmark example, see the [Hallucination Detection](https://huggingface.co/ibm-granite/granitelib-rag-r1.0/blob/main/hallucination_detection/README.md#evaluation) from the RAG adapter library.
+- **Accurate** — Task-specific adapters can match and even surpass the accuracy of significantly larger generalist models, while requiring only a fraction of the serving cost. See the [adapter catalog](https://generative-computing.github.io/granite-switch/adapter_catalog.html#hallucination-detection) for benchmark comparisons across all 12 adapters.
 - **Inference-ready** — Support for Hugging Face and vLLM.
 
 ## Quick Start
@@ -50,6 +50,8 @@ python -m granite_switch.composer.compose_granite_switch \
   --adapters ibm-granite/granitelib-core-r1.0 ibm-granite/granitelib-rag-r1.0  ibm-granite/granitelib-guardian-r1.0 \
   --output ./my-model
 ```
+
+Use the **[Adapter Composer](https://generative-computing.github.io/granite-switch/adapter_catalog.html)** to browse available adapters, compare benchmarks, and generate a ready-to-run compose command.
 
 This downloads the base model, embeds compatible LoRA adapters (with a preference towards activated LoRA), adds control tokens and a chat template, and produces a model directory that works with both HuggingFace and vLLM.
 

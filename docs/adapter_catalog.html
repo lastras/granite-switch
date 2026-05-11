@@ -1,0 +1,914 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Granite Switch — Adapter Composer</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <!-- Carbon design tokens (White theme) — required for web components to render correctly -->
+  <link rel="stylesheet" href="https://unpkg.com/@carbon/styles@1/css/styles.min.css">
+  <!-- Carbon Web Components v2 -->
+  <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/tag/latest/button.min.js"></script>
+  <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/tag/latest/content-switcher.min.js"></script>
+  <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/tag/latest/link.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f4f4f4;
+      color: #161616;
+      line-height: 1.5;
+    }
+
+    .container {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem 4rem;
+    }
+
+    header { margin-bottom: 2rem; }
+
+    header h1 {
+      font-size: 1.75rem;
+      font-weight: 600;
+      color: #161616;
+      margin-bottom: 0.3rem;
+    }
+
+    header p { color: #525252; font-size: 0.95rem; }
+
+    .selector-row { margin-bottom: 1.5rem; }
+
+    /* ── Adapter panel ── */
+    .panel {
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      padding: 1.5rem;
+      margin-bottom: 1rem;
+    }
+
+    .panel-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .panel-title { font-size: 1.35rem; font-weight: 600; }
+
+    .panel-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding-top: 0.125rem;
+      flex-shrink: 0;
+    }
+
+    .badges { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 1rem; }
+
+    .description {
+      color: #393939;
+      font-size: 0.925rem;
+      margin-bottom: 1.5rem;
+      line-height: 1.65;
+    }
+
+    /* ── Chart ── */
+    .chart-title {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #525252;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.5rem;
+    }
+
+    .chart-wrap { position: relative; height: 290px; }
+
+    /* ── Cart panel ── */
+    .cart-panel {
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-left: 3px solid #0f62fe;
+    }
+
+    .cart-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.875rem 1.25rem;
+      border-bottom: 1px solid #e0e0e0;
+    }
+
+    .cart-header-title {
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #161616;
+    }
+
+    .cart-count { font-weight: 400; color: #525252; margin-left: 0.4rem; }
+
+    .cart-empty {
+      padding: 1.25rem 1.5rem;
+      color: #8d8d8d;
+      font-size: 0.875rem;
+    }
+
+    .cart-items {
+      padding: 0.75rem 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+      border-bottom: 1px solid #e0e0e0;
+    }
+
+    .cart-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.875rem;
+    }
+
+    .cart-item-name { flex: 1; color: #161616; }
+
+    .selector-option-row {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 0.875rem 1.25rem;
+      border-bottom: 1px solid #e0e0e0;
+    }
+
+    .selector-option-label {
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: #525252;
+      white-space: nowrap;
+      min-width: 5rem;
+    }
+
+    .command-section { padding: 1.25rem 1.5rem 1.5rem; }
+
+    /* ── Badges (spans, not cds-tag — cds-tag has a 7.5rem internal max-width
+       in its Shadow DOM that we cannot override from the light DOM) ── */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 0 0.75rem;
+      height: 1.5rem;
+      border-radius: 0.75rem;
+      font-size: 0.75rem;
+      font-weight: 400;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .badge-blue      { background: #d0e2ff; color: #0043ce; }
+    .badge-purple    { background: #e8daff; color: #6929c4; }
+    .badge-teal      { background: #d9fbfb; color: #005d5d; }
+    .badge-cool-gray { background: #dde1ff; color: #121619; }
+    .badge-green     { background: #defbe6; color: #044317; }
+    .badge-gray      { background: #f4f4f4; color: #525252; border: 1px solid #c6c6c6; }
+
+    /* ── Command box (custom pre gives full padding control) ── */
+    .command-box {
+      background: #161616;
+      color: #f4f4f4;
+      font-family: 'IBM Plex Mono', 'Menlo', 'Courier New', monospace;
+      font-size: 0.8rem;
+      line-height: 1.7;
+      padding: 1rem 1.25rem;
+      white-space: pre;
+      overflow-x: auto;
+      margin-bottom: 0.75rem;
+    }
+
+    .command-footer {
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    .copy-btn {
+      font-size: 0.875rem;
+      padding: 0.5rem 1rem;
+      background: #0f62fe;
+      color: #fff;
+      border: none;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .copy-btn:hover  { background: #0353e9; }
+    .copy-btn.copied { background: #24a148; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>Granite Switch — Adapter Composer</h1>
+    <p>Browse the 12 Granite Libraries adapters, compare benchmarks, and generate your <code>compose_granite_switch</code> command.</p>
+  </header>
+
+  <div class="selector-row">
+    <div class="cds--select">
+      <label class="cds--label" for="adapter-select">Select adapter</label>
+      <div class="cds--select-input-wrapper">
+        <select id="adapter-select" class="cds--select-input">
+          <optgroup label="RAG Library">
+            <option value="query-rewrite">Query Rewrite</option>
+            <option value="query-clarification">Query Clarification</option>
+            <option value="answerability">Answerability</option>
+            <option value="hallucination-detection">Hallucination Detection</option>
+            <option value="citations">Citations</option>
+          </optgroup>
+          <optgroup label="Core Library">
+            <option value="context-attribution">Context Attribution</option>
+            <option value="requirement-check">Requirement Check</option>
+            <option value="uncertainty">Uncertainty</option>
+          </optgroup>
+          <optgroup label="Guardian Library">
+            <option value="guardian-core">Guardian Core</option>
+            <option value="factuality-detection">Factuality Detection</option>
+            <option value="factuality-correction">Factuality Correction</option>
+            <option value="policy-guardrails">Policy Guardrails</option>
+          </optgroup>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div id="panel" class="panel"></div>
+
+  <!-- Cart panel: always present, content is dynamically rendered -->
+  <div class="cart-panel">
+    <div class="cart-header">
+      <span class="cart-header-title">
+        Composition<span id="cart-count" class="cart-count"></span>
+      </span>
+      <cds-button id="cart-clear-btn" kind="danger--ghost"                  onclick="clearCart()" style="display:none">Clear all</cds-button>
+    </div>
+    <div id="cart-body"></div>
+  </div>
+</div>
+
+<script>
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const LIBRARY_REPOS = {
+  RAG:      'ibm-granite/granitelib-rag-r1.0',
+  Core:     'ibm-granite/granitelib-core-r1.0',
+  Guardian: 'ibm-granite/granitelib-guardian-r1.0',
+};
+
+// Ordered for consistent command output
+const LIBRARY_ORDER = ['Core', 'RAG', 'Guardian'];
+
+const MODEL_IDS = {
+  '4.0-micro': 'ibm-granite/granite-4.0-micro',
+  '4.1-3B':    'ibm-granite/granite-4.1-3b',
+  '4.1-8B':    'ibm-granite/granite-4.1-8b',
+  '4.1-30B':   'ibm-granite/granite-4.1-30b',
+};
+
+// Badge CSS-class mappings (custom spans — cds-tag has a fixed internal max-width)
+const LIB_BADGE  = { RAG: 'badge-blue', Core: 'badge-purple', Guardian: 'badge-teal' };
+const FLAV_BADGE = { lora: 'badge-cool-gray', alora: 'badge-green' };
+
+// ── Adapter data ──────────────────────────────────────────────────────────────
+//
+// adapterName: the directory name used with --include-adapters in the CLI.
+//
+// prompted / lora / alora: one value per model size [micro, 3B, 8B, 30B].
+//   null entries = that variant is not available for that model size.
+//   A null array = the entire variant type is not available.
+//
+// external: horizontal reference lines (same value across all model sizes).
+// externalBar: additional bar dataset where the reference varies per model size
+//   (used only for Context Attribution where GPT-OSS-120B numbers differ per
+//   base model).
+//
+// metric.scale: [yMin, yMax] passed to the Chart.js y-axis.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ADAPTERS = {
+
+  'query-rewrite': {
+    name: 'Query Rewrite',
+    library: 'RAG',
+    adapterName: 'query_rewrite',
+    readmeUrl: 'https://huggingface.co/ibm-granite/granitelib-rag-r1.0/blob/main/query_rewrite/README.md',
+    stage: 'Pre-retrieval',
+    flavors: ['lora', 'alora'],
+    description:
+      'Rewrites the last user message in a multi-turn conversation into a '
+      + 'standalone, self-contained query by resolving coreferences (pronouns → '
+      + 'named entities) and filling in context implied by earlier turns. '
+      + 'The rewritten query can be fed directly to a retriever without needing '
+      + 'the full conversation history, improving RAG recall.',
+    metric: { label: 'Accuracy (%)', scale: [55, 95] },
+    models: ['4.0-micro', '4.1-3B', '4.1-8B', '4.1-30B'],
+    prompted: [70.3, 61.2, 67.2, 63.8],
+    lora:     [87.1, 86.1, 87.3, 88.2],
+    alora:    [85.5, 86.0, 83.6, 87.3],
+    external: [
+      { label: 'GPT-4o (prompted)',       value: 84.2, color: '#da1e28' },
+      { label: 'GPT-OSS-120B (prompted)', value: 70.1, color: '#ff832b' },
+    ],
+  },
+
+  'query-clarification': {
+    name: 'Query Clarification',
+    library: 'RAG',
+    adapterName: 'query_clarification',
+    readmeUrl: 'https://huggingface.co/ibm-granite/granitelib-rag-r1.0/blob/main/query_clarification/README.md',
+    stage: 'Pre-retrieval / Pre-generation',
+    flavors: ['lora', 'alora'],
+    description:
+      'Detects whether the final user turn in a multi-turn conversation is '
+      + 'underspecified or ambiguous, and if so generates a targeted clarification '
+      + 'question. The output is JSON containing either a clarification string or '
+      + '"CLEAR". Three clarification strategies are supported: hedging with a '
+      + 'partial answer, listing interpretations, or asking an open-ended question.',
+    metric: { label: 'Overall Accuracy (%)', scale: [40, 100] },
+    models: ['4.0-micro', '4.1-3B', '4.1-8B', '4.1-30B'],
+    prompted: [64.2, 64.8, 47.5, 76.2],
+    lora:     [92.4, 96.1, 94.4, 94.4],
+    alora:    [null, 95.0, 95.5, 94.5],
+    external: [
+      { label: 'GPT-4o (prompted)',       value: 79.4, color: '#da1e28' },
+      { label: 'GPT-OSS-120B (prompted)', value: 78.9, color: '#ff832b' },
+    ],
+  },
+
+  'answerability': {
+    name: 'Answerability',
+    library: 'RAG',
+    adapterName: 'answerability',
+    readmeUrl: 'https://huggingface.co/ibm-granite/granitelib-rag-r1.0/blob/main/answerability/README.md',
+    stage: 'Pre-generation',
+    flavors: ['lora', 'alora'],
+    description:
+      'Binary classifier that determines whether a user query can be answered '
+      + 'from the supplied documents. Returns "answerable" or "unanswerable" as '
+      + 'JSON. Enables RAG systems to suppress hallucinated responses or trigger '
+      + 're-retrieval when the retrieved context is insufficient.',
+    metric: { label: 'Classification Accuracy (%)', scale: [50, 100] },
+    models: ['4.0-micro', '4.1-3B', '4.1-8B', '4.1-30B'],
+    prompted: [66.9, 59.4, 65.5, 65.3],
+    lora:     [90.4, 90.6, 90.4, 89.4],
+    alora:    [89.6, 91.3, 90.5, 92.2],
+    external: [
+      { label: 'GPT-4o (prompted)',      value: 82.5, color: '#da1e28' },
+      { label: 'GPT-4o-mini (prompted)', value: 80.8, color: '#ff832b' },
+    ],
+  },
+
+  'hallucination-detection': {
+    name: 'Hallucination Detection',
+    library: 'RAG',
+    adapterName: 'hallucination_detection',
+    readmeUrl: 'https://huggingface.co/ibm-granite/granitelib-rag-r1.0/blob/main/hallucination_detection/README.md',
+    stage: 'Post-generation',
+    flavors: ['lora'],
+    description:
+      'Evaluates each sentence of an assistant response for faithfulness relative '
+      + 'to grounding documents. Labels each sentence as Faithful, Unfaithful, '
+      + 'Partial, or N/A, with an explanation. Useful for filtering or ranking '
+      + 'multiple generated candidates in a RAG pipeline. Only LoRA is available; '
+      + 'no aLoRA variant exists for this adapter.',
+    metric: { label: 'F1 (%)', scale: [35, 90] },
+    models: ['4.0-micro', '4.1-3B', '4.1-8B', '4.1-30B'],
+    prompted: [40.1, 41.8, 44.8, 53.6],
+    lora:     [71.3, 70.8, 74.1, 82.9],
+    alora:    null,
+    external: [
+      { label: 'GPT-4o (prompted)',       value: 61.3, color: '#da1e28' },
+      { label: 'GPT-OSS-120B (prompted)', value: 53.6, color: '#ff832b' },
+    ],
+  },
+
+  'citations': {
+    name: 'Citations',
+    library: 'RAG',
+    adapterName: 'citations',
+    readmeUrl: 'https://huggingface.co/ibm-granite/granitelib-rag-r1.0/blob/main/citations/README.md',
+    stage: 'Post-generation',
+    flavors: ['lora'],
+    description:
+      'Generates fine-grained, sentence-level citations for any assistant '
+      + 'response by linking response spans to supporting passages. Works '
+      + 'post-hoc on any model\'s output. Returns a JSON array mapping each '
+      + 'response span to source document spans. Only LoRA is available; no '
+      + 'aLoRA variant exists for this adapter.',
+    metric: { label: 'AVG F1', scale: [0, 80] },
+    models: ['4.0-micro', '4.1-3B', '4.1-8B', '4.1-30B'],
+    prompted: [12.5, 10.1, 17.8, 55.0],
+    lora:     [62.1, 63.7, 66.2, 71.2],
+    alora:    null,
+    external: [
+      { label: 'GPT-4o (prompted)',       value: 67.5, color: '#da1e28' },
+      { label: 'GPT-OSS-120B (prompted)', value: 62.4, color: '#ff832b' },
+    ],
+  },
+
+  'context-attribution': {
+    name: 'Context Attribution',
+    library: 'Core',
+    adapterName: 'context-attribution',
+    readmeUrl: 'https://huggingface.co/ibm-granite/granitelib-core-r1.0/blob/main/context-attribution/README.md',
+    stage: 'Post-generation',
+    flavors: ['lora'],
+    description:
+      'Identifies which sentences in the conversation context (documents + prior '
+      + 'turns) most influenced the model\'s generation of each response sentence. '
+      + 'Unlike citation adapters that detect relevance, this measures actual model '
+      + 'reliance via contributive attribution — helping users understand and trust '
+      + 'what the model actually used. Evaluated with WAUPC (Weighted Area Under '
+      + 'Perturbation Curve), normalized by the leave-one-out skyline.',
+    metric: { label: 'WAUPC (normalized, 0–1)', scale: [0.1, 1.0] },
+    models: ['4.0-micro', '4.1-3B', '4.1-8B', '4.1-30B'],
+    prompted: [0.1783, 0.3389, 0.2688, 0.6502],
+    lora:     [0.9197, 0.9195, 0.9563, 0.9030],
+    alora:    null,
+    // GPT-OSS-120B varies per base model (attribution is model-specific),
+    // so it is shown as a bar dataset rather than a flat reference line.
+    externalBar: {
+      label: 'GPT-OSS-120B (prompted)',
+      data:  [0.8024, 0.8430, 0.8114, 0.8188],
+      color: '#ff832b',
+    },
+  },
+
+  'requirement-check': {
+    name: 'Requirement Check',
+    library: 'Core',
+    adapterName: 'requirement-check',
+    readmeUrl: 'https://huggingface.co/ibm-granite/granitelib-core-r1.0/blob/main/requirement-check/README.md',
+    stage: 'Post-generation',
+    flavors: ['lora', 'alora'],
+    description:
+      'Binary classifier that determines whether an assistant\'s response '
+      + 'satisfies a set of user-specified requirements (formatting, content, '
+      + 'length, style, etc.). Accepts a user prompt, assistant response, and '
+      + 'natural-language requirements; returns {"score": "yes"} or '
+      + '{"score": "no"}. Useful for quality-assurance pipelines and '
+      + 'instruction-following evaluation. Activated via the &lt;requirements&gt; '
+      + 'control token in aLoRA mode.',
+    // Metric: average of HelpSteer3 and IFEval balanced accuracy.
+    // Prompted baseline not reported for micro.
+    metric: { label: 'Balanced Accuracy (avg HelpSteer3 + IFEval)', scale: [0.45, 0.90] },
+    models: ['4.0-micro', '4.1-3B', '4.1-8B', '4.1-30B'],
+    prompted: [null,   0.5104, 0.5426, 0.5736],
+    lora:     [0.7919, 0.7440, 0.7706, 0.7763],
+    alora:    [null,   0.7691, 0.7748, 0.7835],
+  },
+
+  'uncertainty': {
+    name: 'Uncertainty',
+    library: 'Core',
+    adapterName: 'uncertainty',
+    readmeUrl: 'https://huggingface.co/ibm-granite/granitelib-core-r1.0/blob/main/uncertainty/README.md',
+    stage: 'Post-generation',
+    flavors: ['lora', 'alora'],
+    description:
+      'Provides calibrated certainty scores (0–9, mapped to 5%–95% confidence) '
+      + 'for model responses. A response scored at X% is approximately X% correct '
+      + 'in practice. Useful for uncertainty-aware RAG, abstention systems, and '
+      + 'trust calibration. Returns {"score": "N"} as JSON. Activated via the '
+      + '&lt;certainty&gt; control token in aLoRA mode. Evaluated on MMLU '
+      + '(57 subsets, 14 042 samples).',
+    metric: { label: 'AUROC', scale: [0.60, 0.85] },
+    models: ['4.0-micro', '4.1-3B', '4.1-8B', '4.1-30B'],
+    // "prompted" here is the base model sequence-probability baseline (no adapter).
+    prompted: [0.6748, 0.6291, 0.6439, 0.6507],
+    lora:     [0.6903, 0.7870, 0.7912, 0.8116],
+    alora:    [null,   0.7713, 0.7778, 0.8017],
+  },
+
+  'guardian-core': {
+    name: 'Guardian Core',
+    library: 'Guardian',
+    adapterName: 'guardian-core',
+    readmeUrl: 'https://huggingface.co/ibm-granite/granitelib-guardian-r1.0/blob/main/guardian-core/README.md',
+    stage: 'Pre-generation / Post-generation',
+    flavors: ['lora', 'alora'],
+    description:
+      'Safety and hallucination detection adapter that judges whether inputs '
+      + 'or outputs meet specified risk criteria. Covers harm, social bias, '
+      + 'jailbreaking, violence, profanity, unethical behavior, RAG groundedness, '
+      + 'answer relevance, and function-call hallucination. Returns {"score": "yes"} '
+      + '(risk detected) or {"score": "no"}. Activated via the &lt;guardian&gt; '
+      + 'control token in aLoRA mode. Chart shows average F1 across nine OOD '
+      + 'safety benchmarks.',
+    // Prompted baseline for micro not separately reported in the safety table.
+    metric: { label: 'Safety Avg F1 (9 OOD benchmarks)', scale: [0.0, 0.90] },
+    models: ['4.0-micro', '4.1-3B', '4.1-8B', '4.1-30B'],
+    prompted: [null, 0.01, 0.67, 0.69],
+    lora:     [0.76, 0.77, 0.79, 0.80],
+    alora:    [null, 0.78, 0.80, 0.81],
+  },
+
+  'factuality-detection': {
+    name: 'Factuality Detection',
+    library: 'Guardian',
+    adapterName: 'factuality-detection',
+    readmeUrl: 'https://huggingface.co/ibm-granite/granitelib-guardian-r1.0/blob/main/factuality-detection/README.md',
+    stage: 'Post-generation',
+    flavors: ['lora', 'alora'],
+    description:
+      'Assesses factual correctness of an assistant response against provided '
+      + 'context documents, including cases where the context contains '
+      + 'contradicting or conflicting information. Returns {"score": "yes"} if '
+      + 'the response is factually incorrect, "no" if correct. Evaluated on ELI5 '
+      + '(in-distribution) and Biographies (out-of-distribution). Based on the '
+      + 'FactReasoner method (arXiv 2502.18573).',
+    // Baseline for micro not in the ELI5 base-model table; using null.
+    metric: { label: 'F1 (ELI5 test set)', scale: [0.0, 1.0] },
+    models: ['4.0-micro', '4.1-3B', '4.1-8B', '4.1-30B'],
+    prompted: [null, 0.08, 0.25, 0.51],
+    lora:     [0.81, 0.83, 0.85, 0.84],
+    alora:    [null, 0.81, 0.83, 0.83],
+  },
+
+  'factuality-correction': {
+    name: 'Factuality Correction',
+    library: 'Guardian',
+    adapterName: 'factuality-correction',
+    readmeUrl: 'https://huggingface.co/ibm-granite/granitelib-guardian-r1.0/blob/main/factuality-correction/README.md',
+    stage: 'Post-generation',
+    flavors: ['lora', 'alora'],
+    description:
+      'Corrects factually incorrect LLM responses while preserving the model\'s '
+      + 'reasoning and generative capabilities. Given a response and context '
+      + 'documents (which may conflict with the response), outputs a corrected '
+      + 'version as JSON, or "none" if no correction is needed. Based on the '
+      + 'FactCorrector method (ACL 2026). Scores reflect how many incorrect facts '
+      + 'were successfully corrected (Factuality Score).',
+    // Base model for micro not in ELI5 table; using null.
+    metric: { label: 'Factuality Score (ELI5 test set)', scale: [0.0, 0.55] },
+    models: ['4.0-micro', '4.1-3B', '4.1-8B', '4.1-30B'],
+    prompted: [null, 0.00, 0.19, 0.13],
+    lora:     [0.26, 0.29, 0.29, 0.44],
+    alora:    [null, 0.19, 0.23, 0.26],
+  },
+
+  'policy-guardrails': {
+    name: 'Policy Guardrails',
+    library: 'Guardian',
+    adapterName: 'policy-guardrails',
+    readmeUrl: 'https://huggingface.co/ibm-granite/granitelib-guardian-r1.0/blob/main/policy-guardrails/README.md',
+    stage: 'Pre-generation / Post-generation',
+    flavors: ['lora', 'alora'],
+    description:
+      'Checks whether a scenario complies with a given natural-language policy, '
+      + 'returning one of three verdicts: "Yes" (compliant), "No" (violates), or '
+      + '"Ambiguous" (more information needed). Covers HR, finance, healthcare, '
+      + 'and 40+ domains. The three-way output is intentional — forcing binary '
+      + 'answers on ambiguous cases is explicitly unsupported. Activated via the '
+      + '&lt;guardian&gt; control token in aLoRA mode.',
+    metric: { label: 'Balanced Accuracy (OOD split)', scale: [0.75, 1.00] },
+    models: ['4.0-micro', '4.1-3B', '4.1-8B', '4.1-30B'],
+    prompted: [0.7820, 0.8246, 0.8000, 0.8753],
+    lora:     [0.8979, 0.9373, 0.9561, 0.9599],
+    alora:    [null,   0.9480, 0.9511, 0.9549],
+    external: [
+      { label: 'GPT-OSS-120B (prompted)', value: 0.8189, color: '#ff832b' },
+    ],
+  },
+};
+
+// ── Colors ────────────────────────────────────────────────────────────────────
+const C = {
+  prompted: { bg: 'rgba(141,141,141,0.70)', border: '#8d8d8d' },
+  lora:     { bg: 'rgba(15,98,254,0.78)',   border: '#0f62fe' },
+  alora:    { bg: 'rgba(36,161,72,0.78)',   border: '#24a148' },
+};
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let chart = null;
+let cart  = new Set();
+let currentId         = 'query-rewrite';
+let selectedModel     = 'ibm-granite/granite-4.1-3b';
+let selectedBuildType = 'prefer-alora';
+
+// ── Cart ──────────────────────────────────────────────────────────────────────
+
+function toggleCart(id) {
+  cart.has(id) ? cart.delete(id) : cart.add(id);
+  const btn = document.getElementById('add-btn');
+  if (btn) {
+    const inCart = cart.has(id);
+    btn.setAttribute('kind', inCart ? 'primary' : 'tertiary');
+    btn.textContent = inCart ? '✓ Added' : '+ Add to composition';
+  }
+  renderCart();
+}
+
+function removeFromCart(id) {
+  cart.delete(id);
+  const btn = document.getElementById('add-btn');
+  if (btn && currentId === id) {
+    btn.setAttribute('kind', 'tertiary');
+    btn.textContent = '+ Add to composition';
+  }
+  renderCart();
+}
+
+function clearCart() {
+  cart.clear();
+  const btn = document.getElementById('add-btn');
+  if (btn) {
+    btn.setAttribute('kind', 'tertiary');
+    btn.textContent = '+ Add to composition';
+  }
+  renderCart();
+}
+
+function setModel(hfId) {
+  selectedModel = hfId;
+  renderCart();
+}
+
+function setBuildType(type) {
+  selectedBuildType = type;
+  renderCart();
+}
+
+function generateCommand() {
+  if (cart.size === 0) return null;
+
+  // Collect libraries and adapter names, preserving ADAPTERS declaration order.
+  const libSet = new Set();
+  const includeNames = [];
+  for (const id of Object.keys(ADAPTERS)) {
+    if (!cart.has(id)) continue;
+    const a = ADAPTERS[id];
+    libSet.add(a.library);
+    includeNames.push(a.adapterName);
+  }
+
+  const libs = LIBRARY_ORDER
+    .filter(lib => libSet.has(lib))
+    .map(lib => LIBRARY_REPOS[lib]);
+
+  const allSelected = cart.size === Object.keys(ADAPTERS).length;
+
+  const lines = [
+    'python -m granite_switch.composer.compose_granite_switch \\',
+    `  --base-model ${selectedModel} \\`,
+    `  --adapters ${libs.join(' ')} \\`,
+  ];
+  if (!allSelected) {
+    lines.push(`  --include-adapters ${includeNames.join(' ')} \\`);
+  }
+  if (selectedBuildType === 'all-lora') {
+    lines.push('  --technology-filter lora \\');
+  }
+  lines.push('  --output ./my-model');
+
+  return lines.join('\n');
+}
+
+function copyCommand() {
+  const cmd = generateCommand();
+  if (!cmd) return;
+  navigator.clipboard.writeText(cmd).then(() => {
+    const btn = document.querySelector('.copy-btn');
+    if (!btn) return;
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+
+function attachCartListeners() {
+  const modelSw = document.querySelector('cds-content-switcher[data-role="model"]');
+  modelSw?.addEventListener('cds-content-switcher-item-selected', e => {
+    setModel(e.detail.item.value);
+  });
+  const buildSw = document.querySelector('cds-content-switcher[data-role="build"]');
+  buildSw?.addEventListener('cds-content-switcher-item-selected', e => {
+    setBuildType(e.detail.item.value);
+  });
+}
+
+function renderCart() {
+  const countEl  = document.getElementById('cart-count');
+  const clearBtn = document.getElementById('cart-clear-btn');
+  const bodyEl   = document.getElementById('cart-body');
+
+  if (countEl)  countEl.textContent = cart.size > 0 ? ` (${cart.size})` : '';
+  if (clearBtn) clearBtn.style.display = cart.size > 0 ? '' : 'none';
+
+  if (cart.size === 0) {
+    bodyEl.innerHTML =
+      '<p class="cart-empty">Add adapters from the browser above to generate your compose command.</p>';
+    return;
+  }
+
+  // Adapter list
+  const itemsHtml = Object.keys(ADAPTERS)
+    .filter(id => cart.has(id))
+    .map(id => {
+      const a = ADAPTERS[id];
+      return `<div class="cart-item">
+        <span class="badge ${LIB_BADGE[a.library]}">${a.library}</span>
+        <span class="cart-item-name">${a.name}</span>
+        <cds-button kind="ghost" size="sm" onclick="removeFromCart('${id}')" title="Remove">✕</cds-button>
+      </div>`;
+    }).join('');
+
+  // Model content-switcher — value on parent controls the highlighted item;
+  // onclick on each item is the primary interaction handler (more reliable than
+  // waiting for cds-content-switcher-item-selected after an innerHTML rebuild).
+  const modelItemsHtml = Object.entries(MODEL_IDS).map(([label, hfId]) =>
+    `<cds-content-switcher-item value="${hfId}" onclick="setModel('${hfId}')">${label}</cds-content-switcher-item>`
+  ).join('');
+
+  // Build type content-switcher
+  const buildItemsHtml = [
+    { value: 'prefer-alora', label: 'Prefer aLoRA' },
+    { value: 'all-lora',     label: 'All LoRAs' },
+  ].map(opt =>
+    `<cds-content-switcher-item value="${opt.value}" onclick="setBuildType('${opt.value}')">${opt.label}</cds-content-switcher-item>`
+  ).join('');
+
+  // Command
+  const cmd = generateCommand();
+
+  bodyEl.innerHTML = `
+    <div class="cart-items">${itemsHtml}</div>
+    <div class="selector-option-row">
+      <span class="selector-option-label">Base model</span>
+      <cds-content-switcher value="${selectedModel}" data-role="model">${modelItemsHtml}</cds-content-switcher>
+    </div>
+    <div class="selector-option-row">
+      <span class="selector-option-label">Build type</span>
+      <cds-content-switcher value="${selectedBuildType}" data-role="build">${buildItemsHtml}</cds-content-switcher>
+    </div>
+    <div class="command-section">
+      <pre class="command-box">${cmd}</pre>
+      <div class="command-footer">
+        <button class="copy-btn" onclick="copyCommand()">Copy</button>
+      </div>
+    </div>
+  `;
+
+  attachCartListeners();
+}
+
+// ── Adapter panel ─────────────────────────────────────────────────────────────
+
+function render(id) {
+  currentId = id;
+  const a = ADAPTERS[id];
+  if (!a) return;
+
+  const inCart = cart.has(id);
+
+  const flavorHtml = a.flavors
+    .map(f => `<span class="badge ${FLAV_BADGE[f]}">${f === 'lora' ? 'LoRA' : 'aLoRA'}</span>`)
+    .join('');
+
+  document.getElementById('panel').innerHTML = `
+    <div class="panel-top">
+      <h2 class="panel-title">${a.name}</h2>
+      <div class="panel-actions">
+        <cds-link href="${a.readmeUrl}" target="_blank" rel="noopener">Adapter README ↗</cds-link>
+        <cds-button id="add-btn" kind="${inCart ? 'primary' : 'tertiary'}"                    onclick="toggleCart('${id}')">
+          ${inCart ? '✓ Added' : '+ Add to composition'}
+        </cds-button>
+      </div>
+    </div>
+    <div class="badges">
+      <span class="badge ${LIB_BADGE[a.library]}">${a.library} Library</span>
+      <span class="badge badge-gray">${a.stage}</span>
+      ${flavorHtml}
+    </div>
+    <p class="description">${a.description}</p>
+    <div>
+      <div class="chart-title">${a.metric.label} — by model size and method</div>
+      <div class="chart-wrap"><canvas id="perf-chart"></canvas></div>
+    </div>
+  `;
+
+  buildChart(a);
+}
+
+function buildChart(a) {
+  if (chart) { chart.destroy(); chart = null; }
+
+  const ctx = document.getElementById('perf-chart').getContext('2d');
+  const n = a.models.length;
+  const datasets = [];
+
+  // Chart.js sorts datasets by `order` (ascending) to assign left-to-right
+  // bar positions within each group.  Assign sequential order values so the
+  // bar-slot position matches the desired visual sequence:
+  //   order 1 → external baseline bar (leftmost)
+  //   order 2 → Prompted (IBM zero-shot)
+  //   order 3 → aLoRA adapter
+  //   order 4 → LoRA adapter  (rightmost)
+  //   order 9 → reference lines (rendered last = drawn on top of bars)
+
+  if (a.externalBar) {
+    datasets.push({
+      type: 'bar', label: a.externalBar.label, data: a.externalBar.data,
+      backgroundColor: hexToRgba(a.externalBar.color, 0.45),
+      borderColor: a.externalBar.color, borderWidth: 1, order: 1,
+    });
+  }
+
+  if (a.prompted) {
+    datasets.push({
+      type: 'bar', label: 'Prompted (zero-shot)', data: a.prompted,
+      backgroundColor: C.prompted.bg, borderColor: C.prompted.border, borderWidth: 1, order: 2,
+    });
+  }
+
+  if (a.alora) {
+    datasets.push({
+      type: 'bar', label: 'aLoRA adapter', data: a.alora,
+      backgroundColor: C.alora.bg, borderColor: C.alora.border, borderWidth: 1, order: 3,
+    });
+  }
+
+  datasets.push({
+    type: 'bar', label: 'LoRA adapter', data: a.lora,
+    backgroundColor: C.lora.bg, borderColor: C.lora.border, borderWidth: 1, order: 4,
+  });
+
+  // Flat horizontal reference lines span the full chart width via a hidden
+  // non-offset x-axis.  order: 9 renders them last so they appear on top.
+  (a.external || []).forEach(ext => {
+    datasets.push({
+      type: 'line', xAxisID: 'x2', label: ext.label,
+      data: Array(n).fill(ext.value),
+      borderColor: ext.color, borderWidth: 2, borderDash: [7, 4],
+      pointRadius: 0, pointHoverRadius: 0, fill: false, order: 9,
+    });
+  });
+
+  chart = new Chart(ctx, {
+    type: 'bar',
+    data: { labels: a.models, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { position: 'top', labels: { font: { size: 12 }, boxWidth: 14, padding: 14 } },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const v = ctx.parsed.y;
+              if (v === null || v === undefined) return null;
+              return `  ${ctx.dataset.label}: ${v > 1 ? v.toFixed(1) : v.toFixed(3)}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x:  { grid: { display: false }, ticks: { font: { size: 12 } } },
+        x2: { type: 'category', labels: a.models, offset: false, display: false, grid: { display: false } },
+        y:  {
+          min: a.metric.scale[0], max: a.metric.scale[1],
+          ticks: { font: { size: 11 } },
+          title: { display: true, text: a.metric.label, font: { size: 11 }, color: '#525252' },
+        },
+      },
+    },
+  });
+}
+
+function hexToRgba(hex, alpha) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+const sel = document.getElementById('adapter-select');
+
+sel.addEventListener('change', () => {
+  const val = sel.value;
+  if (!val || !ADAPTERS[val]) return;
+  currentId = val;
+  history.replaceState(null, '', '#' + val);
+  render(val);
+});
+
+const initial = window.location.hash.slice(1);
+if (initial && ADAPTERS[initial]) {
+  sel.value = initial;
+  currentId = initial;
+}
+
+render(currentId);
+renderCart();
+</script>
+</body>
+</html>
