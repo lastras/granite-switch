@@ -682,7 +682,7 @@ def build_display(labels):
 
 
 # ── Race runner ───────────────────────────────────────────────────────────────
-def run_race(backends, labels, console):
+def run_race(backends, labels, console, no_live=False):
     global _race_start
     all_conv_results   = {label: [] for label in labels}
     server_done_count  = {label: 0  for label in labels}
@@ -700,7 +700,7 @@ def run_race(backends, labels, console):
                 futures[f] = (label, run_idx)
 
         seen = set()
-        use_live = not _detect_notebook()
+        use_live = not no_live
 
         def _drain_futures():
             for f in [f for f in futures if f.done() and id(f) not in seen]:
@@ -960,6 +960,8 @@ def main():
     parser.add_argument("--server", default=None,
                         help="In sequential mode, which server label to run "
                              "(e.g. 'ALORA (8111)'). Omit to run all servers.")
+    parser.add_argument("--no-live", action="store_true",
+                        help="Disable Rich Live display (use for Jupyter/Colab)")
     args = parser.parse_args()
 
     if args.mode == "sequential" and args.server and args.server not in SERVERS:
@@ -1001,9 +1003,9 @@ def main():
         adapter_tech[label]["generation"] = "base"
         adapter_tech[label]["retrieval"]  = "local"
 
-    _in_notebook = _detect_notebook()
+    _in_notebook = _detect_notebook() or args.no_live
     console      = Console(force_jupyter=True) if _in_notebook else Console()
-    all_conv_results, race_wall  = run_race(backends, labels, console)
+    all_conv_results, race_wall  = run_race(backends, labels, console, no_live=_in_notebook)
     server_results               = collect_stats(all_conv_results, labels)
     write_telemetry(server_results, adapter_tech, all_conv_results, labels, race_wall, args.mode)
 
