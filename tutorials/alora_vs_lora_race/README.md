@@ -1,7 +1,8 @@
 # ALORA vs LoRA Race
 
-Benchmark two Granite Switch models — one using **ALORA** (attention-level adapter switching)
-and one using standard **LoRA** — on a 6-step RAG pipeline under concurrent load.
+Benchmark two Granite Switch models — one using **ALORA** (which defers adapter
+activation to save prefill time) and one using standard **LoRA** — on a 6-step RAG
+pipeline under concurrent load.
 
 Each conversation runs 5 turns through:
 guardian &rarr; query rewrite &rarr; ChromaDB retrieval &rarr; answerability &rarr; clarification &rarr; generation
