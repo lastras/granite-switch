@@ -36,7 +36,6 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import chromadb
-import pynvml
 import torch
 from chromadb import Documents, Embeddings, EmbeddingFunction
 from huggingface_hub import hf_hub_download
@@ -384,20 +383,7 @@ def _metrics_scraper_loop():
                         "e2e_avg":      round(_race_avg("vllm:e2e_request_latency_seconds",  parsed, label), 3),
                         "prompt_avg":   round(_race_avg("vllm:request_prompt_tokens",        parsed, label), 1),
                     }
-            gpu_data = []
-            try:
-                for i, h in GPU_HANDLES.items():
-                    util = pynvml.nvmlDeviceGetUtilizationRates(h)
-                    mem  = pynvml.nvmlDeviceGetMemoryInfo(h)
-                    gpu_data.append({
-                        "label":        GPU_LABELS[i],
-                        "pct":          util.gpu,
-                        "mem_used_gb":  round(mem.used  / 1e9, 2),
-                        "mem_total_gb": round(mem.total / 1e9, 1),
-                    })
-            except Exception:
-                pass
-            _emit_event("metrics", vllm=vllm_data, gpu=gpu_data)
+            _emit_event("metrics", vllm=vllm_data)
 
         time.sleep(1.5)
 
@@ -513,10 +499,6 @@ def run_conversation(run_idx, backend, label):
 
 
 # ── Rich live display ─────────────────────────────────────────────────────────
-pynvml.nvmlInit()
-_GPU_COUNT  = pynvml.nvmlDeviceGetCount()
-GPU_HANDLES = {i: pynvml.nvmlDeviceGetHandleByIndex(i) for i in range(_GPU_COUNT)}
-GPU_LABELS  = {i: f"vLLM:{8111 + i}" for i in range(_GPU_COUNT)}
 
 BAR_WIDTH   = 20
 STEP_COLORS = {
@@ -524,16 +506,6 @@ STEP_COLORS = {
     "retrieve": "bright_yellow", "answer?": "bright_magenta", "clarify": "bright_magenta",
     "generate": "bright_red", "done": "bright_green",
 }
-
-
-def _gpu_stats():
-    stats = {}
-    for i, h in GPU_HANDLES.items():
-        util = pynvml.nvmlDeviceGetUtilizationRates(h)
-        mem  = pynvml.nvmlDeviceGetMemoryInfo(h)
-        stats[i] = {"gpu_pct": util.gpu,
-                    "mem_used_gb": mem.used / 1e9, "mem_total_gb": mem.total / 1e9}
-    return stats
 
 
 def _bar(frac, width=18, color="bright_green"):
@@ -666,26 +638,8 @@ def build_display(labels):
         footers.append(txt)
     table.add_row(*footers)
 
-    gs        = _gpu_stats()
-    gpu_table = Table(show_header=True, show_lines=False, pad_edge=False, expand=True, title="GPU")
-    for i in range(_GPU_COUNT):
-        gpu_table.add_column(GPU_LABELS[i], ratio=1)
-    gpu_cells = []
-    for i in range(_GPU_COUNT):
-        s      = gs[i]
-        bar_l  = 10
-        filled = int(s["gpu_pct"] / 100 * bar_l)
-        bar    = "█" * filled + "░" * (bar_l - filled)
-        color  = ("bright_green" if s["gpu_pct"] < 50
-                  else "bright_yellow" if s["gpu_pct"] < 80 else "bright_red")
-        gpu_cells.append(Text(
-            f"{bar} {s['gpu_pct']:3d}%  {s['mem_used_gb']:.1f}/{s['mem_total_gb']:.0f}G",
-            style=color,
-        ))
-    gpu_table.add_row(*gpu_cells)
-
     m_snap = _get_metrics_snapshot()
-    return Group(table, gpu_table, _build_vllm_table(labels, m_snap))
+    return Group(table, _build_vllm_table(labels, m_snap))
 
 
 # ── Race runner ───────────────────────────────────────────────────────────────

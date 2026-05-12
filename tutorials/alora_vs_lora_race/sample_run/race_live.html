@@ -150,7 +150,7 @@
       min-height: 1.4rem;
     }
 
-    /* ── Metrics / GPU panels ── */
+    /* ── Metrics panel ── */
     .metrics-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -163,25 +163,6 @@
     .m-row { white-space: pre; line-height: 1.38; font-size: 12.5px; }
     .m-label { color: #555; display: inline-block; width: 8.5rem; }
 
-    .gpu-header {
-      background: #252525;
-      color: #666;
-      font-size: 0.68rem;
-      font-weight: 600;
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
-      padding: 0.2rem 0.6rem;
-      border: 1px solid #333;
-      border-top: none;
-    }
-    .gpu-row {
-      background: #1e1e1e;
-      border: 1px solid #333;
-      border-top: none;
-      padding: 0.28rem 0.6rem;
-      font-size: 12.5px;
-      white-space: pre;
-    }
 
     /* ── Error ── */
     #error { color: #f44747; margin: 1rem 0; font-size: 0.85rem; }
@@ -214,8 +195,6 @@
 
 <div class="race-grid" id="raceGrid"></div>
 <div class="metrics-grid" id="metricsGrid"></div>
-<div class="gpu-header" id="gpuHeader" style="display:none">GPU</div>
-<div class="gpu-row"    id="gpuRow"    style="display:none"></div>
 <div id="error"></div>
 
 <script>
@@ -526,23 +505,6 @@ function updateMetrics() {
       mRow('Prompt',    v.prompt_avg, promptMax, x => `${Math.round(x)}\u00a0tok`, false);
   });
 
-  // GPU
-  const gpu = metricsState.gpu;
-  if (gpu && gpu.length) {
-    document.getElementById('gpuHeader').style.display = '';
-    const gpuRow = document.getElementById('gpuRow');
-    gpuRow.style.display = '';
-    gpuRow.innerHTML = gpu.map(g => {
-      const frac   = g.pct / 100;
-      const filled = Math.round(frac * 10);
-      const f      = '\u2588'.repeat(filled);
-      const e      = '\u2591'.repeat(10 - filled);
-      const c      = mColor(frac);
-      return `<span style="color:#9cdcfe">${g.label}  ` +
-             `</span><span style="color:${c}">${f}${e}  ${g.pct}%  ` +
-             `${g.mem_used_gb.toFixed(1)}/${g.mem_total_gb.toFixed(0)}G</span>`;
-    }).join('    ');
-  }
 }
 
 function render() {
