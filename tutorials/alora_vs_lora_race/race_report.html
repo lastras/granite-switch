@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Granite Switch — ALORA vs LoRA Benchmark</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/@carbon/styles@1/css/styles.min.css">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f4f4f4;
+      color: #161616;
+      line-height: 1.5;
+    }
+
+    .container { max-width: 1000px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+
+    header { margin-bottom: 2rem; }
+    header h1 { font-size: 1.75rem; font-weight: 600; color: #161616; margin-bottom: 0.25rem; }
+    header p  { color: #525252; font-size: 0.925rem; }
+
+    /* ── Summary strip ── */
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1px;
+      background: #e0e0e0;
+      border: 1px solid #e0e0e0;
+      margin-bottom: 1.5rem;
+    }
+
+    .summary-card {
+      background: #fff;
+      padding: 1.25rem 1.5rem;
+    }
+
+    .summary-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #525252;
+      margin-bottom: 0.4rem;
+    }
+
+    .summary-value {
+      font-size: 2rem;
+      font-weight: 300;
+      color: #161616;
+      line-height: 1.1;
+    }
+
+    .summary-value.highlight { color: #0f62fe; font-weight: 600; }
+    .summary-sub { font-size: 0.8rem; color: #6f6f6f; margin-top: 0.25rem; }
+
+    /* ── Panels ── */
+    .panel {
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      padding: 1.5rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .panel-title {
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #525252;
+      margin-bottom: 1.25rem;
+    }
+
+    /* ── Legend ── */
+    .legend {
+      display: flex;
+      gap: 1.5rem;
+      margin-bottom: 1rem;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.875rem;
+      color: #393939;
+    }
+
+    .legend-swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+
+    /* ── Charts ── */
+    .chart-wrap { position: relative; }
+    .chart-row  { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 1.25rem; }
+
+    /* ── Step table ── */
+    .step-table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+    .step-table th {
+      text-align: left;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #525252;
+      border-bottom: 2px solid #e0e0e0;
+      background: #f4f4f4;
+    }
+    .step-table th.right,
+    .step-table td.right { text-align: right; }
+    .step-table td {
+      padding: 0.5rem 0.75rem;
+      border-bottom: 1px solid #e0e0e0;
+      color: #161616;
+    }
+    .step-table tr:last-child td { border-bottom: none; }
+    .step-table tr:hover td { background: #f4f4f4; }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 0 0.6rem;
+      height: 1.4rem;
+      border-radius: 0.7rem;
+      font-size: 0.7rem;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    .badge-alora  { background: #d0e2ff; color: #0043ce; }
+    .badge-lora   { background: #ffd6e8; color: #9f1853; }
+    .badge-base   { background: #f4f4f4; color: #525252; border: 1px solid #c6c6c6; }
+    .badge-local  { background: #defbe6; color: #044317; }
+
+    .diff-faster { color: #0e6027; font-weight: 600; }
+    .diff-slower { color: #da1e28; font-weight: 600; }
+
+    /* ── Metadata footer ── */
+    .meta {
+      font-size: 0.8rem;
+      color: #8d8d8d;
+      margin-top: 2rem;
+      padding-top: 1rem;
+      border-top: 1px solid #e0e0e0;
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <header>
+    <h1>Granite Switch — ALORA vs LoRA Benchmark</h1>
+    <p id="subtitle">Government services RAG pipeline · loading…</p>
+  </header>
+
+  <!-- Summary strip -->
+  <div class="summary-grid">
+    <div class="summary-card">
+      <div class="summary-label">Race wall-clock</div>
+      <div class="summary-value" id="sum-race-wall">—</div>
+      <div class="summary-sub">both servers, simultaneous</div>
+    </div>
+    <div class="summary-card">
+      <div class="summary-label">ALORA server wall</div>
+      <div class="summary-value" id="sum-alora-wall">—</div>
+      <div class="summary-sub" id="sum-alora-model">—</div>
+    </div>
+    <div class="summary-card">
+      <div class="summary-label">LoRA server wall</div>
+      <div class="summary-value" id="sum-lora-wall">—</div>
+      <div class="summary-sub" id="sum-lora-model">—</div>
+    </div>
+    <div class="summary-card">
+      <div class="summary-label">Server-wall speedup</div>
+      <div class="summary-value highlight" id="sum-speedup">—</div>
+      <div class="summary-sub">ALORA ÷ LoRA wall-clock</div>
+    </div>
+  </div>
+
+  <!-- Per-step latency -->
+  <div class="panel">
+    <div class="panel-title">Median step latency</div>
+    <div class="legend">
+      <div class="legend-item">
+        <div class="legend-swatch" style="background:#0f62fe"></div>ALORA
+      </div>
+      <div class="legend-item">
+        <div class="legend-swatch" style="background:#da1e28"></div>LoRA
+      </div>
+    </div>
+    <div class="chart-wrap" style="height:320px">
+      <canvas id="stepChart"></canvas>
+    </div>
+  </div>
+
+  <!-- Exit distribution + conv wall-clock -->
+  <div class="chart-row">
+    <div class="panel" style="margin-bottom:0">
+      <div class="panel-title">Exit distribution</div>
+      <div class="chart-wrap" style="height:240px">
+        <canvas id="exitChart"></canvas>
+      </div>
+    </div>
+    <div class="panel" style="margin-bottom:0">
+      <div class="panel-title">Per-conversation wall-clock</div>
+      <div class="chart-wrap" style="height:240px">
+        <canvas id="convChart"></canvas>
+      </div>
+    </div>
+  </div>
+  <div style="margin-bottom:1.25rem"></div>
+
+  <!-- Step detail table -->
+  <div class="panel">
+    <div class="panel-title">Step detail</div>
+    <table class="step-table">
+      <thead>
+        <tr>
+          <th>Step</th>
+          <th>Tech (ALORA server)</th>
+          <th class="right">Median (ms)</th>
+          <th class="right">Mean (ms)</th>
+          <th>Tech (LoRA server)</th>
+          <th class="right">Median (ms)</th>
+          <th class="right">Mean (ms)</th>
+          <th class="right">Speedup</th>
+        </tr>
+      </thead>
+      <tbody id="stepTableBody"></tbody>
+    </table>
+  </div>
+
+  <div class="meta" id="meta-footer"></div>
+</div>
+
+<script>
+// ── Load data ────────────────────────────────────────────────────────────────
+// The report reads race_results.json from the same directory, or falls back to
+// RACE_DATA embedded below (used when opened as an IPython HTML widget in Colab).
+const RACE_DATA_EMBEDDED = null; // replaced by notebook when embedding
+
+async function loadData() {
+  if (RACE_DATA_EMBEDDED) return RACE_DATA_EMBEDDED;
+  const r = await fetch('race_results.json');
+  if (!r.ok) throw new Error('Could not load race_results.json');
+  return r.json();
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function median(arr) {
+  if (!arr.length) return 0;
+  const s = [...arr].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m-1] + s[m]) / 2;
+}
+
+function mean(arr) {
+  return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+}
+
+function fmt1(v) { return v.toFixed(1); }
+function fmtMs(v) { return (v * 1000).toFixed(0); }
+function fmtS(v)  { return v.toFixed(1) + 's'; }
+
+function badgeHtml(tech) {
+  const cls = { alora: 'badge-alora', lora: 'badge-lora', base: 'badge-base', local: 'badge-local' };
+  return `<span class="badge ${cls[tech] || 'badge-base'}">${tech}</span>`;
+}
+
+const STEP_LABELS = {
+  guardian_harm: 'Guardian (harm)',
+  query_rewrite: 'Query rewrite',
+  retrieval:     'Retrieval',
+  answerability: 'Answerability',
+  clarification: 'Clarification',
+  generation:    'Generation',
+};
+
+const EXIT_LABELS = {
+  harm_blocked:       'Harm blocked',
+  unanswerable:       'Unanswerable',
+  needs_clarification:'Needs clarification',
+  full_pipeline:      'Full pipeline',
+};
+
+const EXIT_COLORS = ['#da1e28', '#ff832b', '#f1c21b', '#42be65'];
+
+// ── Render ───────────────────────────────────────────────────────────────────
+async function render() {
+  const data    = await loadData();
+  const meta    = data.metadata;
+  const labels  = Object.keys(data.servers);
+  const [la, ll] = labels;
+  const sa      = data.servers[la];
+  const sl      = data.servers[ll];
+
+  // Subtitle
+  document.getElementById('subtitle').textContent =
+    `${meta.runs} conversations × 5 turns · ${meta.concurrency} concurrent · ${meta.mode} mode · ${meta.timestamp.slice(0,10)}`;
+
+  // Summary cards
+  document.getElementById('sum-race-wall').textContent  = fmtS(meta.race_wall);
+  document.getElementById('sum-alora-wall').textContent = fmtS(sa.wall_total);
+  document.getElementById('sum-lora-wall').textContent  = fmtS(sl.wall_total);
+  document.getElementById('sum-alora-model').textContent = sa.model.split('/').pop();
+  document.getElementById('sum-lora-model').textContent  = sl.model.split('/').pop();
+  const speedup = sl.wall_total / sa.wall_total;
+  document.getElementById('sum-speedup').textContent = speedup.toFixed(2) + '×';
+
+  // ── Step latency chart (horizontal grouped bar, log scale) ───────────────
+  const steps     = Object.keys(STEP_LABELS);
+  const stepNames = steps.map(s => STEP_LABELS[s]);
+  const medA = steps.map(s => median(sa.step_times[s] || []) * 1000);
+  const medL = steps.map(s => median(sl.step_times[s] || []) * 1000);
+
+  new Chart(document.getElementById('stepChart'), {
+    type: 'bar',
+    data: {
+      labels: stepNames,
+      datasets: [
+        { label: la, data: medA, backgroundColor: '#0f62fe', borderRadius: 2 },
+        { label: ll, data: medL, backgroundColor: '#da1e28', borderRadius: 2 },
+      ],
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: {
+          type: 'logarithmic',
+          title: { display: true, text: 'Median latency (ms, log scale)', color: '#525252', font: { size: 11 } },
+          grid: { color: '#e0e0e0' },
+          ticks: { color: '#525252' },
+        },
+        y: { grid: { display: false }, ticks: { color: '#161616' } },
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.x.toFixed(0)} ms`,
+          },
+        },
+      },
+    },
+  });
+
+  // ── Exit distribution (grouped bar) ─────────────────────────────────────
+  const exitKeys  = ['harm_blocked', 'unanswerable', 'needs_clarification', 'full_pipeline'];
+  const exitNames = exitKeys.map(k => EXIT_LABELS[k]);
+
+  function countExits(srv) {
+    const c = {};
+    (srv.work || []).forEach(w => { c[w.exit] = (c[w.exit] || 0) + 1; });
+    return exitKeys.map(k => c[k] || 0);
+  }
+
+  new Chart(document.getElementById('exitChart'), {
+    type: 'bar',
+    data: {
+      labels: exitNames,
+      datasets: [
+        { label: la, data: countExits(sa), backgroundColor: '#0f62fe', borderRadius: 2 },
+        { label: ll, data: countExits(sl), backgroundColor: '#da1e28', borderRadius: 2 },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: { grid: { display: false }, ticks: { color: '#161616', font: { size: 11 } } },
+        y: { grid: { color: '#e0e0e0' }, ticks: { color: '#525252' },
+             title: { display: true, text: 'queries', color: '#525252', font: { size: 11 } } },
+      },
+      plugins: {
+        legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } },
+        tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y}` } },
+      },
+    },
+  });
+
+  // ── Per-conversation wall-clock (dot plot) ───────────────────────────────
+  const convA = sa.conv_walls.map((v, i) => ({ x: i + 1, y: v }));
+  const convL = sl.conv_walls.map((v, i) => ({ x: i + 1, y: v }));
+
+  new Chart(document.getElementById('convChart'), {
+    type: 'scatter',
+    data: {
+      datasets: [
+        { label: la, data: convA, backgroundColor: '#0f62fe88', pointRadius: 5 },
+        { label: ll, data: convL, backgroundColor: '#da1e2888', pointRadius: 5 },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: { title: { display: true, text: 'conversation #', color: '#525252', font: { size: 11 } },
+             grid: { display: false }, ticks: { color: '#525252' } },
+        y: { title: { display: true, text: 'wall-clock (s)', color: '#525252', font: { size: 11 } },
+             grid: { color: '#e0e0e0' }, ticks: { color: '#525252' } },
+      },
+      plugins: {
+        legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } },
+        tooltip: { callbacks: {
+          label: ctx => ` ${ctx.dataset.label} conv ${ctx.parsed.x}: ${ctx.parsed.y.toFixed(1)}s`,
+        }},
+      },
+    },
+  });
+
+  // ── Step detail table ────────────────────────────────────────────────────
+  const tbody = document.getElementById('stepTableBody');
+  steps.forEach(step => {
+    const ta = (sa.step_times[step] || []).map(v => v * 1000);
+    const tl = (sl.step_times[step] || []).map(v => v * 1000);
+    if (!ta.length && !tl.length) return;
+
+    const meda = median(ta), medl = median(tl);
+    const spd  = medl > 0 ? medl / meda : null;
+    const spdHtml = spd !== null
+      ? `<span class="${spd > 1 ? 'diff-faster' : 'diff-slower'}">${spd.toFixed(2)}×</span>`
+      : '—';
+
+    tbody.insertAdjacentHTML('beforeend', `
+      <tr>
+        <td>${STEP_LABELS[step]}</td>
+        <td>${badgeHtml(sa.adapter_tech[step] || 'base')}</td>
+        <td class="right">${meda.toFixed(0)}</td>
+        <td class="right">${mean(ta).toFixed(0)}</td>
+        <td>${badgeHtml(sl.adapter_tech[step] || 'base')}</td>
+        <td class="right">${medl.toFixed(0)}</td>
+        <td class="right">${mean(tl).toFixed(0)}</td>
+        <td class="right">${spdHtml}</td>
+      </tr>
+    `);
+  });
+
+  // ── Footer ───────────────────────────────────────────────────────────────
+  document.getElementById('meta-footer').textContent =
+    `Generated ${meta.timestamp.slice(0,19).replace('T',' ')} UTC · `+
+    `${meta.runs} runs · concurrency ${meta.concurrency} · mode: ${meta.mode}`;
+}
+
+render().catch(err => {
+  document.querySelector('header p').textContent = 'Error loading data: ' + err.message;
+});
+</script>
+</body>
+</html>
