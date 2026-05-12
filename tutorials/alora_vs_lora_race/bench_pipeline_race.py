@@ -166,27 +166,15 @@ def _resolve_adapter_index(source):
         return json.load(f)
 
 
-def _load_adapters(source):
-    """Load EmbeddedIntrinsicAdapters from local dir or HF Hub."""
-    if Path(source).is_dir():
-        return EmbeddedIntrinsicAdapter.from_pretrained(source)
-    return EmbeddedIntrinsicAdapter.from_hub(source)
-
-
-# ── Print adapter composition ─────────────────────────────────────────────────
-for label, cfg in SERVERS.items():
-    idx = _resolve_adapter_index(cfg["source"])
-    adapters = idx["adapters"]
-    aloras = sum(1 for a in adapters if a.get("technology") == "alora")
-    loras  = sum(1 for a in adapters if a.get("technology") == "lora")
-    print(f"{label}: {aloras} ALORAs, {loras} LORAs")
-print()
-
 # ── Mellea helpers ────────────────────────────────────────────────────────────
 def make_backend(cfg):
     backend = OpenAIBackend(model_id=cfg["model"], base_url=cfg["base_url"], api_key="unused")
-    for a in _load_adapters(cfg["source"]):
-        backend.add_adapter(a)
+    source = cfg["source"]
+    if Path(source).is_dir():
+        backend.register_embedded_adapter_model(source)
+    else:
+        for a in EmbeddedIntrinsicAdapter.from_hub(source):
+            backend.add_adapter(a)
     return backend
 
 
@@ -1032,6 +1020,14 @@ def main():
 
     labels = ([args.server] if args.mode == "sequential" and args.server
               else list(SERVERS.keys()))
+
+    for label in labels:
+        cfg = SERVERS[label]
+        idx = _resolve_adapter_index(cfg["source"])
+        adapters = idx["adapters"]
+        aloras = sum(1 for a in adapters if a.get("technology") == "alora")
+        loras  = sum(1 for a in adapters if a.get("technology") == "lora")
+        print(f"{label}: {aloras} ALORAs, {loras} LORAs")
 
     for label, cfg in SERVERS.items():
         kv_tokens = parse_kv_cache_from_log(cfg.get("log_file", ""))
