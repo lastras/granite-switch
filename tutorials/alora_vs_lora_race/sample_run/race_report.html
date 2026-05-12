@@ -182,9 +182,9 @@
     </div>
   </div>
 
-  <!-- Per-step latency -->
+  <!-- Per-conversation wall-clock (main chart) -->
   <div class="panel">
-    <div class="panel-title">Median step latency</div>
+    <div class="panel-title">Per-conversation wall-clock</div>
     <div class="legend">
       <div class="legend-item">
         <div class="legend-swatch" style="background:#0f62fe"></div>ALORA
@@ -194,22 +194,16 @@
       </div>
     </div>
     <div class="chart-wrap" style="height:320px">
-      <canvas id="stepChart"></canvas>
+      <canvas id="convChart"></canvas>
     </div>
   </div>
 
-  <!-- Exit distribution + conv wall-clock -->
+  <!-- Exit distribution -->
   <div class="chart-row">
     <div class="panel" style="margin-bottom:0">
       <div class="panel-title">Exit distribution</div>
       <div class="chart-wrap" style="height:240px">
         <canvas id="exitChart"></canvas>
-      </div>
-    </div>
-    <div class="panel" style="margin-bottom:0">
-      <div class="panel-title">Per-conversation wall-clock</div>
-      <div class="chart-wrap" style="height:240px">
-        <canvas id="convChart"></canvas>
       </div>
     </div>
   </div>
@@ -4574,41 +4568,34 @@ async function render() {
   const speedup = sl.wall_total / sa.wall_total;
   document.getElementById('sum-speedup').textContent = speedup.toFixed(2) + '×';
 
-  // ── Step latency chart (horizontal grouped bar, log scale) ───────────────
   const steps     = Object.keys(STEP_LABELS);
-  const stepNames = steps.map(s => STEP_LABELS[s]);
-  const medA = steps.map(s => median(sa.step_times[s] || []) * 1000);
-  const medL = steps.map(s => median(sl.step_times[s] || []) * 1000);
 
-  new Chart(document.getElementById('stepChart'), {
-    type: 'bar',
+  // ── Per-conversation wall-clock (scatter) ──────────────────────────────
+  const convA = sa.conv_walls.map((v, i) => ({ x: i + 1, y: v }));
+  const convL = sl.conv_walls.map((v, i) => ({ x: i + 1, y: v }));
+
+  new Chart(document.getElementById('convChart'), {
+    type: 'scatter',
     data: {
-      labels: stepNames,
       datasets: [
-        { label: la, data: medA, backgroundColor: '#0f62fe', borderRadius: 2 },
-        { label: ll, data: medL, backgroundColor: '#da1e28', borderRadius: 2 },
+        { label: la, data: convA, backgroundColor: '#0f62fe88', pointRadius: 5 },
+        { label: ll, data: convL, backgroundColor: '#da1e2888', pointRadius: 5 },
       ],
     },
     options: {
-      indexAxis: 'y',
       responsive: true,
       maintainAspectRatio: false,
       scales: {
-        x: {
-          type: 'logarithmic',
-          title: { display: true, text: 'Median latency (ms, log scale)', color: '#525252', font: { size: 11 } },
-          grid: { color: '#e0e0e0' },
-          ticks: { color: '#525252' },
-        },
-        y: { grid: { display: false }, ticks: { color: '#161616' } },
+        x: { title: { display: true, text: 'conversation #', color: '#525252', font: { size: 11 } },
+             grid: { display: false }, ticks: { color: '#525252' } },
+        y: { title: { display: true, text: 'wall-clock (s)', color: '#525252', font: { size: 11 } },
+             grid: { color: '#e0e0e0' }, ticks: { color: '#525252' } },
       },
       plugins: {
         legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.x.toFixed(0)} ms`,
-          },
-        },
+        tooltip: { callbacks: {
+          label: ctx => ` ${ctx.dataset.label} conv ${ctx.parsed.x}: ${ctx.parsed.y.toFixed(1)}s`,
+        }},
       },
     },
   });
@@ -4643,36 +4630,6 @@ async function render() {
       plugins: {
         legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } },
         tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y}` } },
-      },
-    },
-  });
-
-  // ── Per-conversation wall-clock (dot plot) ───────────────────────────────
-  const convA = sa.conv_walls.map((v, i) => ({ x: i + 1, y: v }));
-  const convL = sl.conv_walls.map((v, i) => ({ x: i + 1, y: v }));
-
-  new Chart(document.getElementById('convChart'), {
-    type: 'scatter',
-    data: {
-      datasets: [
-        { label: la, data: convA, backgroundColor: '#0f62fe88', pointRadius: 5 },
-        { label: ll, data: convL, backgroundColor: '#da1e2888', pointRadius: 5 },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      scales: {
-        x: { title: { display: true, text: 'conversation #', color: '#525252', font: { size: 11 } },
-             grid: { display: false }, ticks: { color: '#525252' } },
-        y: { title: { display: true, text: 'wall-clock (s)', color: '#525252', font: { size: 11 } },
-             grid: { color: '#e0e0e0' }, ticks: { color: '#525252' } },
-      },
-      plugins: {
-        legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } },
-        tooltip: { callbacks: {
-          label: ctx => ` ${ctx.dataset.label} conv ${ctx.parsed.x}: ${ctx.parsed.y.toFixed(1)}s`,
-        }},
       },
     },
   });
