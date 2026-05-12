@@ -85,18 +85,21 @@ GENERATION_INSTRUCTION = (
     "Do not repeat the question or add unnecessary preamble."
 )
 
+ALORA_MODEL = "ibm-granite/granite-switch-4.1-3b-preview"
+LORA_MODEL  = "ibm-granite/granite-switch-4.1-3b-preview"  # override with --lora-model
+
 SERVERS = {
     "ALORA (8111)": {
         "base_url":    "http://localhost:8111/v1",
-        "model":       "ibm-granite/granite-switch-4.1-3b-preview",
-        "source":      "ibm-granite/granite-switch-4.1-3b-preview",
+        "model":       ALORA_MODEL,
+        "source":      ALORA_MODEL,
         "metrics_url": "http://localhost:8111/metrics",
         "log_file":    str(_HERE / "vllm_alora.log"),
     },
     "LORA (8112)": {
         "base_url":    "http://localhost:8112/v1",
-        "model":       "GrizleeBer/gs-test-2",
-        "source":      "GrizleeBer/gs-test-2",
+        "model":       LORA_MODEL,
+        "source":      LORA_MODEL,
         "metrics_url": "http://localhost:8112/metrics",
         "log_file":    str(_HERE / "vllm_lora.log"),
     },
@@ -153,10 +156,26 @@ collection = _chroma.get_or_create_collection(
 print(f"  Embedding on {next(_embed_fn._model.parameters()).device}, "
       f"{collection.count():,} docs\n")
 
+# ── Helpers for local-path or HF-hub sources ─────────────────────────────────
+def _resolve_adapter_index(source):
+    """Load adapter_index.json from a local directory or HF Hub repo."""
+    local = Path(source) / "adapter_index.json"
+    if local.exists():
+        return json.loads(local.read_text())
+    with open(hf_hub_download(repo_id=source, filename="adapter_index.json")) as f:
+        return json.load(f)
+
+
+def _load_adapters(source):
+    """Load EmbeddedIntrinsicAdapters from local dir or HF Hub."""
+    if Path(source).is_dir():
+        return EmbeddedIntrinsicAdapter.from_pretrained(source)
+    return EmbeddedIntrinsicAdapter.from_hub(source)
+
+
 # ── Print adapter composition ─────────────────────────────────────────────────
 for label, cfg in SERVERS.items():
-    with open(hf_hub_download(repo_id=cfg["source"], filename="adapter_index.json")) as f:
-        idx = json.load(f)
+    idx = _resolve_adapter_index(cfg["source"])
     adapters = idx["adapters"]
     aloras = sum(1 for a in adapters if a.get("technology") == "alora")
     loras  = sum(1 for a in adapters if a.get("technology") == "lora")
@@ -166,7 +185,7 @@ print()
 # ── Mellea helpers ────────────────────────────────────────────────────────────
 def make_backend(cfg):
     backend = OpenAIBackend(model_id=cfg["model"], base_url=cfg["base_url"], api_key="unused")
-    for a in EmbeddedIntrinsicAdapter.from_hub(cfg["source"]):
+    for a in _load_adapters(cfg["source"]):
         backend.add_adapter(a)
     return backend
 
@@ -983,6 +1002,10 @@ def main():
                         help=f"Max concurrent requests per server (default: {CONCURRENCY_PER_SERVER})")
     parser.add_argument("-k", "--top-k", type=int, default=None,
                         help=f"Number of documents to retrieve per query (default: {TOP_K})")
+    parser.add_argument("--alora-model", default=None,
+                        help="Override ALORA model (HF repo or local path)")
+    parser.add_argument("--lora-model", default=None,
+                        help="Override LORA model (HF repo or local path)")
     args = parser.parse_args()
     if args.runs is not None:
         RUNS = args.runs
@@ -990,6 +1013,12 @@ def main():
         CONCURRENCY_PER_SERVER = args.concurrency
     if args.top_k is not None:
         TOP_K = args.top_k
+    if args.alora_model is not None:
+        SERVERS["ALORA (8111)"]["model"]  = args.alora_model
+        SERVERS["ALORA (8111)"]["source"] = args.alora_model
+    if args.lora_model is not None:
+        SERVERS["LORA (8112)"]["model"]  = args.lora_model
+        SERVERS["LORA (8112)"]["source"] = args.lora_model
 
     if args.mode == "sequential" and args.server and args.server not in SERVERS:
         parser.error(f"Unknown server '{args.server}'. Choose from: {list(SERVERS)}")
@@ -1022,8 +1051,7 @@ def main():
         "clarification": "query_clarification",
     }
     for label, cfg in SERVERS.items():
-        with open(hf_hub_download(repo_id=cfg["source"], filename="adapter_index.json")) as f:
-            idx = json.load(f)
+        idx = _resolve_adapter_index(cfg["source"])
         tech_map          = {a["adapter_name"]: a["technology"] for a in idx["adapters"]}
         adapter_tech[label] = {step: tech_map.get(adapter, "base")
                                for step, adapter in step_to_adapter.items()}
