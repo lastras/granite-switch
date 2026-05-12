@@ -963,8 +963,15 @@ def write_telemetry(server_results, adapter_tech, all_conv_results, labels, race
     print(f"Events  written to {EVENTS_PATH}")
 
     # Embed into race_live.html so it opens without an HTTP server.
+    # If race_live.html doesn't exist yet, copy the template from sample_run/.
     import re as _re
+    import shutil as _shutil
     live_path = _HERE / "race_live.html"
+    if not live_path.exists():
+        template = _HERE / "sample_run" / "race_live.html"
+        if template.exists():
+            _shutil.copy2(template, live_path)
+            print(f"Copied template from {template}")
     if live_path.exists():
         try:
             html_txt = live_path.read_text()
