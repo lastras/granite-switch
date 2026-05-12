@@ -885,7 +885,8 @@ def write_telemetry(server_results, adapter_tech, all_conv_results, labels, race
         except Exception:
             pass
 
-    servers_block = existing.get("servers", {})
+    # Only keep existing server data for servers that are actually configured
+    servers_block = {k: v for k, v in existing.get("servers", {}).items() if k in SERVERS}
     for label in labels:
         sr = server_results[label]
         servers_block[label] = {
@@ -912,14 +913,18 @@ def write_telemetry(server_results, adapter_tech, all_conv_results, labels, race
     print(f"\nTelemetry written to {TELEMETRY_PATH}")
 
     # ── Events file ──────────────────────────────────────────────────────────
-    # In sequential mode, keep events from servers not in this run.
+    # In sequential mode, keep events from servers that (a) are not in the
+    # current run AND (b) already have results in the telemetry file.
+    # This prevents stale/shipped events from bleeding into a fresh run.
     existing_events = []
     if mode == "sequential" and Path(EVENTS_PATH).exists():
         try:
             prev = json.loads(Path(EVENTS_PATH).read_text())
             current_srv_set = set(labels)
+            keep_srvs = {s for s in servers_block if s not in current_srv_set}
             existing_events = [e for e in prev.get("events", [])
-                                if e.get("srv") not in current_srv_set]
+                                if e.get("srv") in keep_srvs
+                                or (e.get("ev") == "metrics" and keep_srvs)]
         except Exception:
             pass
 
