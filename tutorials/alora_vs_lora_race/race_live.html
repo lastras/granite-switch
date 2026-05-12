@@ -376,6 +376,12 @@ function resetPlayback() {
 }
 
 function applyEvent(evt) {
+  // metrics events have no srv/conv — handle before the per-conv guard
+  if (evt.ev === 'metrics') {
+    metricsState = evt;
+    return;
+  }
+
   const srvIdx = typeof evt.srv === 'number'
     ? evt.srv
     : eventData.servers.indexOf(evt.srv);
@@ -396,9 +402,6 @@ function applyEvent(evt) {
     case 'conv_done':
       s.done = true; s.wall_time = evt.wall_time; s.step = 'done';
       break;
-    case 'metrics':
-      metricsState = evt;
-      return;   // no per-conv state to update
   }
 }
 
