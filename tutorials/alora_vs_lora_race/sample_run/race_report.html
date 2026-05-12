@@ -161,11 +161,6 @@
   <!-- Summary strip -->
   <div class="summary-grid">
     <div class="summary-card">
-      <div class="summary-label">Race wall-clock</div>
-      <div class="summary-value" id="sum-race-wall">—</div>
-      <div class="summary-sub">both servers, simultaneous</div>
-    </div>
-    <div class="summary-card">
       <div class="summary-label">ALORA server wall</div>
       <div class="summary-value" id="sum-alora-wall">—</div>
       <div class="summary-sub" id="sum-alora-model">—</div>
@@ -4560,7 +4555,6 @@ async function render() {
     `${meta.runs} conversations × 5 turns · ${meta.concurrency} concurrent · ${meta.mode} mode · ${meta.timestamp.slice(0,10)}`;
 
   // Summary cards
-  document.getElementById('sum-race-wall').textContent  = fmtS(meta.race_wall);
   document.getElementById('sum-alora-wall').textContent = fmtS(sa.wall_total);
   document.getElementById('sum-lora-wall').textContent  = fmtS(sl.wall_total);
   document.getElementById('sum-alora-model').textContent = sa.model.split('/').pop();
