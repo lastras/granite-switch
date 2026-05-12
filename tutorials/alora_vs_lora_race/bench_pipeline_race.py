@@ -59,6 +59,15 @@ import mellea.stdlib.functional as mfuncs
 logging.getLogger("mellea").setLevel(logging.ERROR)
 logging.getLogger("fancy_logger").setLevel(logging.ERROR)
 
+
+def _detect_notebook():
+    """Return True when running inside Jupyter / Colab."""
+    try:
+        return get_ipython().__class__.__name__ != "TerminalInteractiveShell"
+    except NameError:
+        return False
+
+
 # ── Shared config ─────────────────────────────────────────────────────────────
 _HERE = Path(__file__).parent
 
@@ -691,21 +700,41 @@ def run_race(backends, labels, console):
                 futures[f] = (label, run_idx)
 
         seen = set()
-        with Live(build_display(labels), console=console, refresh_per_second=5) as live:
-            while len(seen) < len(futures):
+        use_live = not _detect_notebook()
+
+        def _drain_futures():
+            for f in [f for f in futures if f.done() and id(f) not in seen]:
+                seen.add(id(f))
+                label, run_idx = futures[f]
+                try:
+                    all_conv_results[label].append(f.result())
+                except Exception as e:
+                    console.print(f"[red]ERROR: {label} conv {run_idx}: {e}[/red]")
+                server_done_count[label] += 1
+                if label not in _server_finish and server_done_count[label] == RUNS:
+                    _server_finish[label] = time.perf_counter() - _race_start
+
+        if use_live:
+            with Live(build_display(labels), console=console, refresh_per_second=5) as live:
+                while len(seen) < len(futures):
+                    live.update(build_display(labels))
+                    _drain_futures()
+                    time.sleep(0.2)
                 live.update(build_display(labels))
-                for f in [f for f in futures if f.done() and id(f) not in seen]:
-                    seen.add(id(f))
-                    label, run_idx = futures[f]
-                    try:
-                        all_conv_results[label].append(f.result())
-                    except Exception as e:
-                        console.print(f"[red]ERROR: {label} conv {run_idx}: {e}[/red]")
-                    server_done_count[label] += 1
-                    if label not in _server_finish and server_done_count[label] == RUNS:
-                        _server_finish[label] = time.perf_counter() - _race_start
+        else:
+            # Notebook mode: print a simple counter instead of Rich Live
+            _last_print = [0]
+            while len(seen) < len(futures):
+                _drain_futures()
+                done = sum(server_done_count.values())
+                total = len(futures)
+                now = time.time()
+                if now - _last_print[0] >= 2.0 or done == total:
+                    elapsed = time.perf_counter() - _race_start
+                    parts = [f"{l}: {server_done_count[l]}/{RUNS}" for l in labels]
+                    print(f"  [{elapsed:5.1f}s]  {' | '.join(parts)}  ({done}/{total} done)")
+                    _last_print[0] = now
                 time.sleep(0.2)
-            live.update(build_display(labels))
 
     return all_conv_results, time.perf_counter() - _race_start
 
@@ -972,7 +1001,8 @@ def main():
         adapter_tech[label]["generation"] = "base"
         adapter_tech[label]["retrieval"]  = "local"
 
-    console                      = Console()
+    _in_notebook = _detect_notebook()
+    console      = Console(force_jupyter=True) if _in_notebook else Console()
     all_conv_results, race_wall  = run_race(backends, labels, console)
     server_results               = collect_stats(all_conv_results, labels)
     write_telemetry(server_results, adapter_tech, all_conv_results, labels, race_wall, args.mode)
