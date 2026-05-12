@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import statistics
 import threading
 import time
@@ -906,24 +907,22 @@ def write_telemetry(server_results, adapter_tech, all_conv_results, labels, race
 
     # Embed into race_live.html so it opens without an HTTP server.
     # If race_live.html doesn't exist yet, copy the template from sample_run/.
-    import re as _re
-    import shutil as _shutil
     live_path = _HERE / "race_live.html"
     if not live_path.exists():
         template = _HERE / "sample_run" / "race_live.html"
         if template.exists():
-            _shutil.copy2(template, live_path)
+            shutil.copy2(template, live_path)
             print(f"Copied template from {template}")
     if live_path.exists():
         try:
             html_txt = live_path.read_text()
             new_line = (f"const RACE_EVENTS_EMBEDDED = {json.dumps(events_out)};"
                         " // <<RACE_EVENTS>>")
-            html_txt = _re.sub(
+            html_txt = re.sub(
                 r"const RACE_EVENTS_EMBEDDED = .*?; // <<RACE_EVENTS>>",
                 new_line,
                 html_txt,
-                flags=_re.DOTALL,
+                flags=re.DOTALL,
             )
             live_path.write_text(html_txt)
             print(f"Events embedded in {live_path.name}")
