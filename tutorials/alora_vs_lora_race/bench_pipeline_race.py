@@ -724,15 +724,23 @@ def run_race(backends, labels, console, no_live=False):
         else:
             # Notebook mode: print a simple counter instead of Rich Live
             _last_print = [0]
+            total_turns = len(futures) * 5
             while len(seen) < len(futures):
                 _drain_futures()
                 done = sum(server_done_count.values())
-                total = len(futures)
                 now = time.time()
-                if now - _last_print[0] >= 2.0 or done == total:
+                if now - _last_print[0] >= 2.0 or done == len(futures):
+                    snap = _get_state_snapshot()
                     elapsed = time.perf_counter() - _race_start
-                    parts = [f"{l}: {server_done_count[l]}/{RUNS}" for l in labels]
-                    print(f"  [{elapsed:5.1f}s]  {' | '.join(parts)}  ({done}/{total} done)")
+                    parts = []
+                    for l in labels:
+                        turns = sum(snap.get((l, i), {}).get("turns_done", 0) for i in range(RUNS))
+                        active = sum(1 for i in range(RUNS)
+                                     if snap.get((l, i), {}).get("current_step") and
+                                     not snap.get((l, i), {}).get("done"))
+                        parts.append(f"{l}: {server_done_count[l]}/{RUNS} done, "
+                                     f"{turns}/{RUNS*5} turns, {active} active")
+                    print(f"  [{elapsed:5.1f}s]  {' | '.join(parts)}")
                     _last_print[0] = now
                 time.sleep(0.2)
 
