@@ -352,6 +352,37 @@ def _metrics_scraper_loop():
             if parsed is not None:
                 with _vllm_metrics_lock:
                     _vllm_metrics[label] = parsed
+
+        if _race_start is not None:
+            snap = _get_metrics_snapshot()
+            vllm_data = {}
+            for label in SERVERS:
+                parsed = snap.get(label)
+                if parsed:
+                    g = parsed["gauges"]
+                    vllm_data[label] = {
+                        "kv_hit":       round(_pc_hit_rate(parsed, label), 1),
+                        "running":      int(g.get("vllm:num_requests_running", 0)),
+                        "waiting":      int(g.get("vllm:num_requests_waiting", 0)),
+                        "ttft_avg":     round(_race_avg("vllm:time_to_first_token_seconds", parsed, label), 3),
+                        "e2e_avg":      round(_race_avg("vllm:e2e_request_latency_seconds",  parsed, label), 3),
+                        "prompt_avg":   round(_race_avg("vllm:request_prompt_tokens",        parsed, label), 1),
+                    }
+            gpu_data = []
+            try:
+                for i, h in GPU_HANDLES.items():
+                    util = pynvml.nvmlDeviceGetUtilizationRates(h)
+                    mem  = pynvml.nvmlDeviceGetMemoryInfo(h)
+                    gpu_data.append({
+                        "label":        GPU_LABELS[i],
+                        "pct":          util.gpu,
+                        "mem_used_gb":  round(mem.used  / 1e9, 2),
+                        "mem_total_gb": round(mem.total / 1e9, 1),
+                    })
+            except Exception:
+                pass
+            _emit_event("metrics", vllm=vllm_data, gpu=gpu_data)
+
         time.sleep(1.5)
 
 
@@ -390,6 +421,10 @@ _race_state   = {}
 _server_finish = {}
 _race_start   = None
 
+_race_events  = []
+_events_lock  = threading.Lock()
+EVENTS_PATH   = str(_HERE / "race_events.json")
+
 
 def _update_state(label, conv_idx, **kwargs):
     with _state_lock:
@@ -407,6 +442,15 @@ def _get_state_snapshot():
         return dict(_race_state)
 
 
+def _emit_event(event_type, **kwargs):
+    """Record a timestamped race event (no-op before race_start is set)."""
+    if _race_start is None:
+        return
+    evt = {"t": round(time.perf_counter() - _race_start, 4), "ev": event_type, **kwargs}
+    with _events_lock:
+        _race_events.append(evt)
+
+
 # ── Conversation runner ───────────────────────────────────────────────────────
 def run_conversation(run_idx, backend, label):
     queries          = get_queries_for_run(run_idx)
@@ -414,6 +458,7 @@ def run_conversation(run_idx, backend, label):
     history          = []
     query_results    = []
     conv_start       = time.perf_counter()
+    _emit_event("conv_start", srv=label, conv=run_idx)
 
     try:
         for qi, (ql, query) in enumerate(queries):
@@ -421,6 +466,7 @@ def run_conversation(run_idx, backend, label):
 
             def state_cb(step, _l=label, _i=run_idx, _t=turn_label):
                 _update_state(_l, _i, current_turn=_t, current_step=step)
+                _emit_event("step_start", srv=_l, conv=_i, turn=_t, step=step)
 
             state_cb("harm")
             r = run_timed_pipeline(query, history, backend,
@@ -436,9 +482,11 @@ def run_conversation(run_idx, backend, label):
 
             query_results.append((ql, r))
             _update_state(label, run_idx, turns_done=qi + 1)
+            _emit_event("turn_done", srv=label, conv=run_idx, turns_done=qi + 1)
     finally:
         conv_wall = time.perf_counter() - conv_start
         _update_state(label, run_idx, done=True, wall_time=conv_wall, current_step="done")
+        _emit_event("conv_done", srv=label, conv=run_idx, wall_time=round(conv_wall, 4))
 
     return {
         "run_idx":       run_idx,
@@ -825,6 +873,52 @@ def write_telemetry(server_results, adapter_tech, all_conv_results, labels, race
     }
     Path(TELEMETRY_PATH).write_text(json.dumps(out, indent=2))
     print(f"\nTelemetry written to {TELEMETRY_PATH}")
+
+    # ── Events file ──────────────────────────────────────────────────────────
+    # In sequential mode, keep events from servers not in this run.
+    existing_events = []
+    if mode == "sequential" and Path(EVENTS_PATH).exists():
+        try:
+            prev = json.loads(Path(EVENTS_PATH).read_text())
+            current_srv_set = set(labels)
+            existing_events = [e for e in prev.get("events", [])
+                                if e.get("srv") not in current_srv_set]
+        except Exception:
+            pass
+
+    with _events_lock:
+        new_events = list(_race_events)
+
+    all_events = existing_events + new_events
+    all_events.sort(key=lambda e: e["t"])
+
+    events_out = {
+        "metadata":  out["metadata"],
+        "race_wall": race_wall,
+        "servers":   list(servers_block.keys()),
+        "events":    all_events,
+    }
+    Path(EVENTS_PATH).write_text(json.dumps(events_out))
+    print(f"Events  written to {EVENTS_PATH}")
+
+    # Embed into race_live.html so it opens without an HTTP server.
+    import re as _re
+    live_path = _HERE / "race_live.html"
+    if live_path.exists():
+        try:
+            html_txt = live_path.read_text()
+            new_line = (f"const RACE_EVENTS_EMBEDDED = {json.dumps(events_out)};"
+                        " // <<RACE_EVENTS>>")
+            html_txt = _re.sub(
+                r"const RACE_EVENTS_EMBEDDED = .*?; // <<RACE_EVENTS>>",
+                new_line,
+                html_txt,
+                flags=_re.DOTALL,
+            )
+            live_path.write_text(html_txt)
+            print(f"Events embedded in {live_path.name}")
+        except Exception as e:
+            print(f"Warning: could not embed events in race_live.html: {e}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
