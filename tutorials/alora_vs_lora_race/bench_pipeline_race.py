@@ -962,7 +962,17 @@ def main():
                              "(e.g. 'ALORA (8111)'). Omit to run all servers.")
     parser.add_argument("--no-live", action="store_true",
                         help="Disable Rich Live display (use for Jupyter/Colab)")
+    parser.add_argument("-n", "--runs", type=int, default=None,
+                        help=f"Number of conversations to run (default: {RUNS})")
+    parser.add_argument("-c", "--concurrency", type=int, default=None,
+                        help=f"Max concurrent requests per server (default: {CONCURRENCY_PER_SERVER})")
     args = parser.parse_args()
+
+    global RUNS, CONCURRENCY_PER_SERVER
+    if args.runs is not None:
+        RUNS = args.runs
+    if args.concurrency is not None:
+        CONCURRENCY_PER_SERVER = args.concurrency
 
     if args.mode == "sequential" and args.server and args.server not in SERVERS:
         parser.error(f"Unknown server '{args.server}'. Choose from: {list(SERVERS)}")
