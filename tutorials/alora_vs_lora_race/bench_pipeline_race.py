@@ -74,7 +74,7 @@ _HERE = Path(__file__).parent
 EMBEDDING_MODEL_ID = "ibm-granite/granite-embedding-small-english-r2"
 CHROMA_PATH        = str(_HERE / "govt_chroma")
 CONVERSATIONS_PATH = str(_HERE / "govt_conversations.json")
-TOP_K                   = 20
+TOP_K                   = 10
 RUNS                    = 32
 CONCURRENCY_PER_SERVER  = 24
 
@@ -974,13 +974,17 @@ def main():
                         help=f"Number of conversations to run (default: {RUNS})")
     parser.add_argument("-c", "--concurrency", type=int, default=None,
                         help=f"Max concurrent requests per server (default: {CONCURRENCY_PER_SERVER})")
+    parser.add_argument("-k", "--top-k", type=int, default=None,
+                        help=f"Number of documents to retrieve per query (default: {TOP_K})")
     args = parser.parse_args()
 
-    global RUNS, CONCURRENCY_PER_SERVER
+    global RUNS, CONCURRENCY_PER_SERVER, TOP_K
     if args.runs is not None:
         RUNS = args.runs
     if args.concurrency is not None:
         CONCURRENCY_PER_SERVER = args.concurrency
+    if args.top_k is not None:
+        TOP_K = args.top_k
 
     if args.mode == "sequential" and args.server and args.server not in SERVERS:
         parser.error(f"Unknown server '{args.server}'. Choose from: {list(SERVERS)}")
