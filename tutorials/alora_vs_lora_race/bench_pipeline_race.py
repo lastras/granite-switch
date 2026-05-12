@@ -960,6 +960,8 @@ def write_telemetry(server_results, adapter_tech, all_conv_results, labels, race
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
+    global RUNS, CONCURRENCY_PER_SERVER, TOP_K
+
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--mode", choices=["race", "sequential"], default="race",
@@ -977,8 +979,6 @@ def main():
     parser.add_argument("-k", "--top-k", type=int, default=None,
                         help=f"Number of documents to retrieve per query (default: {TOP_K})")
     args = parser.parse_args()
-
-    global RUNS, CONCURRENCY_PER_SERVER, TOP_K
     if args.runs is not None:
         RUNS = args.runs
     if args.concurrency is not None:
