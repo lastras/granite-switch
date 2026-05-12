@@ -1003,16 +1003,14 @@ def main():
         adapter_tech[label]["generation"] = "base"
         adapter_tech[label]["retrieval"]  = "local"
 
-    _in_notebook = _detect_notebook() or args.no_live
-    console      = Console(force_jupyter=True) if _in_notebook else Console()
-    all_conv_results, race_wall  = run_race(backends, labels, console, no_live=_in_notebook)
+    no_live = _detect_notebook() or args.no_live
+    console = Console()
+    all_conv_results, race_wall  = run_race(backends, labels, console, no_live=no_live)
     server_results               = collect_stats(all_conv_results, labels)
     write_telemetry(server_results, adapter_tech, all_conv_results, labels, race_wall, args.mode)
 
-    if args.mode == "race" or len(json.loads(Path(TELEMETRY_PATH).read_text())["servers"]) == len(SERVERS):
-        all_labels = list(json.loads(Path(TELEMETRY_PATH).read_text())["servers"].keys())
-        if len(all_labels) == 2:
-            print_report(server_results, adapter_tech, all_conv_results, labels, race_wall)
+    if len(labels) >= 2:
+        print_report(server_results, adapter_tech, all_conv_results, labels, race_wall)
 
 
 if __name__ == "__main__":
