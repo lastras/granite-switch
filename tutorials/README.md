@@ -4,7 +4,7 @@
 
 | Tutorial | Format | Description |
 |----------|--------|-------------|
-| [Hello Adapter](quickstart/hello_adapter.py) | Script | Minimal adapter invocation (HuggingFace) |
+| [Hello Adapter](quickstart/hello_adapter.ipynb) | Notebook | Minimal adapter invocation (HuggingFace) |
 | [Hello Mellea](quickstart/hello_mellea.ipynb) | Notebook | Mellea intrinsics intro (vLLM) |
 
 ## How-To Guides
@@ -25,7 +25,7 @@ for understanding the underlying mechanics, but **for actual inference, use Mell
 which provides constrained decoding, prompt formatting, and proper input/output processing.
 
 1. [Prerequisites](PREREQUISITES.md#huggingface-backend)
-2. [Hello Adapter](quickstart/hello_adapter.py) — see control tokens in action
+2. [Hello Adapter](quickstart/hello_adapter.ipynb) — see control tokens in action
 3. [Granite Switch with HuggingFace](notebooks/01_granite_switch_with_hf.ipynb) — detailed walkthrough
 
 ### Path 2: Inference with Mellea (Recommended)
@@ -63,6 +63,16 @@ Interactive Jupyter tutorials in [`notebooks/`](notebooks/):
 | [02_govt_rag_pipeline.ipynb](notebooks/02_govt_rag_pipeline.ipynb) | Full RAG pipeline, ChromaDB, Guardian | 30 min |
 | [03_compose_granite_switch.ipynb](notebooks/03_compose_granite_switch.ipynb) | Compose a checkpoint from adapter libraries | 15 min |
 | [04_alora_vs_lora_race.ipynb](notebooks/04_alora_vs_lora_race.ipynb) | Benchmark ALORA vs LoRA on a RAG pipeline under concurrent load | 60 min |
+
+## Adapter Libraries
+
+Granite Switch checkpoints embed adapters drawn from IBM's granitelib libraries. The three libraries below are featured throughout these tutorials:
+
+| Adapter | Purpose | Where used in tutorials | HF repo |
+|---------|---------|-------------------------|---------|
+| Core | Foundational post-generation intrinsics: certainty scoring, requirement checking, and response attribution. | [01](notebooks/01_granite_switch_with_hf.ipynb), [03](notebooks/03_compose_granite_switch.ipynb) | [ibm-granite/granitelib-core-r1.0](https://huggingface.co/ibm-granite/granitelib-core-r1.0) |
+| RAG | Retrieval-augmented generation intrinsics: query rewrite, answerability, hallucination detection, and citation generation. | [hello_mellea](quickstart/hello_mellea.ipynb), [02](notebooks/02_govt_rag_pipeline.ipynb), [03](notebooks/03_compose_granite_switch.ipynb) | [ibm-granite/granitelib-rag-r1.0](https://huggingface.co/ibm-granite/granitelib-rag-r1.0) |
+| Guardian | Safety and risk detection: harm, social bias, jailbreaking, factuality, and policy compliance checks. | [hello_adapter](quickstart/hello_adapter.ipynb), [hello_mellea](quickstart/hello_mellea.ipynb), [01](notebooks/01_granite_switch_with_hf.ipynb), [02](notebooks/02_govt_rag_pipeline.ipynb), [03](notebooks/03_compose_granite_switch.ipynb) | [ibm-granite/granitelib-guardian-r1.0](https://huggingface.co/ibm-granite/granitelib-guardian-r1.0) |
 
 ## External Resources
 
