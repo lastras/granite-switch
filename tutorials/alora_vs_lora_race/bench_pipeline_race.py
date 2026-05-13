@@ -86,7 +86,7 @@ GENERATION_INSTRUCTION = (
 )
 
 ALORA_MODEL = "ibm-granite/granite-switch-4.1-3b-preview"
-LORA_MODEL  = "ibm-granite/granite-switch-4.1-3b-preview"  # override with --lora-model
+LORA_MODEL  = "./granite-switch-lora-only"  # override with --lora-model
 
 SERVERS = {
     "ALORA (8111)": {
@@ -167,6 +167,20 @@ def _resolve_adapter_index(source):
 
 
 # ── Mellea helpers ────────────────────────────────────────────────────────────
+def _discover_vllm_model(base_url):
+    """Query /v1/models to get the model name the vLLM server is actually using."""
+    try:
+        url = base_url.rstrip("/") + "/models"
+        with _urllib_req.urlopen(url, timeout=5) as r:
+            data = json.loads(r.read().decode())
+        models = data.get("data", [])
+        if models:
+            return models[0]["id"]
+    except Exception:
+        pass
+    return None
+
+
 def make_backend(cfg):
     backend = OpenAIBackend(model_id=cfg["model"], base_url=cfg["base_url"], api_key="unused")
     source = cfg["source"]
@@ -993,8 +1007,13 @@ def main():
     _record_metrics_baseline()
 
     backends = {}
-    for label, cfg in SERVERS.items():
-        print(f"Connecting to {label}...")
+    for label in labels:
+        cfg = SERVERS[label]
+        discovered = _discover_vllm_model(cfg["base_url"])
+        if discovered and discovered != cfg["model"]:
+            print(f"  {label}: server reports model '{discovered}' (config had '{cfg['model']}')")
+            cfg["model"] = discovered
+        print(f"Connecting to {label} (model={cfg['model']})...")
         backends[label] = make_backend(cfg)
     print()
 
@@ -1005,8 +1024,8 @@ def main():
         "answerability": "answerability",
         "clarification": "query_clarification",
     }
-    for label, cfg in SERVERS.items():
-        idx = _resolve_adapter_index(cfg["source"])
+    for label in labels:
+        idx = _resolve_adapter_index(SERVERS[label]["source"])
         tech_map          = {a["adapter_name"]: a["technology"] for a in idx["adapters"]}
         adapter_tech[label] = {step: tech_map.get(adapter, "base")
                                for step, adapter in step_to_adapter.items()}
