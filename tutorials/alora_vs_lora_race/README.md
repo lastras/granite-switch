@@ -63,12 +63,12 @@ Run one server at a time — useful when only a single GPU is available:
 ```bash
 # ALORA leg
 vllm serve ibm-granite/granite-switch-4.1-3b-preview --port 8111
-python bench_pipeline_race.py --mode sequential --server "ALORA (8111)" -n 16 -c 8 -k 10
+python bench_pipeline_race.py --mode sequential --server "ALORA (8111)" -n 32 -c 24 -k 15
 
 # Stop the ALORA server, then start the LoRA leg
 vllm serve ./granite-switch-lora-only --port 8112
 python bench_pipeline_race.py --mode sequential --server "LORA (8112)" \
-  --lora-model ./granite-switch-lora-only -n 16 -c 8 -k 10
+  --lora-model ./granite-switch-lora-only -n 32 -c 24 -k 15
 ```
 
 Results are merged across runs — `race_live.html` replays both legs as if they
