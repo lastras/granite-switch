@@ -62,6 +62,7 @@ Interactive Jupyter tutorials in [`notebooks/`](notebooks/):
 | [01_granite_switch_with_hf.ipynb](notebooks/01_granite_switch_with_hf.ipynb) | Compose + HuggingFace backend, `adapter_name=` invocation, Core + Guardian adapters in a multi-turn conversation | 20 min |
 | [02_govt_rag_pipeline.ipynb](notebooks/02_govt_rag_pipeline.ipynb) | Full RAG pipeline, ChromaDB, Guardian | 30 min |
 | [03_compose_granite_switch.ipynb](notebooks/03_compose_granite_switch.ipynb) | Compose a checkpoint from adapter libraries | 15 min |
+| [04_alora_vs_lora_race.ipynb](notebooks/04_alora_vs_lora_race.ipynb) | Benchmark ALORA vs LoRA on a RAG pipeline under concurrent load | 60 min |
 
 ## External Resources
 
