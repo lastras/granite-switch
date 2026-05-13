@@ -12,7 +12,7 @@ Browse the full set of ready-to-use adapters in the [Granite Libraries collectio
 ## Key Features
 
 - **Composable** — Combine independently trained adapters into one checkpoint, whether IBM's or yours. Swap, upgrade, or customize without retraining.
-- **Fast** — Built on IBM's Activated LoRA technology for efficient KV cache reuse, low latency, and high inference throughput.
+- **Fast** — Built on IBM's Activated LoRA technology for efficient KV cache reuse, low latency, and [high inference throughput](https://github.com/lastras/granite-switch/tree/alora-vs-lora-race/tutorials/alora_vs_lora_race).
 - **Accurate** — Task-specific adapters can match and even surpass the accuracy of significantly larger generalist models, while requiring only a fraction of the serving cost. See the [adapter catalog](https://generative-computing.github.io/granite-switch/adapter_catalog.html#hallucination-detection) for benchmark comparisons across all 12 adapters.
 - **Inference-ready** — Support for Hugging Face and vLLM.
 
