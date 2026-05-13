@@ -44,7 +44,7 @@ The notebook runs both servers sequentially on a single A100 GPU and produces
     --output ./granite-switch-lora-only
   ```
 
-### Simultaneous race (two GPUs)
+### Simultaneous race (two H100 GPUs)
 
 Start both servers, then run the benchmark with the Rich live terminal display:
 
@@ -52,8 +52,8 @@ Start both servers, then run the benchmark with the Rich live terminal display:
 # Start servers
 bash launch_servers_race.sh ./granite-switch-lora-only
 
-# Run the race (32 conversations, 24 concurrent per server)
-python bench_pipeline_race.py
+# Run the race — H100 suggested parameters
+python bench_pipeline_race.py -n 32 -c 24 -k 15
 ```
 
 ### Sequential mode (one GPU)
@@ -63,12 +63,12 @@ Run one server at a time — useful when only a single GPU is available:
 ```bash
 # ALORA leg
 vllm serve ibm-granite/granite-switch-4.1-3b-preview --port 8111
-python bench_pipeline_race.py --mode sequential --server "ALORA (8111)"
+python bench_pipeline_race.py --mode sequential --server "ALORA (8111)" -n 16 -c 8 -k 10
 
 # Stop the ALORA server, then start the LoRA leg
 vllm serve ./granite-switch-lora-only --port 8112
 python bench_pipeline_race.py --mode sequential --server "LORA (8112)" \
-  --lora-model ./granite-switch-lora-only
+  --lora-model ./granite-switch-lora-only -n 16 -c 8 -k 10
 ```
 
 Results are merged across runs — `race_live.html` replays both legs as if they
@@ -78,9 +78,16 @@ raced simultaneously.
 
 | Flag | Description |
 |------|-------------|
-| `-n, --runs` | Number of conversations (default: 32) |
-| `-c, --concurrency` | Max concurrent requests per server (default: 24) |
+| `-n, --runs` | Number of conversations (default: 16) |
+| `-c, --concurrency` | Max concurrent requests per server (default: 8) |
 | `-k, --top-k` | Documents to retrieve per query (default: 10) |
 | `--no-live` | Disable Rich live display (for notebooks) |
 | `--alora-model` | Override ALORA model path |
 | `--lora-model` | Override LoRA model path |
+
+**Suggested parameters by GPU:**
+
+| GPU | `-n` | `-c` | `-k` |
+|-----|------|------|------|
+| A100 (Colab) | 16 | 8 | 10 |
+| H100 | 32 | 24 | 15 |

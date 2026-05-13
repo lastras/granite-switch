@@ -74,9 +74,9 @@ _HERE = Path(__file__).parent
 EMBEDDING_MODEL_ID = "ibm-granite/granite-embedding-small-english-r2"
 CHROMA_PATH        = str(_HERE / "govt_chroma")
 CONVERSATIONS_PATH = str(_HERE / "govt_conversations.json")
-TOP_K                   = 10
-RUNS                    = 32
-CONCURRENCY_PER_SERVER  = 24
+TOP_K                  = None  # set by main()
+RUNS                   = None  # set by main()
+CONCURRENCY_PER_SERVER = None  # set by main()
 
 GUARDIAN_HARM_CRITERIA = "harm"
 
@@ -228,7 +228,9 @@ def _call_or_dump(step, ctx, conv_json_idx, turn_idx, fn, *args, **kwargs):
 
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
-def retrieve_documents(query, top_k=TOP_K):
+def retrieve_documents(query, top_k=None):
+    if top_k is None:
+        top_k = TOP_K
     return collection.query(query_texts=[query], n_results=top_k)["documents"][0]
 
 
@@ -944,23 +946,20 @@ def main():
                              "(e.g. 'ALORA (8111)'). Omit to run all servers.")
     parser.add_argument("--no-live", action="store_true",
                         help="Disable Rich Live display (use for Jupyter/Colab)")
-    parser.add_argument("-n", "--runs", type=int, default=None,
-                        help=f"Number of conversations to run (default: {RUNS})")
-    parser.add_argument("-c", "--concurrency", type=int, default=None,
-                        help=f"Max concurrent requests per server (default: {CONCURRENCY_PER_SERVER})")
-    parser.add_argument("-k", "--top-k", type=int, default=None,
-                        help=f"Number of documents to retrieve per query (default: {TOP_K})")
+    parser.add_argument("-n", "--runs", type=int, default=16,
+                        help="Number of conversations to run (default: 16; H100 can handle 32)")
+    parser.add_argument("-c", "--concurrency", type=int, default=8,
+                        help="Max concurrent requests per server (default: 8; H100 can handle 24)")
+    parser.add_argument("-k", "--top-k", type=int, default=10,
+                        help="Number of documents to retrieve per query (default: 10; H100 can handle 15)")
     parser.add_argument("--alora-model", default=None,
                         help="Override ALORA model (HF repo or local path)")
     parser.add_argument("--lora-model", default=None,
                         help="Override LORA model (HF repo or local path)")
     args = parser.parse_args()
-    if args.runs is not None:
-        RUNS = args.runs
-    if args.concurrency is not None:
-        CONCURRENCY_PER_SERVER = args.concurrency
-    if args.top_k is not None:
-        TOP_K = args.top_k
+    RUNS = args.runs
+    CONCURRENCY_PER_SERVER = args.concurrency
+    TOP_K = args.top_k
     if args.alora_model is not None:
         SERVERS["ALORA (8111)"]["model"]  = args.alora_model
         SERVERS["ALORA (8111)"]["source"] = args.alora_model
