@@ -9,7 +9,7 @@ guardian &rarr; query rewrite &rarr; ChromaDB retrieval &rarr; answerability &ra
 
 ## Pre-recorded race
 
-[**Watch the animated replay**](https://lastras.github.io/granite-switch/race_live.html)
+[**Watch the animated replay**](https://generative-computing.github.io/granite-switch/race_live.html)
 of a 32-conversation race (no setup required).
 
 ## Reproduce in Google Colab
