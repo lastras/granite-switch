@@ -9,8 +9,8 @@ guardian &rarr; query rewrite &rarr; ChromaDB retrieval &rarr; answerability &ra
 
 ## Pre-recorded race
 
-Open [`sample_run/race_live.html`](sample_run/race_live.html) in a browser to watch an
-animated replay of a 32-conversation race (no setup required).
+[**Watch the animated replay**](https://generative-computing.github.io/granite-switch/tutorials/alora_vs_lora_race/sample_run/race_live.html)
+of a 32-conversation race (no setup required).
 
 ## Reproduce in Google Colab
 
