@@ -1,17 +1,17 @@
-# Granite Switch — Fine-tuning, finally composable
+# Granite Switch — Build AI models like you build software
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 
 | [**Browse Adapters**](https://huggingface.co/collections/ibm-granite/granite-libraries) | [Models on HF](https://huggingface.co/ibm-granite/granite-switch-4.1-8b-preview) | [Tutorials](tutorials/README.md) |
 
-Task-specific fine-tuning delivers large accuracy gains on small models — but shipping a separate model per task is operationally painful. Granite Switch gives you the accuracy of many models with the footprint of one: compose a single checkpoint from our adapter library in minutes, then swap or upgrade individual capabilities as your needs change.
+Most AI models are monolithic — all capabilities baked into one set of weights. Granite Switch lets you compose a model from independent, task-specific components: pick the capabilities you need, compose a single checkpoint in minutes, then swap or upgrade individual components as your needs change.
 
-Browse the full set of ready-to-use adapters in the [Granite Libraries collection](https://huggingface.co/collections/ibm-granite/granite-libraries) on Hugging Face.
+Browse available libraries in the [Granite Libraries collection](https://huggingface.co/collections/ibm-granite/granite-libraries) on Hugging Face.
 
 ## Key Features
 
-- **Composable** — Combine independently trained adapters into one checkpoint, whether IBM's or yours. Swap, upgrade, or customize without retraining.
+- **Composable** — Combine independently developed adapters into one checkpoint, whether IBM's or yours. Swap, upgrade, or customize without retraining.
 - **Fast** — Built on IBM's Activated LoRA technology for efficient KV cache reuse, low latency, and [high inference throughput](https://github.com/lastras/granite-switch/tree/alora-vs-lora-race/tutorials/alora_vs_lora_race).
 - **Accurate** — Task-specific adapters can match and even surpass the accuracy of significantly larger generalist models, while requiring only a fraction of the serving cost. See the [adapter catalog](https://generative-computing.github.io/granite-switch/adapter_catalog.html#hallucination-detection) for benchmark comparisons across all 12 adapters.
 - **Inference-ready** — Support for Hugging Face and vLLM.
@@ -40,7 +40,7 @@ Requires Python 3.9+ and PyTorch 2.0+.
 
 ### Compose a Model
 
-Combine a base Granite model with adapters into a single deployable checkpoint:
+Compose a base Granite model with adapter libraries into a single deployable checkpoint:
 
 ```bash
 python -m granite_switch.composer.compose_granite_switch \
@@ -123,23 +123,12 @@ Granite Switch uses a **switch layer**—a small attention-based mechanism that 
 **What makes composition work:**
 
 - **KV cache normalization** — each adapter sees only the base model's KV cache, never another adapter's internal state
-- **No joint training required** — Adapters can be developed, tested, and published independently
+- **No joint training required** — adapters are developed, tested, and published independently
 - **Standard inference** — The entire model loads in vLLM with zero code changes
 
 ## Documentation
 
 For detailed tutorials and many working examples, see the [Tutorials](tutorials/README.md) section.
-
-## Citation
-
-```bibtex
-@software{granite_switch,
-  title  = {Granite Switch: Coarse-Grained Expert Switching for LLMs},
-  author = {IBM Research},
-  year   = {2025},
-  url    = {https://github.com/ibm-granite/granite-switch}
-}
-```
 
 ## IBM ❤️ Open Source AI
 
