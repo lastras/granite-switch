@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Granite Switch: Embedded LoRA adapter switching for Granite models."""
+"""Granite Switch: Composable model building."""
 
 __version__ = "0.1.0"
 
