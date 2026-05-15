@@ -701,14 +701,17 @@ function generateCommand() {
     .filter(lib => libSet.has(lib))
     .map(lib => LIBRARY_REPOS[lib]);
 
-  const allSelected = cart.size === Object.keys(ADAPTERS).length;
+  // Omit --include-adapters when every involved library is fully selected
+  const allLibsFullySelected = [...libSet].every(lib =>
+    getLibraryAdapterIds(lib).every(id => cart.has(id))
+  );
 
   const lines = [
     'python -m granite_switch.composer.compose_granite_switch \\',
     `  --base-model ${selectedModel} \\`,
     `  --adapters ${libs.join(' ')} \\`,
   ];
-  if (!allSelected) {
+  if (!allLibsFullySelected) {
     lines.push(`  --include-adapters ${includeNames.join(' ')} \\`);
   }
   if (selectedBuildType === 'all-lora') {
