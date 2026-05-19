@@ -6,11 +6,11 @@
 [![raglib](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fhuggingface.co%2Fapi%2Fmodels%2Fibm-granite%2Fgranitelib-rag-r1.0&query=%24.downloads&label=raglib&logo=huggingface&color=yellow)](https://huggingface.co/ibm-granite/granitelib-rag-r1.0)
 [![guardianlib](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fhuggingface.co%2Fapi%2Fmodels%2Fibm-granite%2Fgranitelib-guardian-r1.0&query=%24.downloads&label=guardianlib&logo=huggingface&color=yellow)](https://huggingface.co/ibm-granite/granitelib-guardian-r1.0)
 
-| [**Browse Adapters**](https://huggingface.co/collections/ibm-granite/granite-libraries) | [Models on HF](https://huggingface.co/ibm-granite/granite-switch-4.1-8b-preview) | [Tutorials](tutorials/README.md) |
+| [**Browse Adapters**](https://generative-computing.github.io/granite-switch/adapter_catalog.html) | [Pre-composed Models on HF](https://huggingface.co/ibm-granite/granite-switch-4.1-8b-preview) | [Tutorials](tutorials/README.md) |
 
-Most AI models are monolithic — all capabilities baked into one set of weights. Granite Switch lets you compose a model from independent, task-specific components: pick the capabilities you need, compose a single checkpoint in minutes, then swap or upgrade individual components as your needs change.
+Pick adapters for RAG, safety, factuality, and more — compose them into a single Granite model — deploy with one command. No training, no glue code, upgrade any adapter independently.
 
-Browse available libraries in the [Granite Libraries collection](https://huggingface.co/collections/ibm-granite/granite-libraries) on Hugging Face.
+Small models with the right adapters consistently outperform much larger generalist models on targeted tasks. **Activated LoRA (aLoRA)** makes this practical at scale: all adapters share one KV cache, activating on demand — so one deployment serves many capabilities with no memory or latency overhead.
 
 <p align="center">
   <img src="docs/benchmark_animation.svg" alt="Granite Switch: adapters stack, accuracy improves" width="820">
@@ -19,9 +19,9 @@ Browse available libraries in the [Granite Libraries collection](https://hugging
 ## Key Features
 
 - **Composable** — Combine independently developed adapters into one checkpoint, whether IBM's or yours. Swap, upgrade, or customize without retraining.
-- **Fast** — Built on IBM's Activated LoRA technology for efficient KV cache reuse, low latency, and [high inference throughput](tutorials/notebooks/05_alora_vs_lora_race.ipynb).
+- **Fast** — Built on IBM's Activated LoRA technology for efficient KV cache reuse, low latency, and [high inference throughput](https://generative-computing.github.io/granite-switch/race_live.html).
 - **Accurate** — Task-specific adapters can match and even surpass the accuracy of significantly larger generalist models, while requiring only a fraction of the serving cost. See the [adapter catalog](https://generative-computing.github.io/granite-switch/adapter_catalog.html#hallucination-detection) for benchmark comparisons across all 12 adapters.
-- **Inference-ready** — Support for Hugging Face and vLLM.
+- **Inference-ready** — Deploy with vLLM for production or HuggingFace for prototyping. Same checkpoint, no conversion step.
 
 ## Quick Start
 
@@ -41,9 +41,7 @@ pip install "granite-switch[dev-vllm20]" # Dev environment with vLLM 0.20+
 
 Requires Python 3.9+ and PyTorch 2.0+.
 
-> **vLLM version note:** This project currently defaults to vLLM 0.19.1 due to vLLM 0.20's
-> dependency on CUDA 13.0+ (via PyTorch 2.11), which is incompatible with many existing
-> environments running CUDA 12.x drivers. Use `.[vllm20]` if your environment supports CUDA 13+.
+> **Two vLLM backends available:** `.[vllm]` ships with vLLM 0.19.x for broad CUDA 12.x compatibility. `.[vllm20]` gives you vLLM 0.20+ with the latest performance improvements (requires CUDA 13+).
 
 ### Compose a Model
 
@@ -133,11 +131,21 @@ Granite Switch uses a **switch layer**—a small attention-based mechanism that 
 - **No joint training required** — adapters are developed, tested, and published independently
 - **Standard inference** — The entire model loads in vLLM with zero code changes
 
-## Documentation
+## Tutorials
 
-For detailed tutorials and many working examples, see the [Tutorials](tutorials/README.md) section.
+New here? Start with a 5-minute notebook and work your way up:
 
-## IBM ❤️ Open Source AI
+| | What you'll build | Time |
+|---|---|---|
+| [Hello Adapter](tutorials/notebooks/00_hello_adapter.ipynb) | Invoke your first adapter with HuggingFace | 5 min |
+| [Hello Mellea](tutorials/notebooks/01_hello_mellea.ipynb) | Call adapters through a clean Python API | 5 min |
+| [RAG Pipeline](tutorials/notebooks/03_01_govt_rag_pipeline_simple.ipynb) | Query rewrite + answerability + citations in one model | 30 min |
+| [Compose Your Own](tutorials/notebooks/04_compose_granite_switch.ipynb) | Build a custom checkpoint from adapter libraries | 15 min |
+| [aLoRA vs LoRA Race](tutorials/notebooks/05_alora_vs_lora_race.ipynb) | Measure throughput gains from activated LoRA | 20 min |
+
+All notebooks run on Colab. See [tutorials/README.md](tutorials/README.md) for the full list and guided learning paths.
+
+## IBM and Open Source AI
 
 Granite Switch was started by IBM Research.
 
