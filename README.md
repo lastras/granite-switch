@@ -12,10 +12,14 @@ Most AI models are monolithic — all capabilities baked into one set of weights
 
 Browse available libraries in the [Granite Libraries collection](https://huggingface.co/collections/ibm-granite/granite-libraries) on Hugging Face.
 
+<p align="center">
+  <img src="docs/benchmark_animation.svg" alt="Granite Switch: adapters stack, accuracy improves" width="820">
+</p>
+
 ## Key Features
 
 - **Composable** — Combine independently developed adapters into one checkpoint, whether IBM's or yours. Swap, upgrade, or customize without retraining.
-- **Fast** — Built on IBM's Activated LoRA technology for efficient KV cache reuse, low latency, and [high inference throughput](https://github.com/lastras/granite-switch/tree/alora-vs-lora-race/tutorials/alora_vs_lora_race).
+- **Fast** — Built on IBM's Activated LoRA technology for efficient KV cache reuse, low latency, and [high inference throughput](tutorials/notebooks/05_alora_vs_lora_race.ipynb).
 - **Accurate** — Task-specific adapters can match and even surpass the accuracy of significantly larger generalist models, while requiring only a fraction of the serving cost. See the [adapter catalog](https://generative-computing.github.io/granite-switch/adapter_catalog.html#hallucination-detection) for benchmark comparisons across all 12 adapters.
 - **Inference-ready** — Support for Hugging Face and vLLM.
 
