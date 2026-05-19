@@ -3,6 +3,11 @@
 
 Protocol (JSON-line over stdin/stdout):
   Startup: prints {"ready": true, "backend_name": "..."} to stdout
+       OR  prints {"fatal": "...", "hint": "...", "backend_name": "..."} and exits
+           when the auto-selected attention backend's kernel image is incompatible
+           with this GPU (e.g. FA3 Hopper-only kernels on a non-Hopper card). The
+           parent reads this and converts it into one clear pytest failure instead
+           of letting hundreds of subsequent tests cascade into BrokenPipeErrors.
   Request: {"seq": [...], "num_adapters": N, "control_token_gain": G}
   Response: {"result": [...]}
   Error: {"error": "..."}
@@ -118,27 +123,32 @@ def _build_metadata(harness, seq_len):
     if backend_name == "FLASH_ATTN":
         from vllm.v1.attention.backends.flash_attn import FlashAttentionMetadata
 
-        # FA3 requires scheduler_metadata; compute it when available.
+        # scheduler_metadata is FA3-only — passing it on FA2 (Ampere/A100)
+        # forces FA3 kernel dispatch and crashes with "no kernel image
+        # is available". Only compute it when get_flash_attn_version() == 3
+        # (Hopper SM90+).
         scheduler_metadata = None
         try:
             from vllm.v1.attention.backends.fa_utils import (
+                get_flash_attn_version,
                 get_scheduler_metadata,
             )
-            switch = harness["switch"]
-            scheduler_metadata = get_scheduler_metadata(
-                batch_size=1,
-                max_seqlen_q=seq_len,
-                max_seqlen_k=seq_len,
-                num_heads_q=switch.num_heads,
-                num_heads_kv=switch.num_kv_heads,
-                headdim=switch.head_dim,
-                cache_seqlens=seq_lens,
-                qkv_dtype=torch.bfloat16,
-                cu_seqlens_q=query_start_loc,
-                page_size=block_size,
-                causal=True,
-                num_splits=0,
-            )
+            if get_flash_attn_version() == 3:
+                switch = harness["switch"]
+                scheduler_metadata = get_scheduler_metadata(
+                    batch_size=1,
+                    max_seqlen_q=seq_len,
+                    max_seqlen_k=seq_len,
+                    num_heads_q=switch.num_heads,
+                    num_heads_kv=switch.num_kv_heads,
+                    headdim=switch.head_dim,
+                    cache_seqlens=seq_lens,
+                    qkv_dtype=torch.bfloat16,
+                    cu_seqlens_q=query_start_loc,
+                    page_size=block_size,
+                    causal=True,
+                    num_splits=0,
+                )
         except ImportError:
             pass
 
@@ -232,8 +242,56 @@ def _query_geometry(harness):
     }
 
 
+def _probe_attention(harness):
+    """Run a 1-token forward to verify the auto-selected attention kernel is usable.
+
+    vLLM picks FLASH_ATTN by default. If the installed vllm-flash-attn was built
+    only for Hopper (SM 9.0) but this GPU is a different architecture, the very
+    first kernel launch raises "no kernel image is available for execution on
+    the device" — and in some builds this kills the worker process at the C
+    layer before any Python handler runs. Catching it here, on a tiny synthetic
+    input, lets us emit a structured fatal message before signaling ready.
+
+    Returns None on success, or a dict {"fatal": ..., "hint": ...} on failure.
+    """
+    try:
+        _run(harness, seq=[0], num_adapters=1, control_token_gain=15.0)
+    except Exception as exc:
+        msg = f"{type(exc).__name__}: {exc}"
+        hint = (
+            "Auto-selected attention backend "
+            f"{harness['backend_name']!r} crashed during the startup smoke "
+            "test. If 'no kernel image is available' appears above, the FA "
+            "kernels in this venv were compiled for a different SM than the "
+            "runtime GPU. Common cause: a stale standalone 'vllm-flash-attn' "
+            "PyPI package shadowing vLLM's bundled FA kernels — try "
+            "`pip uninstall vllm-flash-attn` and re-run."
+        )
+        return {"fatal": msg, "hint": hint, "backend_name": harness["backend_name"]}
+    return None
+
+
 def main():
-    harness = _setup()
+    try:
+        harness = _setup()
+    except Exception as exc:
+        # Setup itself blew up — surface it on stdout so the parent can show a
+        # clean failure instead of "Worker failed to start: <empty>".
+        msg = {
+            "fatal": f"{type(exc).__name__}: {exc}",
+            "hint": "Worker setup failed before attention probe.",
+            "backend_name": "unknown",
+        }
+        sys.stdout.write(json.dumps(msg) + "\n")
+        sys.stdout.flush()
+        traceback.print_exc(file=sys.stderr)
+        return
+
+    probe_failure = _probe_attention(harness)
+    if probe_failure is not None:
+        sys.stdout.write(json.dumps(probe_failure) + "\n")
+        sys.stdout.flush()
+        return
 
     # Signal ready
     ready_msg = {"ready": True, "backend_name": harness["backend_name"]}
