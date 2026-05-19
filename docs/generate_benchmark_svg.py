@@ -189,8 +189,8 @@ def make_adapter_entries(slot_indices, row_idx):
     return ensure_bounds(entries, "opacity:0;transform:translateY(14px)")
 
 
-def make_bar_entries(slot_indices, row_idx):
-    """Generate bar growth entries for given slot indices."""
+def make_bar_entries(slot_indices, row_idx, target_width):
+    """Generate bar growth entries for given slot indices (animates width)."""
     entries = []
     for si in slot_indices:
         delay = slot_frac(si, BAR_DELAY[row_idx])
@@ -198,12 +198,12 @@ def make_bar_entries(slot_indices, row_idx):
         done = slot_frac(si, BAR_DONE[row_idx])
         hold = slot_frac(si, CONTENT_OUT)
         end = slot_frac(si, SLOT_END)
-        entries.append((delay, "opacity:0;transform:scaleX(0)"))
-        entries.append((start, "opacity:1;transform:scaleX(0)"))
-        entries.append((done, "opacity:1;transform:scaleX(1)"))
-        entries.append((hold, "opacity:1;transform:scaleX(1)"))
-        entries.append((end, "opacity:0;transform:scaleX(0)"))
-    return ensure_bounds(entries, "opacity:0;transform:scaleX(0)")
+        entries.append((delay, "opacity:0;width:0"))
+        entries.append((start, "opacity:1;width:0"))
+        entries.append((done, f"opacity:1;width:{target_width}px"))
+        entries.append((hold, f"opacity:1;width:{target_width}px"))
+        entries.append((end, "opacity:0;width:0"))
+    return ensure_bounds(entries, "opacity:0;width:0")
 
 
 def make_improved_pct_entries(slot_indices, row_idx):
@@ -368,9 +368,8 @@ def generate_css():
                 lines.append(fmt_keyframes(cls, entries))
     lines.append("")
 
-    # Improved bars (model-specific)
+    # Improved bars (model-specific, animates width)
     lines.append("  /* Improved bars */")
-    lines.append("  .bar{transform-box:fill-box;transform-origin:left center}")
     for row_idx in range(4):
         ids_in_row = set(s["adapters"][row_idx] for s in SLOTS)
         for iid in sorted(ids_in_row):
@@ -379,7 +378,8 @@ def generate_css():
                 if not si_list:
                     continue
                 cls = f"{iid}b{row_idx}{model}"
-                entries = make_bar_entries(si_list, row_idx)
+                target_w = bar_width(INTRINSICS[iid]["improved"][model])
+                entries = make_bar_entries(si_list, row_idx, target_w)
                 lines.append(f"  .{cls}{{animation:{cls} {dur}s linear infinite}}")
                 lines.append(fmt_keyframes(cls, entries))
     lines.append("")
@@ -407,7 +407,7 @@ def generate_left_panel():
     lines = []
     lines.append("")
     lines.append('<!-- LEFT PANEL -->')
-    lines.append('<text x="137" y="28" text-anchor="middle" font-size="10" fill="#8d8d8d" letter-spacing="1">YOUR CUSTOM MODEL</text>')
+    lines.append('<text x="137" y="28" text-anchor="middle" font-size="10" fill="#8d8d8d" letter-spacing="1">CUSTOM GRANITE SWITCH MODEL</text>')
     lines.append("")
 
     # Base model — one box per model size, each with its own visibility animation
@@ -500,8 +500,8 @@ def generate_right_panel():
 
                 # Baseline bar
                 lines.append(f'<rect class="{xcls}" x="{bar_x}" y="{base_y}" width="{base_w}" height="{BAR_H}" rx="4" fill="#c6c6c6"/>')
-                # Improved bar
-                lines.append(f'<rect class="{bcls} bar" x="{bar_x}" y="{imp_y}" width="{imp_w}" height="{BAR_H}" rx="4" fill="{lib["bar"]}"/>')
+                # Improved bar (width animated from 0 to target via CSS)
+                lines.append(f'<rect class="{bcls}" x="{bar_x}" y="{imp_y}" width="{imp_w}" height="{BAR_H}" rx="4" fill="{lib["bar"]}"/>')
                 # Percentage texts
                 base_ty = BASE_TEXT_Y[row_idx]
                 imp_ty = IMP_TEXT_Y[row_idx]

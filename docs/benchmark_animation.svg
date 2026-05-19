@@ -458,147 +458,146 @@
   @keyframes rcp38b{0%{opacity:0} 44.4444%{opacity:0} 44.6667%{opacity:1} 49.6667%{opacity:1} 50%{opacity:0} 100%{opacity:0}}
 
   /* Improved bars */
-  .bar{transform-box:fill-box;transform-origin:left center}
   .anb03b{animation:anb03b 180s linear infinite}
-  @keyframes anb03b{0%{opacity:0;transform:scaleX(0)} 23.1111%{opacity:0;transform:scaleX(0)} 23.2222%{opacity:1;transform:scaleX(0)} 23.7778%{opacity:1;transform:scaleX(1)} 27.4444%{opacity:1;transform:scaleX(1)} 27.7778%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes anb03b{0%{opacity:0;width:0} 23.1111%{opacity:0;width:0} 23.2222%{opacity:1;width:0} 23.7778%{opacity:1;width:391px} 27.4444%{opacity:1;width:391px} 27.7778%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .anb030b{animation:anb030b 180s linear infinite}
-  @keyframes anb030b{0%{opacity:0;transform:scaleX(0)} 67.5556%{opacity:0;transform:scaleX(0)} 67.6667%{opacity:1;transform:scaleX(0)} 68.2222%{opacity:1;transform:scaleX(1)} 71.8889%{opacity:1;transform:scaleX(1)} 72.2222%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes anb030b{0%{opacity:0;width:0} 67.5556%{opacity:0;width:0} 67.6667%{opacity:1;width:0} 68.2222%{opacity:1;width:396px} 71.8889%{opacity:1;width:396px} 72.2222%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .cab08b{animation:cab08b 180s linear infinite}
-  @keyframes cab08b{0%{opacity:0;transform:scaleX(0)} 34.2222%{opacity:0;transform:scaleX(0)} 34.3333%{opacity:1;transform:scaleX(0)} 34.8889%{opacity:1;transform:scaleX(1)} 38.5556%{opacity:1;transform:scaleX(1)} 38.8889%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes cab08b{0%{opacity:0;width:0} 34.2222%{opacity:0;width:0} 34.3333%{opacity:1;width:0} 34.8889%{opacity:1;width:413px} 38.5556%{opacity:1;width:413px} 38.8889%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .cab030b{animation:cab030b 180s linear infinite}
-  @keyframes cab030b{0%{opacity:0;transform:scaleX(0)} 73.1111%{opacity:0;transform:scaleX(0)} 73.2222%{opacity:1;transform:scaleX(0)} 73.7778%{opacity:1;transform:scaleX(1)} 77.4444%{opacity:1;transform:scaleX(1)} 77.7778%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes cab030b{0%{opacity:0;width:0} 73.1111%{opacity:0;width:0} 73.2222%{opacity:1;width:0} 73.7778%{opacity:1;width:387px} 77.4444%{opacity:1;width:387px} 77.7778%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .fdb03b{animation:fdb03b 180s linear infinite}
-  @keyframes fdb03b{0%{opacity:0;transform:scaleX(0)} 28.6667%{opacity:0;transform:scaleX(0)} 28.7778%{opacity:1;transform:scaleX(0)} 29.3333%{opacity:1;transform:scaleX(1)} 33%{opacity:1;transform:scaleX(1)} 33.3333%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes fdb03b{0%{opacity:0;width:0} 28.6667%{opacity:0;width:0} 28.7778%{opacity:1;width:0} 29.3333%{opacity:1;width:348px} 33%{opacity:1;width:348px} 33.3333%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .fdb08b{animation:fdb08b 180s linear infinite}
-  @keyframes fdb08b{0%{opacity:0;transform:scaleX(0)} 62%{opacity:0;transform:scaleX(0)} 62.1111%{opacity:1;transform:scaleX(0)} 62.6667%{opacity:1;transform:scaleX(1)} 66.3333%{opacity:1;transform:scaleX(1)} 66.6667%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes fdb08b{0%{opacity:0;width:0} 62%{opacity:0;width:0} 62.1111%{opacity:1;width:0} 62.6667%{opacity:1;width:357px} 66.3333%{opacity:1;width:357px} 66.6667%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .gcb03b{animation:gcb03b 180s linear infinite}
-  @keyframes gcb03b{0%{opacity:0;transform:scaleX(0)} 12%{opacity:0;transform:scaleX(0)} 12.1111%{opacity:1;transform:scaleX(0)} 12.6667%{opacity:1;transform:scaleX(1)} 16.3333%{opacity:1;transform:scaleX(1)} 16.6667%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes gcb03b{0%{opacity:0;width:0} 12%{opacity:0;width:0} 12.1111%{opacity:1;width:0} 12.6667%{opacity:1;width:335px} 16.3333%{opacity:1;width:335px} 16.6667%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .gcb08b{animation:gcb08b 180s linear infinite}
-  @keyframes gcb08b{0%{opacity:0;transform:scaleX(0)} 56.4444%{opacity:0;transform:scaleX(0)} 56.5556%{opacity:1;transform:scaleX(0)} 57.1111%{opacity:1;transform:scaleX(1)} 60.7778%{opacity:1;transform:scaleX(1)} 61.1111%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes gcb08b{0%{opacity:0;width:0} 56.4444%{opacity:0;width:0} 56.5556%{opacity:1;width:0} 57.1111%{opacity:1;width:344px} 60.7778%{opacity:1;width:344px} 61.1111%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .gcb030b{animation:gcb030b 180s linear infinite}
-  @keyframes gcb030b{0%{opacity:0;transform:scaleX(0)} 84.2222%{opacity:0;transform:scaleX(0)} 84.3333%{opacity:1;transform:scaleX(0)} 84.8889%{opacity:1;transform:scaleX(1)} 88.5556%{opacity:1;transform:scaleX(1)} 88.8889%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes gcb030b{0%{opacity:0;width:0} 84.2222%{opacity:0;width:0} 84.3333%{opacity:1;width:0} 84.8889%{opacity:1;width:348px} 88.5556%{opacity:1;width:348px} 88.8889%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .hdb03b{animation:hdb03b 180s linear infinite}
-  @keyframes hdb03b{0%{opacity:0;transform:scaleX(0)} 6.4444%{opacity:0;transform:scaleX(0)} 6.5556%{opacity:1;transform:scaleX(0)} 7.1111%{opacity:1;transform:scaleX(1)} 10.7778%{opacity:1;transform:scaleX(1)} 11.1111%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes hdb03b{0%{opacity:0;width:0} 6.4444%{opacity:0;width:0} 6.5556%{opacity:1;width:0} 7.1111%{opacity:1;width:305px} 10.7778%{opacity:1;width:305px} 11.1111%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .hdb08b{animation:hdb08b 180s linear infinite}
-  @keyframes hdb08b{0%{opacity:0;transform:scaleX(0)} 45.3333%{opacity:0;transform:scaleX(0)} 45.4444%{opacity:1;transform:scaleX(0)} 46%{opacity:1;transform:scaleX(1)} 49.6667%{opacity:1;transform:scaleX(1)} 50%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes hdb08b{0%{opacity:0;width:0} 45.3333%{opacity:0;width:0} 45.4444%{opacity:1;width:0} 46%{opacity:1;width:318px} 49.6667%{opacity:1;width:318px} 50%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .hdb030b{animation:hdb030b 180s linear infinite}
-  @keyframes hdb030b{0%{opacity:0;transform:scaleX(0)} 89.7778%{opacity:0;transform:scaleX(0)} 89.8889%{opacity:1;transform:scaleX(0)} 90.4444%{opacity:1;transform:scaleX(1)} 94.1111%{opacity:1;transform:scaleX(1)} 94.4444%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes hdb030b{0%{opacity:0;width:0} 89.7778%{opacity:0;width:0} 89.8889%{opacity:1;width:0} 90.4444%{opacity:1;width:357px} 94.1111%{opacity:1;width:357px} 94.4444%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .qcb03b{animation:qcb03b 180s linear infinite}
-  @keyframes qcb03b{0%{opacity:0;transform:scaleX(0)} 17.5556%{opacity:0;transform:scaleX(0)} 17.6667%{opacity:1;transform:scaleX(0)} 18.2222%{opacity:1;transform:scaleX(1)} 21.8889%{opacity:1;transform:scaleX(1)} 22.2222%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes qcb03b{0%{opacity:0;width:0} 17.5556%{opacity:0;width:0} 17.6667%{opacity:1;width:0} 18.2222%{opacity:1;width:408px} 21.8889%{opacity:1;width:408px} 22.2222%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .qrb08b{animation:qrb08b 180s linear infinite}
-  @keyframes qrb08b{0%{opacity:0;transform:scaleX(0)} 39.7778%{opacity:0;transform:scaleX(0)} 39.8889%{opacity:1;transform:scaleX(0)} 40.4444%{opacity:1;transform:scaleX(1)} 44.1111%{opacity:1;transform:scaleX(1)} 44.4444%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes qrb08b{0%{opacity:0;width:0} 39.7778%{opacity:0;width:0} 39.8889%{opacity:1;width:0} 40.4444%{opacity:1;width:361px} 44.1111%{opacity:1;width:361px} 44.4444%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .qrb030b{animation:qrb030b 180s linear infinite}
-  @keyframes qrb030b{0%{opacity:0;transform:scaleX(0)} 78.6667%{opacity:0;transform:scaleX(0)} 78.7778%{opacity:1;transform:scaleX(0)} 79.3333%{opacity:1;transform:scaleX(1)} 83%{opacity:1;transform:scaleX(1)} 83.3333%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes qrb030b{0%{opacity:0;width:0} 78.6667%{opacity:0;width:0} 78.7778%{opacity:1;width:0} 79.3333%{opacity:1;width:374px} 83%{opacity:1;width:374px} 83.3333%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .rcb03b{animation:rcb03b 180s linear infinite}
-  @keyframes rcb03b{0%{opacity:0;transform:scaleX(0)} 0.8889%{opacity:0;transform:scaleX(0)} 1%{opacity:1;transform:scaleX(0)} 1.5556%{opacity:1;transform:scaleX(1)} 5.2222%{opacity:1;transform:scaleX(1)} 5.5556%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes rcb03b{0%{opacity:0;width:0} 0.8889%{opacity:0;width:0} 1%{opacity:1;width:0} 1.5556%{opacity:1;width:331px} 5.2222%{opacity:1;width:331px} 5.5556%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .rcb08b{animation:rcb08b 180s linear infinite}
-  @keyframes rcb08b{0%{opacity:0;transform:scaleX(0)} 50.8889%{opacity:0;transform:scaleX(0)} 51%{opacity:1;transform:scaleX(0)} 51.5556%{opacity:1;transform:scaleX(1)} 55.2222%{opacity:1;transform:scaleX(1)} 55.5556%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes rcb08b{0%{opacity:0;width:0} 50.8889%{opacity:0;width:0} 51%{opacity:1;width:0} 51.5556%{opacity:1;width:331px} 55.2222%{opacity:1;width:331px} 55.5556%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .rcb030b{animation:rcb030b 180s linear infinite}
-  @keyframes rcb030b{0%{opacity:0;transform:scaleX(0)} 95.3333%{opacity:0;transform:scaleX(0)} 95.4444%{opacity:1;transform:scaleX(0)} 96%{opacity:1;transform:scaleX(1)} 99.6667%{opacity:1;transform:scaleX(1)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes rcb030b{0%{opacity:0;width:0} 95.3333%{opacity:0;width:0} 95.4444%{opacity:1;width:0} 96%{opacity:1;width:335px} 99.6667%{opacity:1;width:335px} 100%{opacity:0;width:0}}
   .anb13b{animation:anb13b 180s linear infinite}
-  @keyframes anb13b{0%{opacity:0;transform:scaleX(0)} 13.3333%{opacity:0;transform:scaleX(0)} 13.4444%{opacity:1;transform:scaleX(0)} 14%{opacity:1;transform:scaleX(1)} 16.3333%{opacity:1;transform:scaleX(1)} 16.6667%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes anb13b{0%{opacity:0;width:0} 13.3333%{opacity:0;width:0} 13.4444%{opacity:1;width:0} 14%{opacity:1;width:391px} 16.3333%{opacity:1;width:391px} 16.6667%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .anb18b{animation:anb18b 180s linear infinite}
-  @keyframes anb18b{0%{opacity:0;transform:scaleX(0)} 52.2222%{opacity:0;transform:scaleX(0)} 52.3333%{opacity:1;transform:scaleX(0)} 52.8889%{opacity:1;transform:scaleX(1)} 55.2222%{opacity:1;transform:scaleX(1)} 55.5556%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes anb18b{0%{opacity:0;width:0} 52.2222%{opacity:0;width:0} 52.3333%{opacity:1;width:0} 52.8889%{opacity:1;width:391px} 55.2222%{opacity:1;width:391px} 55.5556%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .anb130b{animation:anb130b 180s linear infinite}
-  @keyframes anb130b{0%{opacity:0;transform:scaleX(0)} 91.1111%{opacity:0;transform:scaleX(0)} 91.2222%{opacity:1;transform:scaleX(0)} 91.7778%{opacity:1;transform:scaleX(1)} 94.1111%{opacity:1;transform:scaleX(1)} 94.4444%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes anb130b{0%{opacity:0;width:0} 91.1111%{opacity:0;width:0} 91.2222%{opacity:1;width:0} 91.7778%{opacity:1;width:396px} 94.1111%{opacity:1;width:396px} 94.4444%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .cab13b{animation:cab13b 180s linear infinite}
-  @keyframes cab13b{0%{opacity:0;transform:scaleX(0)} 7.7778%{opacity:0;transform:scaleX(0)} 7.8889%{opacity:1;transform:scaleX(0)} 8.4444%{opacity:1;transform:scaleX(1)} 10.7778%{opacity:1;transform:scaleX(1)} 11.1111%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes cab13b{0%{opacity:0;width:0} 7.7778%{opacity:0;width:0} 7.8889%{opacity:1;width:0} 8.4444%{opacity:1;width:396px} 10.7778%{opacity:1;width:396px} 11.1111%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .cab18b{animation:cab18b 180s linear infinite}
-  @keyframes cab18b{0%{opacity:0;transform:scaleX(0)} 63.3333%{opacity:0;transform:scaleX(0)} 63.4444%{opacity:1;transform:scaleX(0)} 64%{opacity:1;transform:scaleX(1)} 66.3333%{opacity:1;transform:scaleX(1)} 66.6667%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes cab18b{0%{opacity:0;width:0} 63.3333%{opacity:0;width:0} 63.4444%{opacity:1;width:0} 64%{opacity:1;width:413px} 66.3333%{opacity:1;width:413px} 66.6667%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .fdb13b{animation:fdb13b 180s linear infinite}
-  @keyframes fdb13b{0%{opacity:0;transform:scaleX(0)} 18.8889%{opacity:0;transform:scaleX(0)} 19%{opacity:1;transform:scaleX(0)} 19.5556%{opacity:1;transform:scaleX(1)} 21.8889%{opacity:1;transform:scaleX(1)} 22.2222%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes fdb13b{0%{opacity:0;width:0} 18.8889%{opacity:0;width:0} 19%{opacity:1;width:0} 19.5556%{opacity:1;width:348px} 21.8889%{opacity:1;width:348px} 22.2222%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .fdb130b{animation:fdb130b 180s linear infinite}
-  @keyframes fdb130b{0%{opacity:0;transform:scaleX(0)} 68.8889%{opacity:0;transform:scaleX(0)} 69%{opacity:1;transform:scaleX(0)} 69.5556%{opacity:1;transform:scaleX(1)} 71.8889%{opacity:1;transform:scaleX(1)} 72.2222%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes fdb130b{0%{opacity:0;width:0} 68.8889%{opacity:0;width:0} 69%{opacity:1;width:0} 69.5556%{opacity:1;width:357px} 71.8889%{opacity:1;width:357px} 72.2222%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .gcb13b{animation:gcb13b 180s linear infinite}
-  @keyframes gcb13b{0%{opacity:0;transform:scaleX(0)} 24.4444%{opacity:0;transform:scaleX(0)} 24.5556%{opacity:1;transform:scaleX(0)} 25.1111%{opacity:1;transform:scaleX(1)} 27.4444%{opacity:1;transform:scaleX(1)} 27.7778%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes gcb13b{0%{opacity:0;width:0} 24.4444%{opacity:0;width:0} 24.5556%{opacity:1;width:0} 25.1111%{opacity:1;width:335px} 27.4444%{opacity:1;width:335px} 27.7778%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .gcb18b{animation:gcb18b 180s linear infinite}
-  @keyframes gcb18b{0%{opacity:0;transform:scaleX(0)} 46.6667%{opacity:0;transform:scaleX(0)} 46.7778%{opacity:1;transform:scaleX(0)} 47.3333%{opacity:1;transform:scaleX(1)} 49.6667%{opacity:1;transform:scaleX(1)} 50%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes gcb18b{0%{opacity:0;width:0} 46.6667%{opacity:0;width:0} 46.7778%{opacity:1;width:0} 47.3333%{opacity:1;width:344px} 49.6667%{opacity:1;width:344px} 50%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .gcb130b{animation:gcb130b 180s linear infinite}
-  @keyframes gcb130b{0%{opacity:0;transform:scaleX(0)} 96.6667%{opacity:0;transform:scaleX(0)} 96.7778%{opacity:1;transform:scaleX(0)} 97.3333%{opacity:1;transform:scaleX(1)} 99.6667%{opacity:1;transform:scaleX(1)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes gcb130b{0%{opacity:0;width:0} 96.6667%{opacity:0;width:0} 96.7778%{opacity:1;width:0} 97.3333%{opacity:1;width:348px} 99.6667%{opacity:1;width:348px} 100%{opacity:0;width:0}}
   .hdb18b{animation:hdb18b 180s linear infinite}
-  @keyframes hdb18b{0%{opacity:0;transform:scaleX(0)} 35.5556%{opacity:0;transform:scaleX(0)} 35.6667%{opacity:1;transform:scaleX(0)} 36.2222%{opacity:1;transform:scaleX(1)} 38.5556%{opacity:1;transform:scaleX(1)} 38.8889%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes hdb18b{0%{opacity:0;width:0} 35.5556%{opacity:0;width:0} 35.6667%{opacity:1;width:0} 36.2222%{opacity:1;width:318px} 38.5556%{opacity:1;width:318px} 38.8889%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .hdb130b{animation:hdb130b 180s linear infinite}
-  @keyframes hdb130b{0%{opacity:0;transform:scaleX(0)} 80%{opacity:0;transform:scaleX(0)} 80.1111%{opacity:1;transform:scaleX(0)} 80.6667%{opacity:1;transform:scaleX(1)} 83%{opacity:1;transform:scaleX(1)} 83.3333%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes hdb130b{0%{opacity:0;width:0} 80%{opacity:0;width:0} 80.1111%{opacity:1;width:0} 80.6667%{opacity:1;width:357px} 83%{opacity:1;width:357px} 83.3333%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .qcb18b{animation:qcb18b 180s linear infinite}
-  @keyframes qcb18b{0%{opacity:0;transform:scaleX(0)} 41.1111%{opacity:0;transform:scaleX(0)} 41.2222%{opacity:1;transform:scaleX(0)} 41.7778%{opacity:1;transform:scaleX(1)} 44.1111%{opacity:1;transform:scaleX(1)} 44.4444%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes qcb18b{0%{opacity:0;width:0} 41.1111%{opacity:0;width:0} 41.2222%{opacity:1;width:0} 41.7778%{opacity:1;width:413px} 44.1111%{opacity:1;width:413px} 44.4444%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .qcb130b{animation:qcb130b 180s linear infinite}
-  @keyframes qcb130b{0%{opacity:0;transform:scaleX(0)} 85.5556%{opacity:0;transform:scaleX(0)} 85.6667%{opacity:1;transform:scaleX(0)} 86.2222%{opacity:1;transform:scaleX(1)} 88.5556%{opacity:1;transform:scaleX(1)} 88.8889%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes qcb130b{0%{opacity:0;width:0} 85.5556%{opacity:0;width:0} 85.6667%{opacity:1;width:0} 86.2222%{opacity:1;width:408px} 88.5556%{opacity:1;width:408px} 88.8889%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .qrb13b{animation:qrb13b 180s linear infinite}
-  @keyframes qrb13b{0%{opacity:0;transform:scaleX(0)} 2.2222%{opacity:0;transform:scaleX(0)} 2.3333%{opacity:1;transform:scaleX(0)} 2.8889%{opacity:1;transform:scaleX(1)} 5.2222%{opacity:1;transform:scaleX(1)} 5.5556%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes qrb13b{0%{opacity:0;width:0} 2.2222%{opacity:0;width:0} 2.3333%{opacity:1;width:0} 2.8889%{opacity:1;width:370px} 5.2222%{opacity:1;width:370px} 5.5556%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .qrb18b{animation:qrb18b 180s linear infinite}
-  @keyframes qrb18b{0%{opacity:0;transform:scaleX(0)} 57.7778%{opacity:0;transform:scaleX(0)} 57.8889%{opacity:1;transform:scaleX(0)} 58.4444%{opacity:1;transform:scaleX(1)} 60.7778%{opacity:1;transform:scaleX(1)} 61.1111%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes qrb18b{0%{opacity:0;width:0} 57.7778%{opacity:0;width:0} 57.8889%{opacity:1;width:0} 58.4444%{opacity:1;width:361px} 60.7778%{opacity:1;width:361px} 61.1111%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .rcb13b{animation:rcb13b 180s linear infinite}
-  @keyframes rcb13b{0%{opacity:0;transform:scaleX(0)} 30%{opacity:0;transform:scaleX(0)} 30.1111%{opacity:1;transform:scaleX(0)} 30.6667%{opacity:1;transform:scaleX(1)} 33%{opacity:1;transform:scaleX(1)} 33.3333%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes rcb13b{0%{opacity:0;width:0} 30%{opacity:0;width:0} 30.1111%{opacity:1;width:0} 30.6667%{opacity:1;width:331px} 33%{opacity:1;width:331px} 33.3333%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .rcb130b{animation:rcb130b 180s linear infinite}
-  @keyframes rcb130b{0%{opacity:0;transform:scaleX(0)} 74.4444%{opacity:0;transform:scaleX(0)} 74.5556%{opacity:1;transform:scaleX(0)} 75.1111%{opacity:1;transform:scaleX(1)} 77.4444%{opacity:1;transform:scaleX(1)} 77.7778%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes rcb130b{0%{opacity:0;width:0} 74.4444%{opacity:0;width:0} 74.5556%{opacity:1;width:0} 75.1111%{opacity:1;width:335px} 77.4444%{opacity:1;width:335px} 77.7778%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .anb28b{animation:anb28b 180s linear infinite}
-  @keyframes anb28b{0%{opacity:0;transform:scaleX(0)} 36.2222%{opacity:0;transform:scaleX(0)} 36.3333%{opacity:1;transform:scaleX(0)} 36.8889%{opacity:1;transform:scaleX(1)} 38.5556%{opacity:1;transform:scaleX(1)} 38.8889%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes anb28b{0%{opacity:0;width:0} 36.2222%{opacity:0;width:0} 36.3333%{opacity:1;width:0} 36.8889%{opacity:1;width:391px} 38.5556%{opacity:1;width:391px} 38.8889%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .anb230b{animation:anb230b 180s linear infinite}
-  @keyframes anb230b{0%{opacity:0;transform:scaleX(0)} 80.6667%{opacity:0;transform:scaleX(0)} 80.7778%{opacity:1;transform:scaleX(0)} 81.3333%{opacity:1;transform:scaleX(1)} 83%{opacity:1;transform:scaleX(1)} 83.3333%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes anb230b{0%{opacity:0;width:0} 80.6667%{opacity:0;width:0} 80.7778%{opacity:1;width:0} 81.3333%{opacity:1;width:396px} 83%{opacity:1;width:396px} 83.3333%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .cab23b{animation:cab23b 180s linear infinite}
-  @keyframes cab23b{0%{opacity:0;transform:scaleX(0)} 19.5556%{opacity:0;transform:scaleX(0)} 19.6667%{opacity:1;transform:scaleX(0)} 20.2222%{opacity:1;transform:scaleX(1)} 21.8889%{opacity:1;transform:scaleX(1)} 22.2222%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes cab23b{0%{opacity:0;width:0} 19.5556%{opacity:0;width:0} 19.6667%{opacity:1;width:0} 20.2222%{opacity:1;width:396px} 21.8889%{opacity:1;width:396px} 22.2222%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .cab28b{animation:cab28b 180s linear infinite}
-  @keyframes cab28b{0%{opacity:0;transform:scaleX(0)} 52.8889%{opacity:0;transform:scaleX(0)} 53%{opacity:1;transform:scaleX(0)} 53.5556%{opacity:1;transform:scaleX(1)} 55.2222%{opacity:1;transform:scaleX(1)} 55.5556%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes cab28b{0%{opacity:0;width:0} 52.8889%{opacity:0;width:0} 53%{opacity:1;width:0} 53.5556%{opacity:1;width:413px} 55.2222%{opacity:1;width:413px} 55.5556%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .fdb23b{animation:fdb23b 180s linear infinite}
-  @keyframes fdb23b{0%{opacity:0;transform:scaleX(0)} 8.4444%{opacity:0;transform:scaleX(0)} 8.5556%{opacity:1;transform:scaleX(0)} 9.1111%{opacity:1;transform:scaleX(1)} 10.7778%{opacity:1;transform:scaleX(1)} 11.1111%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes fdb23b{0%{opacity:0;width:0} 8.4444%{opacity:0;width:0} 8.5556%{opacity:1;width:0} 9.1111%{opacity:1;width:348px} 10.7778%{opacity:1;width:348px} 11.1111%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .fdb28b{animation:fdb28b 180s linear infinite}
-  @keyframes fdb28b{0%{opacity:0;transform:scaleX(0)} 41.7778%{opacity:0;transform:scaleX(0)} 41.8889%{opacity:1;transform:scaleX(0)} 42.4444%{opacity:1;transform:scaleX(1)} 44.1111%{opacity:1;transform:scaleX(1)} 44.4444%{opacity:0;transform:scaleX(0)} 58.4444%{opacity:0;transform:scaleX(0)} 58.5556%{opacity:1;transform:scaleX(0)} 59.1111%{opacity:1;transform:scaleX(1)} 60.7778%{opacity:1;transform:scaleX(1)} 61.1111%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes fdb28b{0%{opacity:0;width:0} 41.7778%{opacity:0;width:0} 41.8889%{opacity:1;width:0} 42.4444%{opacity:1;width:357px} 44.1111%{opacity:1;width:357px} 44.4444%{opacity:0;width:0} 58.4444%{opacity:0;width:0} 58.5556%{opacity:1;width:0} 59.1111%{opacity:1;width:357px} 60.7778%{opacity:1;width:357px} 61.1111%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .fdb230b{animation:fdb230b 180s linear infinite}
-  @keyframes fdb230b{0%{opacity:0;transform:scaleX(0)} 97.3333%{opacity:0;transform:scaleX(0)} 97.4444%{opacity:1;transform:scaleX(0)} 98%{opacity:1;transform:scaleX(1)} 99.6667%{opacity:1;transform:scaleX(1)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes fdb230b{0%{opacity:0;width:0} 97.3333%{opacity:0;width:0} 97.4444%{opacity:1;width:0} 98%{opacity:1;width:357px} 99.6667%{opacity:1;width:357px} 100%{opacity:0;width:0}}
   .gcb23b{animation:gcb23b 180s linear infinite}
-  @keyframes gcb23b{0%{opacity:0;transform:scaleX(0)} 2.8889%{opacity:0;transform:scaleX(0)} 3%{opacity:1;transform:scaleX(0)} 3.5556%{opacity:1;transform:scaleX(1)} 5.2222%{opacity:1;transform:scaleX(1)} 5.5556%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes gcb23b{0%{opacity:0;width:0} 2.8889%{opacity:0;width:0} 3%{opacity:1;width:0} 3.5556%{opacity:1;width:335px} 5.2222%{opacity:1;width:335px} 5.5556%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .gcb230b{animation:gcb230b 180s linear infinite}
-  @keyframes gcb230b{0%{opacity:0;transform:scaleX(0)} 69.5556%{opacity:0;transform:scaleX(0)} 69.6667%{opacity:1;transform:scaleX(0)} 70.2222%{opacity:1;transform:scaleX(1)} 71.8889%{opacity:1;transform:scaleX(1)} 72.2222%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes gcb230b{0%{opacity:0;width:0} 69.5556%{opacity:0;width:0} 69.6667%{opacity:1;width:0} 70.2222%{opacity:1;width:348px} 71.8889%{opacity:1;width:348px} 72.2222%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .hdb23b{animation:hdb23b 180s linear infinite}
-  @keyframes hdb23b{0%{opacity:0;transform:scaleX(0)} 25.1111%{opacity:0;transform:scaleX(0)} 25.2222%{opacity:1;transform:scaleX(0)} 25.7778%{opacity:1;transform:scaleX(1)} 27.4444%{opacity:1;transform:scaleX(1)} 27.7778%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes hdb23b{0%{opacity:0;width:0} 25.1111%{opacity:0;width:0} 25.2222%{opacity:1;width:0} 25.7778%{opacity:1;width:305px} 27.4444%{opacity:1;width:305px} 27.7778%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .hdb230b{animation:hdb230b 180s linear infinite}
-  @keyframes hdb230b{0%{opacity:0;transform:scaleX(0)} 86.2222%{opacity:0;transform:scaleX(0)} 86.3333%{opacity:1;transform:scaleX(0)} 86.8889%{opacity:1;transform:scaleX(1)} 88.5556%{opacity:1;transform:scaleX(1)} 88.8889%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes hdb230b{0%{opacity:0;width:0} 86.2222%{opacity:0;width:0} 86.3333%{opacity:1;width:0} 86.8889%{opacity:1;width:357px} 88.5556%{opacity:1;width:357px} 88.8889%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .qcb28b{animation:qcb28b 180s linear infinite}
-  @keyframes qcb28b{0%{opacity:0;transform:scaleX(0)} 47.3333%{opacity:0;transform:scaleX(0)} 47.4444%{opacity:1;transform:scaleX(0)} 48%{opacity:1;transform:scaleX(1)} 49.6667%{opacity:1;transform:scaleX(1)} 50%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes qcb28b{0%{opacity:0;width:0} 47.3333%{opacity:0;width:0} 47.4444%{opacity:1;width:0} 48%{opacity:1;width:413px} 49.6667%{opacity:1;width:413px} 50%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .qcb230b{animation:qcb230b 180s linear infinite}
-  @keyframes qcb230b{0%{opacity:0;transform:scaleX(0)} 75.1111%{opacity:0;transform:scaleX(0)} 75.2222%{opacity:1;transform:scaleX(0)} 75.7778%{opacity:1;transform:scaleX(1)} 77.4444%{opacity:1;transform:scaleX(1)} 77.7778%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes qcb230b{0%{opacity:0;width:0} 75.1111%{opacity:0;width:0} 75.2222%{opacity:1;width:0} 75.7778%{opacity:1;width:408px} 77.4444%{opacity:1;width:408px} 77.7778%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .qrb23b{animation:qrb23b 180s linear infinite}
-  @keyframes qrb23b{0%{opacity:0;transform:scaleX(0)} 30.6667%{opacity:0;transform:scaleX(0)} 30.7778%{opacity:1;transform:scaleX(0)} 31.3333%{opacity:1;transform:scaleX(1)} 33%{opacity:1;transform:scaleX(1)} 33.3333%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes qrb23b{0%{opacity:0;width:0} 30.6667%{opacity:0;width:0} 30.7778%{opacity:1;width:0} 31.3333%{opacity:1;width:370px} 33%{opacity:1;width:370px} 33.3333%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .rcb23b{animation:rcb23b 180s linear infinite}
-  @keyframes rcb23b{0%{opacity:0;transform:scaleX(0)} 14%{opacity:0;transform:scaleX(0)} 14.1111%{opacity:1;transform:scaleX(0)} 14.6667%{opacity:1;transform:scaleX(1)} 16.3333%{opacity:1;transform:scaleX(1)} 16.6667%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes rcb23b{0%{opacity:0;width:0} 14%{opacity:0;width:0} 14.1111%{opacity:1;width:0} 14.6667%{opacity:1;width:331px} 16.3333%{opacity:1;width:331px} 16.6667%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .rcb28b{animation:rcb28b 180s linear infinite}
-  @keyframes rcb28b{0%{opacity:0;transform:scaleX(0)} 64%{opacity:0;transform:scaleX(0)} 64.1111%{opacity:1;transform:scaleX(0)} 64.6667%{opacity:1;transform:scaleX(1)} 66.3333%{opacity:1;transform:scaleX(1)} 66.6667%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes rcb28b{0%{opacity:0;width:0} 64%{opacity:0;width:0} 64.1111%{opacity:1;width:0} 64.6667%{opacity:1;width:331px} 66.3333%{opacity:1;width:331px} 66.6667%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .rcb230b{animation:rcb230b 180s linear infinite}
-  @keyframes rcb230b{0%{opacity:0;transform:scaleX(0)} 91.7778%{opacity:0;transform:scaleX(0)} 91.8889%{opacity:1;transform:scaleX(0)} 92.4444%{opacity:1;transform:scaleX(1)} 94.1111%{opacity:1;transform:scaleX(1)} 94.4444%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes rcb230b{0%{opacity:0;width:0} 91.7778%{opacity:0;width:0} 91.8889%{opacity:1;width:0} 92.4444%{opacity:1;width:335px} 94.1111%{opacity:1;width:335px} 94.4444%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .anb33b{animation:anb33b 180s linear infinite}
-  @keyframes anb33b{0%{opacity:0;transform:scaleX(0)} 3.7778%{opacity:0;transform:scaleX(0)} 3.8889%{opacity:1;transform:scaleX(0)} 4.4444%{opacity:1;transform:scaleX(1)} 5.2222%{opacity:1;transform:scaleX(1)} 5.5556%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes anb33b{0%{opacity:0;width:0} 3.7778%{opacity:0;width:0} 3.8889%{opacity:1;width:0} 4.4444%{opacity:1;width:391px} 5.2222%{opacity:1;width:391px} 5.5556%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .anb38b{animation:anb38b 180s linear infinite}
-  @keyframes anb38b{0%{opacity:0;transform:scaleX(0)} 59.3333%{opacity:0;transform:scaleX(0)} 59.4444%{opacity:1;transform:scaleX(0)} 60%{opacity:1;transform:scaleX(1)} 60.7778%{opacity:1;transform:scaleX(1)} 61.1111%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes anb38b{0%{opacity:0;width:0} 59.3333%{opacity:0;width:0} 59.4444%{opacity:1;width:0} 60%{opacity:1;width:391px} 60.7778%{opacity:1;width:391px} 61.1111%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .anb330b{animation:anb330b 180s linear infinite}
-  @keyframes anb330b{0%{opacity:0;transform:scaleX(0)} 98.2222%{opacity:0;transform:scaleX(0)} 98.3333%{opacity:1;transform:scaleX(0)} 98.8889%{opacity:1;transform:scaleX(1)} 99.6667%{opacity:1;transform:scaleX(1)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes anb330b{0%{opacity:0;width:0} 98.2222%{opacity:0;width:0} 98.3333%{opacity:1;width:0} 98.8889%{opacity:1;width:396px} 99.6667%{opacity:1;width:396px} 100%{opacity:0;width:0}}
   .cab33b{animation:cab33b 180s linear infinite}
-  @keyframes cab33b{0%{opacity:0;transform:scaleX(0)} 31.5556%{opacity:0;transform:scaleX(0)} 31.6667%{opacity:1;transform:scaleX(0)} 32.2222%{opacity:1;transform:scaleX(1)} 33%{opacity:1;transform:scaleX(1)} 33.3333%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes cab33b{0%{opacity:0;width:0} 31.5556%{opacity:0;width:0} 31.6667%{opacity:1;width:0} 32.2222%{opacity:1;width:396px} 33%{opacity:1;width:396px} 33.3333%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .cab330b{animation:cab330b 180s linear infinite}
-  @keyframes cab330b{0%{opacity:0;transform:scaleX(0)} 70.4444%{opacity:0;transform:scaleX(0)} 70.5556%{opacity:1;transform:scaleX(0)} 71.1111%{opacity:1;transform:scaleX(1)} 71.8889%{opacity:1;transform:scaleX(1)} 72.2222%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes cab330b{0%{opacity:0;width:0} 70.4444%{opacity:0;width:0} 70.5556%{opacity:1;width:0} 71.1111%{opacity:1;width:387px} 71.8889%{opacity:1;width:387px} 72.2222%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .fdb38b{animation:fdb38b 180s linear infinite}
-  @keyframes fdb38b{0%{opacity:0;transform:scaleX(0)} 37.1111%{opacity:0;transform:scaleX(0)} 37.2222%{opacity:1;transform:scaleX(0)} 37.7778%{opacity:1;transform:scaleX(1)} 38.5556%{opacity:1;transform:scaleX(1)} 38.8889%{opacity:0;transform:scaleX(0)} 53.7778%{opacity:0;transform:scaleX(0)} 53.8889%{opacity:1;transform:scaleX(0)} 54.4444%{opacity:1;transform:scaleX(1)} 55.2222%{opacity:1;transform:scaleX(1)} 55.5556%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes fdb38b{0%{opacity:0;width:0} 37.1111%{opacity:0;width:0} 37.2222%{opacity:1;width:0} 37.7778%{opacity:1;width:357px} 38.5556%{opacity:1;width:357px} 38.8889%{opacity:0;width:0} 53.7778%{opacity:0;width:0} 53.8889%{opacity:1;width:0} 54.4444%{opacity:1;width:357px} 55.2222%{opacity:1;width:357px} 55.5556%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .fdb330b{animation:fdb330b 180s linear infinite}
-  @keyframes fdb330b{0%{opacity:0;transform:scaleX(0)} 92.6667%{opacity:0;transform:scaleX(0)} 92.7778%{opacity:1;transform:scaleX(0)} 93.3333%{opacity:1;transform:scaleX(1)} 94.1111%{opacity:1;transform:scaleX(1)} 94.4444%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes fdb330b{0%{opacity:0;width:0} 92.6667%{opacity:0;width:0} 92.7778%{opacity:1;width:0} 93.3333%{opacity:1;width:357px} 94.1111%{opacity:1;width:357px} 94.4444%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .gcb38b{animation:gcb38b 180s linear infinite}
-  @keyframes gcb38b{0%{opacity:0;transform:scaleX(0)} 42.6667%{opacity:0;transform:scaleX(0)} 42.7778%{opacity:1;transform:scaleX(0)} 43.3333%{opacity:1;transform:scaleX(1)} 44.1111%{opacity:1;transform:scaleX(1)} 44.4444%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes gcb38b{0%{opacity:0;width:0} 42.6667%{opacity:0;width:0} 42.7778%{opacity:1;width:0} 43.3333%{opacity:1;width:344px} 44.1111%{opacity:1;width:344px} 44.4444%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .gcb330b{animation:gcb330b 180s linear infinite}
-  @keyframes gcb330b{0%{opacity:0;transform:scaleX(0)} 81.5556%{opacity:0;transform:scaleX(0)} 81.6667%{opacity:1;transform:scaleX(0)} 82.2222%{opacity:1;transform:scaleX(1)} 83%{opacity:1;transform:scaleX(1)} 83.3333%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes gcb330b{0%{opacity:0;width:0} 81.5556%{opacity:0;width:0} 81.6667%{opacity:1;width:0} 82.2222%{opacity:1;width:348px} 83%{opacity:1;width:348px} 83.3333%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .hdb33b{animation:hdb33b 180s linear infinite}
-  @keyframes hdb33b{0%{opacity:0;transform:scaleX(0)} 14.8889%{opacity:0;transform:scaleX(0)} 15%{opacity:1;transform:scaleX(0)} 15.5556%{opacity:1;transform:scaleX(1)} 16.3333%{opacity:1;transform:scaleX(1)} 16.6667%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes hdb33b{0%{opacity:0;width:0} 14.8889%{opacity:0;width:0} 15%{opacity:1;width:0} 15.5556%{opacity:1;width:305px} 16.3333%{opacity:1;width:305px} 16.6667%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .hdb330b{animation:hdb330b 180s linear infinite}
-  @keyframes hdb330b{0%{opacity:0;transform:scaleX(0)} 76%{opacity:0;transform:scaleX(0)} 76.1111%{opacity:1;transform:scaleX(0)} 76.6667%{opacity:1;transform:scaleX(1)} 77.4444%{opacity:1;transform:scaleX(1)} 77.7778%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes hdb330b{0%{opacity:0;width:0} 76%{opacity:0;width:0} 76.1111%{opacity:1;width:0} 76.6667%{opacity:1;width:357px} 77.4444%{opacity:1;width:357px} 77.7778%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .qcb33b{animation:qcb33b 180s linear infinite}
-  @keyframes qcb33b{0%{opacity:0;transform:scaleX(0)} 9.3333%{opacity:0;transform:scaleX(0)} 9.4444%{opacity:1;transform:scaleX(0)} 10%{opacity:1;transform:scaleX(1)} 10.7778%{opacity:1;transform:scaleX(1)} 11.1111%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes qcb33b{0%{opacity:0;width:0} 9.3333%{opacity:0;width:0} 9.4444%{opacity:1;width:0} 10%{opacity:1;width:408px} 10.7778%{opacity:1;width:408px} 11.1111%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .qcb38b{animation:qcb38b 180s linear infinite}
-  @keyframes qcb38b{0%{opacity:0;transform:scaleX(0)} 64.8889%{opacity:0;transform:scaleX(0)} 65%{opacity:1;transform:scaleX(0)} 65.5556%{opacity:1;transform:scaleX(1)} 66.3333%{opacity:1;transform:scaleX(1)} 66.6667%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes qcb38b{0%{opacity:0;width:0} 64.8889%{opacity:0;width:0} 65%{opacity:1;width:0} 65.5556%{opacity:1;width:413px} 66.3333%{opacity:1;width:413px} 66.6667%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .qrb33b{animation:qrb33b 180s linear infinite}
-  @keyframes qrb33b{0%{opacity:0;transform:scaleX(0)} 20.4444%{opacity:0;transform:scaleX(0)} 20.5556%{opacity:1;transform:scaleX(0)} 21.1111%{opacity:1;transform:scaleX(1)} 21.8889%{opacity:1;transform:scaleX(1)} 22.2222%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes qrb33b{0%{opacity:0;width:0} 20.4444%{opacity:0;width:0} 20.5556%{opacity:1;width:0} 21.1111%{opacity:1;width:370px} 21.8889%{opacity:1;width:370px} 22.2222%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .qrb330b{animation:qrb330b 180s linear infinite}
-  @keyframes qrb330b{0%{opacity:0;transform:scaleX(0)} 87.1111%{opacity:0;transform:scaleX(0)} 87.2222%{opacity:1;transform:scaleX(0)} 87.7778%{opacity:1;transform:scaleX(1)} 88.5556%{opacity:1;transform:scaleX(1)} 88.8889%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes qrb330b{0%{opacity:0;width:0} 87.1111%{opacity:0;width:0} 87.2222%{opacity:1;width:0} 87.7778%{opacity:1;width:374px} 88.5556%{opacity:1;width:374px} 88.8889%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .rcb33b{animation:rcb33b 180s linear infinite}
-  @keyframes rcb33b{0%{opacity:0;transform:scaleX(0)} 26%{opacity:0;transform:scaleX(0)} 26.1111%{opacity:1;transform:scaleX(0)} 26.6667%{opacity:1;transform:scaleX(1)} 27.4444%{opacity:1;transform:scaleX(1)} 27.7778%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes rcb33b{0%{opacity:0;width:0} 26%{opacity:0;width:0} 26.1111%{opacity:1;width:0} 26.6667%{opacity:1;width:331px} 27.4444%{opacity:1;width:331px} 27.7778%{opacity:0;width:0} 100%{opacity:0;width:0}}
   .rcb38b{animation:rcb38b 180s linear infinite}
-  @keyframes rcb38b{0%{opacity:0;transform:scaleX(0)} 48.2222%{opacity:0;transform:scaleX(0)} 48.3333%{opacity:1;transform:scaleX(0)} 48.8889%{opacity:1;transform:scaleX(1)} 49.6667%{opacity:1;transform:scaleX(1)} 50%{opacity:0;transform:scaleX(0)} 100%{opacity:0;transform:scaleX(0)}}
+  @keyframes rcb38b{0%{opacity:0;width:0} 48.2222%{opacity:0;width:0} 48.3333%{opacity:1;width:0} 48.8889%{opacity:1;width:331px} 49.6667%{opacity:1;width:331px} 50%{opacity:0;width:0} 100%{opacity:0;width:0}}
 
   /* Improved pct texts */
   .ani03b{animation:ani03b 180s linear infinite}
@@ -747,7 +746,7 @@
 <rect width="820" height="380" rx="10" fill="none" stroke="#e0e0e0" stroke-width="1"/>
 
 <!-- LEFT PANEL -->
-<text x="137" y="28" text-anchor="middle" font-size="10" fill="#8d8d8d" letter-spacing="1">YOUR CUSTOM MODEL</text>
+<text x="137" y="28" text-anchor="middle" font-size="10" fill="#8d8d8d" letter-spacing="1">CUSTOM GRANITE SWITCH MODEL</text>
 
 <g class="bm3b">
   <rect x="22" y="248" width="230" height="106" rx="12" fill="#0F62FE"/>
@@ -943,11 +942,11 @@
 <rect class="anv0" x="310" y="274" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="anv0" x="310" y="294" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="anx03b" x="310" y="274" width="254" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="anb03b bar" x="310" y="294" width="391" height="16" rx="4" fill="#009D9A"/>
+<rect class="anb03b" x="310" y="294" width="391" height="16" rx="4" fill="#009D9A"/>
 <text class="anp03b" x="750" y="286" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">59%</text>
 <text class="ani03b" x="750" y="306" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">91%</text>
 <rect class="anx030b" x="310" y="274" width="280" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="anb030b bar" x="310" y="294" width="396" height="16" rx="4" fill="#009D9A"/>
+<rect class="anb030b" x="310" y="294" width="396" height="16" rx="4" fill="#009D9A"/>
 <text class="anp030b" x="750" y="286" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">65%</text>
 <text class="ani030b" x="750" y="306" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">92%</text>
 <text class="anv0" x="310" y="324" font-size="11" font-weight="600" fill="#161616">Answerability</text>
@@ -959,11 +958,11 @@
 <rect class="cav0" x="310" y="274" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="cav0" x="310" y="294" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="cax08b" x="310" y="274" width="116" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="cab08b bar" x="310" y="294" width="413" height="16" rx="4" fill="#8A3FFC"/>
+<rect class="cab08b" x="310" y="294" width="413" height="16" rx="4" fill="#8A3FFC"/>
 <text class="cap08b" x="750" y="286" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">27%</text>
 <text class="cai08b" x="750" y="306" text-anchor="end" font-size="10" font-weight="700" fill="#8A3FFC">96%</text>
 <rect class="cax030b" x="310" y="274" width="280" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="cab030b bar" x="310" y="294" width="387" height="16" rx="4" fill="#8A3FFC"/>
+<rect class="cab030b" x="310" y="294" width="387" height="16" rx="4" fill="#8A3FFC"/>
 <text class="cap030b" x="750" y="286" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">65%</text>
 <text class="cai030b" x="750" y="306" text-anchor="end" font-size="10" font-weight="700" fill="#8A3FFC">90%</text>
 <text class="cav0" x="310" y="324" font-size="11" font-weight="600" fill="#161616">Context Attr.</text>
@@ -975,11 +974,11 @@
 <rect class="fdv0" x="310" y="274" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="fdv0" x="310" y="294" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="fdx03b" x="310" y="274" width="34" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="fdb03b bar" x="310" y="294" width="348" height="16" rx="4" fill="#F1C21B"/>
+<rect class="fdb03b" x="310" y="294" width="348" height="16" rx="4" fill="#F1C21B"/>
 <text class="fdp03b" x="750" y="286" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">8%</text>
 <text class="fdi03b" x="750" y="306" text-anchor="end" font-size="10" font-weight="700" fill="#B45309">81%</text>
 <rect class="fdx08b" x="310" y="274" width="108" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="fdb08b bar" x="310" y="294" width="357" height="16" rx="4" fill="#F1C21B"/>
+<rect class="fdb08b" x="310" y="294" width="357" height="16" rx="4" fill="#F1C21B"/>
 <text class="fdp08b" x="750" y="286" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">25%</text>
 <text class="fdi08b" x="750" y="306" text-anchor="end" font-size="10" font-weight="700" fill="#B45309">83%</text>
 <text class="fdv0" x="310" y="324" font-size="11" font-weight="600" fill="#161616">Factuality Det.</text>
@@ -991,15 +990,15 @@
 <rect class="gcv0" x="310" y="274" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="gcv0" x="310" y="294" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="gcx03b" x="310" y="274" width="4" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="gcb03b bar" x="310" y="294" width="335" height="16" rx="4" fill="#F1C21B"/>
+<rect class="gcb03b" x="310" y="294" width="335" height="16" rx="4" fill="#F1C21B"/>
 <text class="gcp03b" x="750" y="286" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">1%</text>
 <text class="gci03b" x="750" y="306" text-anchor="end" font-size="10" font-weight="700" fill="#B45309">78%</text>
 <rect class="gcx08b" x="310" y="274" width="288" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="gcb08b bar" x="310" y="294" width="344" height="16" rx="4" fill="#F1C21B"/>
+<rect class="gcb08b" x="310" y="294" width="344" height="16" rx="4" fill="#F1C21B"/>
 <text class="gcp08b" x="750" y="286" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">67%</text>
 <text class="gci08b" x="750" y="306" text-anchor="end" font-size="10" font-weight="700" fill="#B45309">80%</text>
 <rect class="gcx030b" x="310" y="274" width="297" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="gcb030b bar" x="310" y="294" width="348" height="16" rx="4" fill="#F1C21B"/>
+<rect class="gcb030b" x="310" y="294" width="348" height="16" rx="4" fill="#F1C21B"/>
 <text class="gcp030b" x="750" y="286" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">69%</text>
 <text class="gci030b" x="750" y="306" text-anchor="end" font-size="10" font-weight="700" fill="#B45309">81%</text>
 <text class="gcv0" x="310" y="324" font-size="11" font-weight="600" fill="#161616">Guardian Core</text>
@@ -1011,15 +1010,15 @@
 <rect class="hdv0" x="310" y="274" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="hdv0" x="310" y="294" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="hdx03b" x="310" y="274" width="181" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="hdb03b bar" x="310" y="294" width="305" height="16" rx="4" fill="#009D9A"/>
+<rect class="hdb03b" x="310" y="294" width="305" height="16" rx="4" fill="#009D9A"/>
 <text class="hdp03b" x="750" y="286" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">42%</text>
 <text class="hdi03b" x="750" y="306" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">71%</text>
 <rect class="hdx08b" x="310" y="274" width="194" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="hdb08b bar" x="310" y="294" width="318" height="16" rx="4" fill="#009D9A"/>
+<rect class="hdb08b" x="310" y="294" width="318" height="16" rx="4" fill="#009D9A"/>
 <text class="hdp08b" x="750" y="286" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">45%</text>
 <text class="hdi08b" x="750" y="306" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">74%</text>
 <rect class="hdx030b" x="310" y="274" width="232" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="hdb030b bar" x="310" y="294" width="357" height="16" rx="4" fill="#009D9A"/>
+<rect class="hdb030b" x="310" y="294" width="357" height="16" rx="4" fill="#009D9A"/>
 <text class="hdp030b" x="750" y="286" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">54%</text>
 <text class="hdi030b" x="750" y="306" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">83%</text>
 <text class="hdv0" x="310" y="324" font-size="11" font-weight="600" fill="#161616">Hallucination Det.</text>
@@ -1031,7 +1030,7 @@
 <rect class="qcv0" x="310" y="274" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="qcv0" x="310" y="294" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="qcx03b" x="310" y="274" width="280" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="qcb03b bar" x="310" y="294" width="408" height="16" rx="4" fill="#009D9A"/>
+<rect class="qcb03b" x="310" y="294" width="408" height="16" rx="4" fill="#009D9A"/>
 <text class="qcp03b" x="750" y="286" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">65%</text>
 <text class="qci03b" x="750" y="306" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">95%</text>
 <text class="qcv0" x="310" y="324" font-size="11" font-weight="600" fill="#161616">Query Clarification</text>
@@ -1043,11 +1042,11 @@
 <rect class="qrv0" x="310" y="274" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="qrv0" x="310" y="294" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="qrx08b" x="310" y="274" width="288" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="qrb08b bar" x="310" y="294" width="361" height="16" rx="4" fill="#009D9A"/>
+<rect class="qrb08b" x="310" y="294" width="361" height="16" rx="4" fill="#009D9A"/>
 <text class="qrp08b" x="750" y="286" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">67%</text>
 <text class="qri08b" x="750" y="306" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">84%</text>
 <rect class="qrx030b" x="310" y="274" width="275" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="qrb030b bar" x="310" y="294" width="374" height="16" rx="4" fill="#009D9A"/>
+<rect class="qrb030b" x="310" y="294" width="374" height="16" rx="4" fill="#009D9A"/>
 <text class="qrp030b" x="750" y="286" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">64%</text>
 <text class="qri030b" x="750" y="306" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">87%</text>
 <text class="qrv0" x="310" y="324" font-size="11" font-weight="600" fill="#161616">Query Rewrite</text>
@@ -1059,15 +1058,15 @@
 <rect class="rcv0" x="310" y="274" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="rcv0" x="310" y="294" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="rcx03b" x="310" y="274" width="219" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="rcb03b bar" x="310" y="294" width="331" height="16" rx="4" fill="#8A3FFC"/>
+<rect class="rcb03b" x="310" y="294" width="331" height="16" rx="4" fill="#8A3FFC"/>
 <text class="rcp03b" x="750" y="286" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">51%</text>
 <text class="rci03b" x="750" y="306" text-anchor="end" font-size="10" font-weight="700" fill="#8A3FFC">77%</text>
 <rect class="rcx08b" x="310" y="274" width="232" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="rcb08b bar" x="310" y="294" width="331" height="16" rx="4" fill="#8A3FFC"/>
+<rect class="rcb08b" x="310" y="294" width="331" height="16" rx="4" fill="#8A3FFC"/>
 <text class="rcp08b" x="750" y="286" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">54%</text>
 <text class="rci08b" x="750" y="306" text-anchor="end" font-size="10" font-weight="700" fill="#8A3FFC">77%</text>
 <rect class="rcx030b" x="310" y="274" width="245" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="rcb030b bar" x="310" y="294" width="335" height="16" rx="4" fill="#8A3FFC"/>
+<rect class="rcb030b" x="310" y="294" width="335" height="16" rx="4" fill="#8A3FFC"/>
 <text class="rcp030b" x="750" y="286" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">57%</text>
 <text class="rci030b" x="750" y="306" text-anchor="end" font-size="10" font-weight="700" fill="#8A3FFC">78%</text>
 <text class="rcv0" x="310" y="324" font-size="11" font-weight="600" fill="#161616">Req. Check</text>
@@ -1079,15 +1078,15 @@
 <rect class="anv1" x="310" y="200" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="anv1" x="310" y="220" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="anx13b" x="310" y="200" width="254" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="anb13b bar" x="310" y="220" width="391" height="16" rx="4" fill="#009D9A"/>
+<rect class="anb13b" x="310" y="220" width="391" height="16" rx="4" fill="#009D9A"/>
 <text class="anp13b" x="750" y="212" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">59%</text>
 <text class="ani13b" x="750" y="232" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">91%</text>
 <rect class="anx18b" x="310" y="200" width="284" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="anb18b bar" x="310" y="220" width="391" height="16" rx="4" fill="#009D9A"/>
+<rect class="anb18b" x="310" y="220" width="391" height="16" rx="4" fill="#009D9A"/>
 <text class="anp18b" x="750" y="212" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">66%</text>
 <text class="ani18b" x="750" y="232" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">91%</text>
 <rect class="anx130b" x="310" y="200" width="280" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="anb130b bar" x="310" y="220" width="396" height="16" rx="4" fill="#009D9A"/>
+<rect class="anb130b" x="310" y="220" width="396" height="16" rx="4" fill="#009D9A"/>
 <text class="anp130b" x="750" y="212" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">65%</text>
 <text class="ani130b" x="750" y="232" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">92%</text>
 <text class="anv1" x="310" y="250" font-size="11" font-weight="600" fill="#161616">Answerability</text>
@@ -1099,11 +1098,11 @@
 <rect class="cav1" x="310" y="200" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="cav1" x="310" y="220" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="cax13b" x="310" y="200" width="146" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="cab13b bar" x="310" y="220" width="396" height="16" rx="4" fill="#8A3FFC"/>
+<rect class="cab13b" x="310" y="220" width="396" height="16" rx="4" fill="#8A3FFC"/>
 <text class="cap13b" x="750" y="212" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">34%</text>
 <text class="cai13b" x="750" y="232" text-anchor="end" font-size="10" font-weight="700" fill="#8A3FFC">92%</text>
 <rect class="cax18b" x="310" y="200" width="116" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="cab18b bar" x="310" y="220" width="413" height="16" rx="4" fill="#8A3FFC"/>
+<rect class="cab18b" x="310" y="220" width="413" height="16" rx="4" fill="#8A3FFC"/>
 <text class="cap18b" x="750" y="212" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">27%</text>
 <text class="cai18b" x="750" y="232" text-anchor="end" font-size="10" font-weight="700" fill="#8A3FFC">96%</text>
 <text class="cav1" x="310" y="250" font-size="11" font-weight="600" fill="#161616">Context Attr.</text>
@@ -1115,11 +1114,11 @@
 <rect class="fdv1" x="310" y="200" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="fdv1" x="310" y="220" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="fdx13b" x="310" y="200" width="34" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="fdb13b bar" x="310" y="220" width="348" height="16" rx="4" fill="#F1C21B"/>
+<rect class="fdb13b" x="310" y="220" width="348" height="16" rx="4" fill="#F1C21B"/>
 <text class="fdp13b" x="750" y="212" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">8%</text>
 <text class="fdi13b" x="750" y="232" text-anchor="end" font-size="10" font-weight="700" fill="#B45309">81%</text>
 <rect class="fdx130b" x="310" y="200" width="219" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="fdb130b bar" x="310" y="220" width="357" height="16" rx="4" fill="#F1C21B"/>
+<rect class="fdb130b" x="310" y="220" width="357" height="16" rx="4" fill="#F1C21B"/>
 <text class="fdp130b" x="750" y="212" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">51%</text>
 <text class="fdi130b" x="750" y="232" text-anchor="end" font-size="10" font-weight="700" fill="#B45309">83%</text>
 <text class="fdv1" x="310" y="250" font-size="11" font-weight="600" fill="#161616">Factuality Det.</text>
@@ -1131,15 +1130,15 @@
 <rect class="gcv1" x="310" y="200" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="gcv1" x="310" y="220" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="gcx13b" x="310" y="200" width="4" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="gcb13b bar" x="310" y="220" width="335" height="16" rx="4" fill="#F1C21B"/>
+<rect class="gcb13b" x="310" y="220" width="335" height="16" rx="4" fill="#F1C21B"/>
 <text class="gcp13b" x="750" y="212" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">1%</text>
 <text class="gci13b" x="750" y="232" text-anchor="end" font-size="10" font-weight="700" fill="#B45309">78%</text>
 <rect class="gcx18b" x="310" y="200" width="288" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="gcb18b bar" x="310" y="220" width="344" height="16" rx="4" fill="#F1C21B"/>
+<rect class="gcb18b" x="310" y="220" width="344" height="16" rx="4" fill="#F1C21B"/>
 <text class="gcp18b" x="750" y="212" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">67%</text>
 <text class="gci18b" x="750" y="232" text-anchor="end" font-size="10" font-weight="700" fill="#B45309">80%</text>
 <rect class="gcx130b" x="310" y="200" width="297" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="gcb130b bar" x="310" y="220" width="348" height="16" rx="4" fill="#F1C21B"/>
+<rect class="gcb130b" x="310" y="220" width="348" height="16" rx="4" fill="#F1C21B"/>
 <text class="gcp130b" x="750" y="212" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">69%</text>
 <text class="gci130b" x="750" y="232" text-anchor="end" font-size="10" font-weight="700" fill="#B45309">81%</text>
 <text class="gcv1" x="310" y="250" font-size="11" font-weight="600" fill="#161616">Guardian Core</text>
@@ -1151,11 +1150,11 @@
 <rect class="hdv1" x="310" y="200" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="hdv1" x="310" y="220" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="hdx18b" x="310" y="200" width="194" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="hdb18b bar" x="310" y="220" width="318" height="16" rx="4" fill="#009D9A"/>
+<rect class="hdb18b" x="310" y="220" width="318" height="16" rx="4" fill="#009D9A"/>
 <text class="hdp18b" x="750" y="212" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">45%</text>
 <text class="hdi18b" x="750" y="232" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">74%</text>
 <rect class="hdx130b" x="310" y="200" width="232" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="hdb130b bar" x="310" y="220" width="357" height="16" rx="4" fill="#009D9A"/>
+<rect class="hdb130b" x="310" y="220" width="357" height="16" rx="4" fill="#009D9A"/>
 <text class="hdp130b" x="750" y="212" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">54%</text>
 <text class="hdi130b" x="750" y="232" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">83%</text>
 <text class="hdv1" x="310" y="250" font-size="11" font-weight="600" fill="#161616">Hallucination Det.</text>
@@ -1167,11 +1166,11 @@
 <rect class="qcv1" x="310" y="200" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="qcv1" x="310" y="220" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="qcx18b" x="310" y="200" width="206" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="qcb18b bar" x="310" y="220" width="413" height="16" rx="4" fill="#009D9A"/>
+<rect class="qcb18b" x="310" y="220" width="413" height="16" rx="4" fill="#009D9A"/>
 <text class="qcp18b" x="750" y="212" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">48%</text>
 <text class="qci18b" x="750" y="232" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">96%</text>
 <rect class="qcx130b" x="310" y="200" width="327" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="qcb130b bar" x="310" y="220" width="408" height="16" rx="4" fill="#009D9A"/>
+<rect class="qcb130b" x="310" y="220" width="408" height="16" rx="4" fill="#009D9A"/>
 <text class="qcp130b" x="750" y="212" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">76%</text>
 <text class="qci130b" x="750" y="232" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">95%</text>
 <text class="qcv1" x="310" y="250" font-size="11" font-weight="600" fill="#161616">Query Clarification</text>
@@ -1183,11 +1182,11 @@
 <rect class="qrv1" x="310" y="200" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="qrv1" x="310" y="220" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="qrx13b" x="310" y="200" width="262" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="qrb13b bar" x="310" y="220" width="370" height="16" rx="4" fill="#009D9A"/>
+<rect class="qrb13b" x="310" y="220" width="370" height="16" rx="4" fill="#009D9A"/>
 <text class="qrp13b" x="750" y="212" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">61%</text>
 <text class="qri13b" x="750" y="232" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">86%</text>
 <rect class="qrx18b" x="310" y="200" width="288" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="qrb18b bar" x="310" y="220" width="361" height="16" rx="4" fill="#009D9A"/>
+<rect class="qrb18b" x="310" y="220" width="361" height="16" rx="4" fill="#009D9A"/>
 <text class="qrp18b" x="750" y="212" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">67%</text>
 <text class="qri18b" x="750" y="232" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">84%</text>
 <text class="qrv1" x="310" y="250" font-size="11" font-weight="600" fill="#161616">Query Rewrite</text>
@@ -1199,11 +1198,11 @@
 <rect class="rcv1" x="310" y="200" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="rcv1" x="310" y="220" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="rcx13b" x="310" y="200" width="219" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="rcb13b bar" x="310" y="220" width="331" height="16" rx="4" fill="#8A3FFC"/>
+<rect class="rcb13b" x="310" y="220" width="331" height="16" rx="4" fill="#8A3FFC"/>
 <text class="rcp13b" x="750" y="212" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">51%</text>
 <text class="rci13b" x="750" y="232" text-anchor="end" font-size="10" font-weight="700" fill="#8A3FFC">77%</text>
 <rect class="rcx130b" x="310" y="200" width="245" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="rcb130b bar" x="310" y="220" width="335" height="16" rx="4" fill="#8A3FFC"/>
+<rect class="rcb130b" x="310" y="220" width="335" height="16" rx="4" fill="#8A3FFC"/>
 <text class="rcp130b" x="750" y="212" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">57%</text>
 <text class="rci130b" x="750" y="232" text-anchor="end" font-size="10" font-weight="700" fill="#8A3FFC">78%</text>
 <text class="rcv1" x="310" y="250" font-size="11" font-weight="600" fill="#161616">Req. Check</text>
@@ -1215,11 +1214,11 @@
 <rect class="anv2" x="310" y="126" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="anv2" x="310" y="146" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="anx28b" x="310" y="126" width="284" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="anb28b bar" x="310" y="146" width="391" height="16" rx="4" fill="#009D9A"/>
+<rect class="anb28b" x="310" y="146" width="391" height="16" rx="4" fill="#009D9A"/>
 <text class="anp28b" x="750" y="138" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">66%</text>
 <text class="ani28b" x="750" y="158" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">91%</text>
 <rect class="anx230b" x="310" y="126" width="280" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="anb230b bar" x="310" y="146" width="396" height="16" rx="4" fill="#009D9A"/>
+<rect class="anb230b" x="310" y="146" width="396" height="16" rx="4" fill="#009D9A"/>
 <text class="anp230b" x="750" y="138" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">65%</text>
 <text class="ani230b" x="750" y="158" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">92%</text>
 <text class="anv2" x="310" y="176" font-size="11" font-weight="600" fill="#161616">Answerability</text>
@@ -1231,11 +1230,11 @@
 <rect class="cav2" x="310" y="126" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="cav2" x="310" y="146" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="cax23b" x="310" y="126" width="146" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="cab23b bar" x="310" y="146" width="396" height="16" rx="4" fill="#8A3FFC"/>
+<rect class="cab23b" x="310" y="146" width="396" height="16" rx="4" fill="#8A3FFC"/>
 <text class="cap23b" x="750" y="138" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">34%</text>
 <text class="cai23b" x="750" y="158" text-anchor="end" font-size="10" font-weight="700" fill="#8A3FFC">92%</text>
 <rect class="cax28b" x="310" y="126" width="116" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="cab28b bar" x="310" y="146" width="413" height="16" rx="4" fill="#8A3FFC"/>
+<rect class="cab28b" x="310" y="146" width="413" height="16" rx="4" fill="#8A3FFC"/>
 <text class="cap28b" x="750" y="138" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">27%</text>
 <text class="cai28b" x="750" y="158" text-anchor="end" font-size="10" font-weight="700" fill="#8A3FFC">96%</text>
 <text class="cav2" x="310" y="176" font-size="11" font-weight="600" fill="#161616">Context Attr.</text>
@@ -1247,15 +1246,15 @@
 <rect class="fdv2" x="310" y="126" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="fdv2" x="310" y="146" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="fdx23b" x="310" y="126" width="34" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="fdb23b bar" x="310" y="146" width="348" height="16" rx="4" fill="#F1C21B"/>
+<rect class="fdb23b" x="310" y="146" width="348" height="16" rx="4" fill="#F1C21B"/>
 <text class="fdp23b" x="750" y="138" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">8%</text>
 <text class="fdi23b" x="750" y="158" text-anchor="end" font-size="10" font-weight="700" fill="#B45309">81%</text>
 <rect class="fdx28b" x="310" y="126" width="108" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="fdb28b bar" x="310" y="146" width="357" height="16" rx="4" fill="#F1C21B"/>
+<rect class="fdb28b" x="310" y="146" width="357" height="16" rx="4" fill="#F1C21B"/>
 <text class="fdp28b" x="750" y="138" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">25%</text>
 <text class="fdi28b" x="750" y="158" text-anchor="end" font-size="10" font-weight="700" fill="#B45309">83%</text>
 <rect class="fdx230b" x="310" y="126" width="219" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="fdb230b bar" x="310" y="146" width="357" height="16" rx="4" fill="#F1C21B"/>
+<rect class="fdb230b" x="310" y="146" width="357" height="16" rx="4" fill="#F1C21B"/>
 <text class="fdp230b" x="750" y="138" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">51%</text>
 <text class="fdi230b" x="750" y="158" text-anchor="end" font-size="10" font-weight="700" fill="#B45309">83%</text>
 <text class="fdv2" x="310" y="176" font-size="11" font-weight="600" fill="#161616">Factuality Det.</text>
@@ -1267,11 +1266,11 @@
 <rect class="gcv2" x="310" y="126" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="gcv2" x="310" y="146" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="gcx23b" x="310" y="126" width="4" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="gcb23b bar" x="310" y="146" width="335" height="16" rx="4" fill="#F1C21B"/>
+<rect class="gcb23b" x="310" y="146" width="335" height="16" rx="4" fill="#F1C21B"/>
 <text class="gcp23b" x="750" y="138" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">1%</text>
 <text class="gci23b" x="750" y="158" text-anchor="end" font-size="10" font-weight="700" fill="#B45309">78%</text>
 <rect class="gcx230b" x="310" y="126" width="297" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="gcb230b bar" x="310" y="146" width="348" height="16" rx="4" fill="#F1C21B"/>
+<rect class="gcb230b" x="310" y="146" width="348" height="16" rx="4" fill="#F1C21B"/>
 <text class="gcp230b" x="750" y="138" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">69%</text>
 <text class="gci230b" x="750" y="158" text-anchor="end" font-size="10" font-weight="700" fill="#B45309">81%</text>
 <text class="gcv2" x="310" y="176" font-size="11" font-weight="600" fill="#161616">Guardian Core</text>
@@ -1283,11 +1282,11 @@
 <rect class="hdv2" x="310" y="126" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="hdv2" x="310" y="146" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="hdx23b" x="310" y="126" width="181" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="hdb23b bar" x="310" y="146" width="305" height="16" rx="4" fill="#009D9A"/>
+<rect class="hdb23b" x="310" y="146" width="305" height="16" rx="4" fill="#009D9A"/>
 <text class="hdp23b" x="750" y="138" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">42%</text>
 <text class="hdi23b" x="750" y="158" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">71%</text>
 <rect class="hdx230b" x="310" y="126" width="232" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="hdb230b bar" x="310" y="146" width="357" height="16" rx="4" fill="#009D9A"/>
+<rect class="hdb230b" x="310" y="146" width="357" height="16" rx="4" fill="#009D9A"/>
 <text class="hdp230b" x="750" y="138" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">54%</text>
 <text class="hdi230b" x="750" y="158" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">83%</text>
 <text class="hdv2" x="310" y="176" font-size="11" font-weight="600" fill="#161616">Hallucination Det.</text>
@@ -1299,11 +1298,11 @@
 <rect class="qcv2" x="310" y="126" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="qcv2" x="310" y="146" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="qcx28b" x="310" y="126" width="206" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="qcb28b bar" x="310" y="146" width="413" height="16" rx="4" fill="#009D9A"/>
+<rect class="qcb28b" x="310" y="146" width="413" height="16" rx="4" fill="#009D9A"/>
 <text class="qcp28b" x="750" y="138" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">48%</text>
 <text class="qci28b" x="750" y="158" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">96%</text>
 <rect class="qcx230b" x="310" y="126" width="327" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="qcb230b bar" x="310" y="146" width="408" height="16" rx="4" fill="#009D9A"/>
+<rect class="qcb230b" x="310" y="146" width="408" height="16" rx="4" fill="#009D9A"/>
 <text class="qcp230b" x="750" y="138" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">76%</text>
 <text class="qci230b" x="750" y="158" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">95%</text>
 <text class="qcv2" x="310" y="176" font-size="11" font-weight="600" fill="#161616">Query Clarification</text>
@@ -1315,7 +1314,7 @@
 <rect class="qrv2" x="310" y="126" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="qrv2" x="310" y="146" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="qrx23b" x="310" y="126" width="262" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="qrb23b bar" x="310" y="146" width="370" height="16" rx="4" fill="#009D9A"/>
+<rect class="qrb23b" x="310" y="146" width="370" height="16" rx="4" fill="#009D9A"/>
 <text class="qrp23b" x="750" y="138" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">61%</text>
 <text class="qri23b" x="750" y="158" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">86%</text>
 <text class="qrv2" x="310" y="176" font-size="11" font-weight="600" fill="#161616">Query Rewrite</text>
@@ -1327,15 +1326,15 @@
 <rect class="rcv2" x="310" y="126" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="rcv2" x="310" y="146" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="rcx23b" x="310" y="126" width="219" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="rcb23b bar" x="310" y="146" width="331" height="16" rx="4" fill="#8A3FFC"/>
+<rect class="rcb23b" x="310" y="146" width="331" height="16" rx="4" fill="#8A3FFC"/>
 <text class="rcp23b" x="750" y="138" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">51%</text>
 <text class="rci23b" x="750" y="158" text-anchor="end" font-size="10" font-weight="700" fill="#8A3FFC">77%</text>
 <rect class="rcx28b" x="310" y="126" width="232" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="rcb28b bar" x="310" y="146" width="331" height="16" rx="4" fill="#8A3FFC"/>
+<rect class="rcb28b" x="310" y="146" width="331" height="16" rx="4" fill="#8A3FFC"/>
 <text class="rcp28b" x="750" y="138" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">54%</text>
 <text class="rci28b" x="750" y="158" text-anchor="end" font-size="10" font-weight="700" fill="#8A3FFC">77%</text>
 <rect class="rcx230b" x="310" y="126" width="245" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="rcb230b bar" x="310" y="146" width="335" height="16" rx="4" fill="#8A3FFC"/>
+<rect class="rcb230b" x="310" y="146" width="335" height="16" rx="4" fill="#8A3FFC"/>
 <text class="rcp230b" x="750" y="138" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">57%</text>
 <text class="rci230b" x="750" y="158" text-anchor="end" font-size="10" font-weight="700" fill="#8A3FFC">78%</text>
 <text class="rcv2" x="310" y="176" font-size="11" font-weight="600" fill="#161616">Req. Check</text>
@@ -1347,15 +1346,15 @@
 <rect class="anv3" x="310" y="52" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="anv3" x="310" y="72" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="anx33b" x="310" y="52" width="254" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="anb33b bar" x="310" y="72" width="391" height="16" rx="4" fill="#009D9A"/>
+<rect class="anb33b" x="310" y="72" width="391" height="16" rx="4" fill="#009D9A"/>
 <text class="anp33b" x="750" y="64" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">59%</text>
 <text class="ani33b" x="750" y="84" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">91%</text>
 <rect class="anx38b" x="310" y="52" width="284" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="anb38b bar" x="310" y="72" width="391" height="16" rx="4" fill="#009D9A"/>
+<rect class="anb38b" x="310" y="72" width="391" height="16" rx="4" fill="#009D9A"/>
 <text class="anp38b" x="750" y="64" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">66%</text>
 <text class="ani38b" x="750" y="84" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">91%</text>
 <rect class="anx330b" x="310" y="52" width="280" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="anb330b bar" x="310" y="72" width="396" height="16" rx="4" fill="#009D9A"/>
+<rect class="anb330b" x="310" y="72" width="396" height="16" rx="4" fill="#009D9A"/>
 <text class="anp330b" x="750" y="64" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">65%</text>
 <text class="ani330b" x="750" y="84" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">92%</text>
 <text class="anv3" x="310" y="102" font-size="11" font-weight="600" fill="#161616">Answerability</text>
@@ -1367,11 +1366,11 @@
 <rect class="cav3" x="310" y="52" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="cav3" x="310" y="72" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="cax33b" x="310" y="52" width="146" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="cab33b bar" x="310" y="72" width="396" height="16" rx="4" fill="#8A3FFC"/>
+<rect class="cab33b" x="310" y="72" width="396" height="16" rx="4" fill="#8A3FFC"/>
 <text class="cap33b" x="750" y="64" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">34%</text>
 <text class="cai33b" x="750" y="84" text-anchor="end" font-size="10" font-weight="700" fill="#8A3FFC">92%</text>
 <rect class="cax330b" x="310" y="52" width="280" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="cab330b bar" x="310" y="72" width="387" height="16" rx="4" fill="#8A3FFC"/>
+<rect class="cab330b" x="310" y="72" width="387" height="16" rx="4" fill="#8A3FFC"/>
 <text class="cap330b" x="750" y="64" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">65%</text>
 <text class="cai330b" x="750" y="84" text-anchor="end" font-size="10" font-weight="700" fill="#8A3FFC">90%</text>
 <text class="cav3" x="310" y="102" font-size="11" font-weight="600" fill="#161616">Context Attr.</text>
@@ -1383,11 +1382,11 @@
 <rect class="fdv3" x="310" y="52" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="fdv3" x="310" y="72" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="fdx38b" x="310" y="52" width="108" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="fdb38b bar" x="310" y="72" width="357" height="16" rx="4" fill="#F1C21B"/>
+<rect class="fdb38b" x="310" y="72" width="357" height="16" rx="4" fill="#F1C21B"/>
 <text class="fdp38b" x="750" y="64" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">25%</text>
 <text class="fdi38b" x="750" y="84" text-anchor="end" font-size="10" font-weight="700" fill="#B45309">83%</text>
 <rect class="fdx330b" x="310" y="52" width="219" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="fdb330b bar" x="310" y="72" width="357" height="16" rx="4" fill="#F1C21B"/>
+<rect class="fdb330b" x="310" y="72" width="357" height="16" rx="4" fill="#F1C21B"/>
 <text class="fdp330b" x="750" y="64" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">51%</text>
 <text class="fdi330b" x="750" y="84" text-anchor="end" font-size="10" font-weight="700" fill="#B45309">83%</text>
 <text class="fdv3" x="310" y="102" font-size="11" font-weight="600" fill="#161616">Factuality Det.</text>
@@ -1399,11 +1398,11 @@
 <rect class="gcv3" x="310" y="52" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="gcv3" x="310" y="72" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="gcx38b" x="310" y="52" width="288" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="gcb38b bar" x="310" y="72" width="344" height="16" rx="4" fill="#F1C21B"/>
+<rect class="gcb38b" x="310" y="72" width="344" height="16" rx="4" fill="#F1C21B"/>
 <text class="gcp38b" x="750" y="64" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">67%</text>
 <text class="gci38b" x="750" y="84" text-anchor="end" font-size="10" font-weight="700" fill="#B45309">80%</text>
 <rect class="gcx330b" x="310" y="52" width="297" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="gcb330b bar" x="310" y="72" width="348" height="16" rx="4" fill="#F1C21B"/>
+<rect class="gcb330b" x="310" y="72" width="348" height="16" rx="4" fill="#F1C21B"/>
 <text class="gcp330b" x="750" y="64" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">69%</text>
 <text class="gci330b" x="750" y="84" text-anchor="end" font-size="10" font-weight="700" fill="#B45309">81%</text>
 <text class="gcv3" x="310" y="102" font-size="11" font-weight="600" fill="#161616">Guardian Core</text>
@@ -1415,11 +1414,11 @@
 <rect class="hdv3" x="310" y="52" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="hdv3" x="310" y="72" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="hdx33b" x="310" y="52" width="181" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="hdb33b bar" x="310" y="72" width="305" height="16" rx="4" fill="#009D9A"/>
+<rect class="hdb33b" x="310" y="72" width="305" height="16" rx="4" fill="#009D9A"/>
 <text class="hdp33b" x="750" y="64" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">42%</text>
 <text class="hdi33b" x="750" y="84" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">71%</text>
 <rect class="hdx330b" x="310" y="52" width="232" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="hdb330b bar" x="310" y="72" width="357" height="16" rx="4" fill="#009D9A"/>
+<rect class="hdb330b" x="310" y="72" width="357" height="16" rx="4" fill="#009D9A"/>
 <text class="hdp330b" x="750" y="64" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">54%</text>
 <text class="hdi330b" x="750" y="84" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">83%</text>
 <text class="hdv3" x="310" y="102" font-size="11" font-weight="600" fill="#161616">Hallucination Det.</text>
@@ -1431,11 +1430,11 @@
 <rect class="qcv3" x="310" y="52" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="qcv3" x="310" y="72" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="qcx33b" x="310" y="52" width="280" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="qcb33b bar" x="310" y="72" width="408" height="16" rx="4" fill="#009D9A"/>
+<rect class="qcb33b" x="310" y="72" width="408" height="16" rx="4" fill="#009D9A"/>
 <text class="qcp33b" x="750" y="64" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">65%</text>
 <text class="qci33b" x="750" y="84" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">95%</text>
 <rect class="qcx38b" x="310" y="52" width="206" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="qcb38b bar" x="310" y="72" width="413" height="16" rx="4" fill="#009D9A"/>
+<rect class="qcb38b" x="310" y="72" width="413" height="16" rx="4" fill="#009D9A"/>
 <text class="qcp38b" x="750" y="64" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">48%</text>
 <text class="qci38b" x="750" y="84" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">96%</text>
 <text class="qcv3" x="310" y="102" font-size="11" font-weight="600" fill="#161616">Query Clarification</text>
@@ -1447,11 +1446,11 @@
 <rect class="qrv3" x="310" y="52" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="qrv3" x="310" y="72" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="qrx33b" x="310" y="52" width="262" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="qrb33b bar" x="310" y="72" width="370" height="16" rx="4" fill="#009D9A"/>
+<rect class="qrb33b" x="310" y="72" width="370" height="16" rx="4" fill="#009D9A"/>
 <text class="qrp33b" x="750" y="64" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">61%</text>
 <text class="qri33b" x="750" y="84" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">86%</text>
 <rect class="qrx330b" x="310" y="52" width="275" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="qrb330b bar" x="310" y="72" width="374" height="16" rx="4" fill="#009D9A"/>
+<rect class="qrb330b" x="310" y="72" width="374" height="16" rx="4" fill="#009D9A"/>
 <text class="qrp330b" x="750" y="64" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">64%</text>
 <text class="qri330b" x="750" y="84" text-anchor="end" font-size="10" font-weight="700" fill="#009D9A">87%</text>
 <text class="qrv3" x="310" y="102" font-size="11" font-weight="600" fill="#161616">Query Rewrite</text>
@@ -1463,11 +1462,11 @@
 <rect class="rcv3" x="310" y="52" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="rcv3" x="310" y="72" width="430" height="16" rx="4" fill="#f4f4f4"/>
 <rect class="rcx33b" x="310" y="52" width="219" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="rcb33b bar" x="310" y="72" width="331" height="16" rx="4" fill="#8A3FFC"/>
+<rect class="rcb33b" x="310" y="72" width="331" height="16" rx="4" fill="#8A3FFC"/>
 <text class="rcp33b" x="750" y="64" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">51%</text>
 <text class="rci33b" x="750" y="84" text-anchor="end" font-size="10" font-weight="700" fill="#8A3FFC">77%</text>
 <rect class="rcx38b" x="310" y="52" width="232" height="16" rx="4" fill="#c6c6c6"/>
-<rect class="rcb38b bar" x="310" y="72" width="331" height="16" rx="4" fill="#8A3FFC"/>
+<rect class="rcb38b" x="310" y="72" width="331" height="16" rx="4" fill="#8A3FFC"/>
 <text class="rcp38b" x="750" y="64" text-anchor="end" font-size="10" font-weight="600" fill="#8d8d8d">54%</text>
 <text class="rci38b" x="750" y="84" text-anchor="end" font-size="10" font-weight="700" fill="#8A3FFC">77%</text>
 <text class="rcv3" x="310" y="102" font-size="11" font-weight="600" fill="#161616">Req. Check</text>
