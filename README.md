@@ -145,6 +145,14 @@ New here? Start with a 5-minute notebook and work your way up:
 
 All notebooks run on Colab. See [tutorials/README.md](tutorials/README.md) for the full list and guided learning paths.
 
+## Ecosystem
+
+Granite Switch is part of a coordinated stack:
+
+- **[Granite Libraries](https://huggingface.co/collections/ibm-granite/granite-libraries)** — Pre-trained adapters for RAG, safety, and core capabilities, published on Hugging Face. These are the components you compose into a Switch model.
+- **[Mellea](https://mellea.ai)** — Reliable, testable LLM output for Python. Type hints become schemas, docstrings become prompts, and valid output is enforced at the token level — not retried into existence. Mellea orchestrates Granite Switch adapters through a pipeline-oriented API, handling control tokens and constrained decoding so you work with typed function calls, not raw tokens.
+- **Granite Switch** — The composition and serving layer that makes it all work together in one model.
+
 ## IBM and Open Source AI
 
 Granite Switch was started by IBM Research.
