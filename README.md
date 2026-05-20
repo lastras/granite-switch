@@ -100,7 +100,7 @@ print(f"social_bias score: {score:.3f}")
 
 ## How It Works
 
-With standard LoRA, switching adapters in a multi-step pipeline means discarding and recomputing the KV cache for each step. Granite Switch embeds multiple adapters in a single checkpoint and routes between them at the token level using **Activated LoRA (aLoRA)**:
+With standard LoRA, switching adapters in a multi-step pipeline means discarding and recomputing the KV cache for each step. Granite Switch embeds all adapters in a single checkpoint and activates them on demand via control tokens — a technique called **Activated LoRA (aLoRA)**:
 
 1. **Control tokens** — Each adapter has a dedicated token (e.g., `<guardian>`, `<query_rewrite>`). When the token appears in the input, its adapter activates for subsequent positions.
 2. **KV cache isolation** — Adapters never see each other's internal state. Every adapter reads from the base model's KV cache only, which is what allows independent development and composition without joint training.
