@@ -8,7 +8,7 @@
 
 | [**Browse Adapters**](https://generative-computing.github.io/granite-switch/adapter_catalog.html) | [Pre-composed Models on HF](https://huggingface.co/ibm-granite/granite-switch-4.1-8b-preview) | [Tutorials](tutorials/README.md) |
 
-Pick adapters for RAG, safety, factuality, and more — compose them into a single Granite model — deploy with one command. No training, no glue code, upgrade any adapter independently.
+Software is built from libraries — you pick the ones you need, compose them, and ship. Granite Switch brings this to AI models: choose adapters for RAG, safety, factuality, and more, compose them into a single model, and deploy with one command. Swap or upgrade any component independently, just like updating a dependency.
 
 Small models with the right adapters consistently outperform much larger generalist models on targeted tasks. **Activated LoRA (aLoRA)** makes this practical at scale: all adapters share one KV cache, activating on demand — so one deployment serves many capabilities with no memory or latency overhead.
 
