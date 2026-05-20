@@ -13,7 +13,7 @@ Software is built from libraries — you pick the ones you need, compose them, a
 Small models with the right adapters consistently outperform much larger generalist models on targeted tasks. **Activated LoRA (aLoRA)** makes this practical at scale: all adapters share one KV cache, activating on demand — so one deployment serves many capabilities with no memory or latency overhead.
 
 <p align="center">
-  <img src="docs/benchmark_animation.svg" alt="Granite Switch: adapters stack, accuracy improves" width="820">
+  <img src="docs/composer_benchmark_animation.svg" alt="Granite Switch: adapters stack, accuracy improves" width="820">
 </p>
 
 ## Key Features
