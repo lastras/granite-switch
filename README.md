@@ -37,20 +37,19 @@ Small models with the right adapters consistently outperform much larger general
 ### Install
 
 ```bash
-python -m venv venv && source venv/bin/activate
-
-# Granite-Switch installation is based on your usecase:
-pip install "granite-switch[compose]"   # Compose modular models
-pip install "granite-switch[hf]"        # HuggingFace inference
-pip install "granite-switch[vllm]"      # vLLM production inference (0.19.x)
-pip install "granite-switch[vllm20]"    # vLLM 0.20+ (requires CUDA 13+)
-pip install "granite-switch[dev]"       # Everything (uses vLLM 0.19.x by default)
-pip install "granite-switch[dev-vllm20]" # Dev environment with vLLM 0.20+
+pip install "granite-switch[vllm]"
 ```
 
-Requires Python 3.9+ and PyTorch 2.0+.
+Other install options depending on your use case:
 
-> **Two vLLM backends available:** `.[vllm]` ships with vLLM 0.19.x for broad CUDA 12.x compatibility. `.[vllm20]` gives you vLLM 0.20+ with the latest performance improvements (requires CUDA 13+).
+```bash
+pip install "granite-switch[compose]"   # Compose modular models
+pip install "granite-switch[hf]"        # HuggingFace inference
+pip install "granite-switch[vllm20]"    # vLLM 0.20+ (requires CUDA 13+)
+pip install "granite-switch[dev]"       # Everything
+```
+
+Requires Python 3.9+ and PyTorch 2.0+. Two vLLM backends are available: `.[vllm]` for broad CUDA 12.x compatibility (0.19.x), and `.[vllm20]` for the latest performance improvements (CUDA 13+).
 
 ### Compose a Model
 
@@ -67,12 +66,11 @@ Use the **[Adapter Composer](https://generative-computing.github.io/granite-swit
 
 This downloads the base model, embeds compatible LoRA adapters (with a preference towards activated LoRA), adds control tokens and a chat template, and produces a model directory that works with both HuggingFace and vLLM.
 
-For convenience, you can find already composed Granite Switch models for the Granite 4.1 model family here:
+**Or skip composition and use a pre-composed model:**
 
 - [ibm-granite/granite-switch-4.1-3b-preview](https://huggingface.co/ibm-granite/granite-switch-4.1-3b-preview)
 - [ibm-granite/granite-switch-4.1-8b-preview](https://huggingface.co/ibm-granite/granite-switch-4.1-8b-preview)
 - [ibm-granite/granite-switch-4.1-30b-preview](https://huggingface.co/ibm-granite/granite-switch-4.1-30b-preview)
-
 
 ### Run Inference
 
@@ -114,7 +112,7 @@ The technique is architecture-general; Granite is the first supported family. Ad
 
 New here? Start with a 5-minute notebook and work your way up:
 
-| | What you'll build | Time | |
+| Notebook | What you'll build | Time | |
 |---|---|---|---|
 | [Hello Mellea](https://colab.research.google.com/github/generative-computing/granite-switch/blob/main/tutorials/notebooks/01_hello_mellea.ipynb) | Call adapters through a clean Python API | 5 min | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/generative-computing/granite-switch/blob/main/tutorials/notebooks/01_hello_mellea.ipynb) |
 | [RAG Pipeline](https://colab.research.google.com/github/generative-computing/granite-switch/blob/main/tutorials/notebooks/03_01_govt_rag_pipeline_simple.ipynb) | Query rewrite + answerability + citations in one model | 30 min | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/generative-computing/granite-switch/blob/main/tutorials/notebooks/03_01_govt_rag_pipeline_simple.ipynb) |
@@ -128,12 +126,12 @@ Granite Switch is part of a coordinated stack:
 
 - **[Granite Libraries](https://huggingface.co/collections/ibm-granite/granite-libraries)** — Pre-trained adapters for RAG, safety, and core capabilities, published on Hugging Face. These are the components you compose into a Switch model.
 - **[Mellea](https://mellea.ai)** — Reliable, testable LLM output for Python. Type hints become schemas, docstrings become prompts, and valid output is enforced at the token level — not retried into existence. Mellea orchestrates Granite Switch adapters through a pipeline-oriented API, handling control tokens and constrained decoding so you work with typed function calls, not raw tokens.
-- **Granite Switch** — The composition and serving layer that makes it all work together in one model.
+- **Granite Switch** (this repo) — The composition and serving layer that brings libraries and inference together into one deployable model.
 
-## IBM and Open Source AI
+## Contributing
 
-Granite Switch was started by IBM Research.
+Granite Switch was started by IBM Research and is developed in the open. We welcome bug reports, feature requests, and pull requests — see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines or open an [issue](https://github.com/generative-computing/granite-switch/issues).
 
 ## License
 
-Granite Switch has an Apache-2.0 license, as found in the [LICENSE](LICENSE) file.
+Apache-2.0 — see [LICENSE](LICENSE).
