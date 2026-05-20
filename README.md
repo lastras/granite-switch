@@ -123,13 +123,13 @@ print(tokenizer.decode(outputs[0], skip_special_tokens=True))
 
 ## How It Works
 
-Granite Switch uses a **switch layer**—a small attention-based mechanism that reads control tokens from the input and determines which adapter's LoRA weights to apply at each position.
+Standard LoRA serves one adapter at a time. Granite Switch embeds multiple adapters in a single checkpoint and routes between them at the token level using **Activated LoRA (aLoRA)**:
 
-**What makes composition work:**
+1. **Control tokens** — Each adapter has a dedicated token (e.g., `<guardian>`, `<query_rewrite>`). When the token appears in the input, its adapter activates for subsequent positions.
+2. **KV cache isolation** — Adapters never see each other's internal state. Every adapter reads from the base model's KV cache only, which is what allows independent development and composition without joint training.
+3. **Per-position routing** — LoRA weights are selected per token position, not per request. This means the same KV cache is reused across adapter invocations, eliminating redundant prefill and enabling high-throughput multi-step pipelines.
 
-- **KV cache normalization** — each adapter sees only the base model's KV cache, never another adapter's internal state
-- **No joint training required** — adapters are developed, tested, and published independently
-- **Standard inference** — The entire model loads in vLLM with zero code changes
+The result: adapters are developed, benchmarked, and published independently — yet compose into one model that loads in vLLM with zero code changes and serves all capabilities through a single KV cache.
 
 ## Tutorials
 
@@ -137,11 +137,9 @@ New here? Start with a 5-minute notebook and work your way up:
 
 | | What you'll build | Time |
 |---|---|---|
-| [Hello Adapter](tutorials/notebooks/00_hello_adapter.ipynb) | Invoke your first adapter with HuggingFace | 5 min |
 | [Hello Mellea](tutorials/notebooks/01_hello_mellea.ipynb) | Call adapters through a clean Python API | 5 min |
 | [RAG Pipeline](tutorials/notebooks/03_01_govt_rag_pipeline_simple.ipynb) | Query rewrite + answerability + citations in one model | 30 min |
 | [Compose Your Own](tutorials/notebooks/04_compose_granite_switch.ipynb) | Build a custom checkpoint from adapter libraries | 15 min |
-| [aLoRA vs LoRA Race](tutorials/notebooks/05_alora_vs_lora_race.ipynb) | Measure throughput gains from activated LoRA | 20 min |
 
 All notebooks run on Colab. See [tutorials/README.md](tutorials/README.md) for the full list and guided learning paths.
 
