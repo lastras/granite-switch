@@ -8,7 +8,7 @@
 
 | [**Browse Adapters**](https://generative-computing.github.io/granite-switch/adapter_catalog.html) | [Pre-composed Models on HF](https://huggingface.co/ibm-granite/granite-switch-4.1-8b-preview) | [Tutorials](tutorials/README.md) |
 
-Software is built from libraries — you pick the ones you need, compose them, and ship. Granite Switch brings this to AI models: choose adapters for RAG, safety, factuality, and more, compose them into a single model, and deploy with one command. Swap or upgrade any component independently, just like updating a dependency.
+Software is built from libraries — you pick the ones you need, compose them, and ship. Granite Switch brings this to AI models, starting with the Granite family: choose adapters for RAG, safety, factuality, and more, compose them into a single model, and deploy with one command. Swap or upgrade any component independently, just like updating a dependency.
 
 Small models with the right adapters consistently outperform much larger generalist models on targeted tasks. **Activated LoRA (aLoRA)** makes this practical at scale: all adapters share one KV cache, activating on demand — so one deployment serves many capabilities with no memory or latency overhead.
 
@@ -99,7 +99,7 @@ Standard LoRA serves one adapter at a time. Granite Switch embeds multiple adapt
 2. **KV cache isolation** — Adapters never see each other's internal state. Every adapter reads from the base model's KV cache only, which is what allows independent development and composition without joint training.
 3. **Per-position routing** — LoRA weights are selected per token position, not per request. This means the same KV cache is reused across adapter invocations, eliminating redundant prefill and enabling high-throughput multi-step pipelines.
 
-The result: adapters are developed, benchmarked, and published independently — yet compose into one model that loads in vLLM with zero code changes and serves all capabilities through a single KV cache.
+The technique is architecture-general; Granite is the first supported family. Adapters are developed, benchmarked, and published independently — yet compose into one model that loads in vLLM with zero code changes and serves all capabilities through a single KV cache.
 
 ## Tutorials
 
