@@ -71,7 +71,9 @@ ADAPTER_TEXT1_Y = [216, 164, 112, 60]
 ADAPTER_TEXT2_Y = [234, 182, 130, 78]
 
 # Stagger delays for adapter rows (seconds into slot when row appears)
-ADAPTER_STAGGER = [1.0, 2.0, 3.0, 4.0]  # row 0 appears first, row 3 last
+# Must start AFTER baseline bars finish growing (0.5s delay + 1.0s grow = 1.5s)
+# 1s pause after bars finish → first tile at 2.5s
+ADAPTER_STAGGER = [2.5, 3.5, 4.5, 5.5]  # row 0 appears first, row 3 last
 
 
 # ── HELPERS ───────────────────────────────────────────────────────────────────
@@ -338,9 +340,9 @@ def generate_right_panel():
         lines.append(f'  {smil_animate_width_grow(base_widths, delay_s=0.5)}')
         lines.append(f'</rect>')
 
-        # Improved bar — grows from 0 after adapter tile stagger
+        # Improved bar — grows from 0 at same moment adapter tile appears
         lines.append(f'<rect x="{BAR_X}" y="{imp_y}" width="0" height="{BAR_H}" rx="{BAR_RX}" fill="{imp_fills[0]}">')
-        lines.append(f'  {smil_animate_width_grow(imp_widths, delay_s=stagger + 1.0)}')
+        lines.append(f'  {smil_animate_width_grow(imp_widths, delay_s=stagger)}')
         lines.append(f'  {smil_animate_fill(imp_fills)}')
         lines.append(f'</rect>')
 
@@ -365,7 +367,7 @@ def generate_right_panel():
             imp_val = info["improved"][model]
 
             lines.append(f'<g visibility="hidden">')
-            lines.append(f'  {smil_visibility(si, stagger + 1.0)}')
+            lines.append(f'  {smil_visibility(si, stagger + GROW_SECONDS)}')
             lines.append(f'  <text x="{PCT_X}" y="{IMP_TEXT_Y[row_idx]}" text-anchor="end" font-size="10" font-weight="700" fill="{lib["pct"]}">{imp_val}%</text>')
             lines.append(f'</g>')
 
