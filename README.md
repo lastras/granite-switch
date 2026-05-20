@@ -67,17 +67,15 @@ For convenience, you can find already composed Granite Switch models for the Gra
 
 ### Run Inference
 
-**vLLM + Mellea (recommended):**
-
 ```bash
 pip install mellea
-# Example with the 3B model 
 python -m vllm.entrypoints.openai.api_server --model ibm-granite/granite-switch-4.1-3b-preview --port 8000
 ```
 
 ```python
 from mellea.backends.openai import OpenAIBackend
-from mellea.stdlib.components.intrinsic import rag
+from mellea.stdlib.components.chat import Message
+from mellea.stdlib.components.intrinsic.guardian import guardian_check
 from mellea.stdlib.context import ChatContext
 
 backend = OpenAIBackend(
@@ -87,38 +85,10 @@ backend = OpenAIBackend(
 )
 backend.register_embedded_adapter_model("ibm-granite/granite-switch-4.1-3b-preview")
 
-query = "I want to ask you something. what is...mmmm the the main city(capital you call it,right?) of France?"
-ctx = ChatContext()
-
-rewritten = rag.rewrite_question(query, ctx, backend)
-print(f"original:  {query}")
-print(f"rewritten: {rewritten}")
-# => "What is the capital of France?"
-```
-
-**HuggingFace:**
-
-```python
-import granite_switch.hf  # Register HF backend
-
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
-model = AutoModelForCausalLM.from_pretrained("ibm-granite/granite-switch-4.1-3b-preview", device_map="auto")
-tokenizer = AutoTokenizer.from_pretrained("ibm-granite/granite-switch-4.1-3b-preview")
-
-messages = [{"role": "user", "content": "What is the capital of France?"}]
-documents = [{"doc_id": "1", "text": "Paris is the capital of France."}]
-
-prompt = tokenizer.apply_chat_template(
-    messages,
-    documents=documents,
-    adapter_name="answerability",  # activates the answerability adapter
-    add_generation_prompt=True,
-    tokenize=False,
-)
-outputs = model.generate(**tokenizer(prompt, return_tensors="pt").to(model.device))
-print(tokenizer.decode(outputs[0], skip_special_tokens=True))
-# => "answerable"
+ctx = ChatContext().add(Message("user", "Group X people are all lazy."))
+score = guardian_check(ctx, backend, "social_bias", target_role="user")
+print(f"social_bias score: {score:.3f}")
+# => social_bias score: 0.964
 ```
 
 ## How It Works
