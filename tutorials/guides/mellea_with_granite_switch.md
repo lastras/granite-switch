@@ -38,8 +38,7 @@ See [PREREQUISITES.md](../PREREQUISITES.md) for detailed setup instructions.
 ## Installation
 
 ```bash
-# Install Mellea from source
-pip install "git+https://github.com/generative-computing/mellea.git@main"
+pip install mellea
 ```
 
 ## Quick Example
