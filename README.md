@@ -16,6 +16,12 @@ Small models with the right adapters consistently outperform much larger general
   <img src="docs/benchmark_animation.svg" alt="Granite Switch: adapters stack, accuracy improves" width="820">
 </p>
 
+<p align="center">
+  <a href="https://generative-computing.github.io/granite-switch/race_live.html">
+    <img src="docs/alora_lora_race.png" alt="aLoRA vs LoRA live race — aLoRA finishes first with KV cache reuse" width="820">
+  </a>
+</p>
+
 ## Key Features
 
 - **Composable** — Combine independently developed adapters into one checkpoint, whether IBM's or yours. Swap, upgrade, or customize without retraining.
