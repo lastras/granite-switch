@@ -1,19 +1,19 @@
-"""Display helpers for the govt RAG pipeline tutorials (03_01, 03_02, 03_03).
+"""Display helpers for the govt RAG pipeline tutorials (03_01, 03_02).
 
-Pure formatting / pretty-printing only — no pipeline logic. Each tutorial uses a
-different `show_intermediates` variant to match its pipeline shape:
+Formatting / pretty-printing only. Each tutorial uses a different
+`show_intermediates` variant to match its pipeline shape:
 
-  - `show_intermediates_simple`     — 03_01 (no guardian, no retries)
-  - `show_intermediates_sequential` — 03_02 (harm + scope guardian, no retries)
-  - `show_intermediates_loops`      — 03_03 (harm guardian + scope/answer retry loops)
+  - `show_intermediates_simple`     - 03_01 (no guardian, no retries)
+  - `show_intermediates_sequential` - 03_02 (harm + scope guardian, no retries)
 
-`show_answer`, `show_history`, and `Conversation` work for all three pipelines
+`show_answer` and `show_history` work for both pipelines
 (blocked-state branches are no-ops when `r["blocked"]` is absent).
 """
 
 import json
 
 from IPython.display import Markdown, display
+from mellea.stdlib.components.chat import Message as MelleaMessage
 
 
 def _is_clear(clarification):
@@ -38,16 +38,18 @@ def show_answer(r):
     display(Markdown("\n\n".join(lines)))
 
 
-def show_history(conv):
-    """Render a Conversation's history as formatted Markdown."""
-    if not conv.history:
+def show_history(ctx):
+    """Render a Mellea `ChatContext` as formatted Markdown."""
+    messages = [m for m in ctx.as_list() if isinstance(m, MelleaMessage)]
+    if not messages:
         display(Markdown("*(conversation history is empty)*"))
         return
-    md = ["---", f"### Conversation history — {len(conv.history)//2} turn(s)", "---"]
-    for m in conv.history:
-        role = "👤 **User**" if m["role"] == "user" else "🤖 **Assistant**"
-        doc_note = f" *({len(m['documents'])} docs)*" if m.get("documents") else ""
-        md.append(f"{role}{doc_note}\n\n> {m['content']}")
+    md = ["---", f"### Conversation history — {len(messages)//2} turn(s)", "---"]
+    for m in messages:
+        role = "👤 **User**" if m.role == "user" else "🤖 **Assistant**"
+        docs = m._docs or []
+        doc_note = f" *({len(docs)} docs)*" if docs else ""
+        md.append(f"{role}{doc_note}\n\n> {m.content}")
     display(Markdown("\n\n".join(md)))
 
 
@@ -247,35 +249,3 @@ def show_intermediates_loops(r, top_k):
         md.append("\n*(none)*")
 
     display(Markdown("\n\n".join(md)))
-
-
-class Conversation:
-    """Stateful chat wrapper — calls `run_pipeline` and prints the answer.
-
-    The pipeline function differs across tutorials (simple/sequential/loops),
-    so it's injected at construction time. `show_answer` is shared.
-    """
-
-    def __init__(self, run_pipeline):
-        self.run_pipeline = run_pipeline
-        self.history = []
-
-    def ask(self, query):
-        print(f"[turn {len(self.history)//2 + 1}  |  history: {len(self.history)} msg(s)]")
-        r = self.run_pipeline(query, self.history)
-        show_answer(r)
-
-        if r.get("blocked"):
-            return r  # blocked turns are not recorded
-
-        if r.get("unanswerable"):
-            reply = "I don't have enough information in my knowledge base to answer that."
-        elif r.get("needs_clarification"):
-            reply = r["clarification"]
-        else:
-            reply = r.get("answer", "")
-
-        self.history.append({"role": "user",      "content": query, "documents": r.get("documents")})
-        self.history.append({"role": "assistant", "content": reply})
-        print(f"→ history now has {len(self.history)} message(s)")
-        return r
