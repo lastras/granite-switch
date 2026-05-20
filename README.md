@@ -16,18 +16,18 @@ Small models with the right adapters consistently outperform much larger general
   <img src="docs/benchmark_animation.svg" alt="Granite Switch: adapters stack, accuracy improves" width="820">
 </p>
 
-<p align="center">
-  <a href="https://generative-computing.github.io/granite-switch/race_live.html">
-    <img src="docs/alora_lora_race.png" alt="aLoRA vs LoRA live race — aLoRA finishes first with KV cache reuse" width="820">
-  </a>
-</p>
-
 ## Key Features
 
 - **Composable** — Combine independently developed adapters into one checkpoint, whether IBM's or yours. Swap, upgrade, or customize without retraining.
 - **Fast** — Built on IBM's Activated LoRA technology for efficient KV cache reuse, low latency, and [high inference throughput](https://generative-computing.github.io/granite-switch/race_live.html).
 - **Accurate** — Task-specific adapters can match and even surpass the accuracy of significantly larger generalist models, while requiring only a fraction of the serving cost. See the [adapter catalog](https://generative-computing.github.io/granite-switch/adapter_catalog.html#hallucination-detection) for benchmark comparisons across all 12 adapters.
 - **Inference-ready** — Deploy with vLLM for production or HuggingFace for prototyping. Same checkpoint, no conversion step.
+
+<p align="center">
+  <a href="https://generative-computing.github.io/granite-switch/race_live.html">
+    <img src="docs/alora_lora_race.png" alt="aLoRA vs LoRA live race — aLoRA finishes first with KV cache reuse" width="820">
+  </a>
+</p>
 
 ## Quick Start
 
