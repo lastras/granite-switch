@@ -189,6 +189,17 @@ class ASRTranscriber:
                 built = pipeline(**kwargs)
             except ValueError as exc:
                 raise _unsupported_architecture_error(self.model_id, exc) from exc
+            # Inside vLLM, torch.distributed is initialized (even on one GPU),
+            # and transformers' pipeline then discards `device` for the device
+            # the model loaded on, the CPU: asr_device="cuda:0" silently ran on
+            # the CPU, 10x slower. Put the model where the checkpoint asked.
+            if str(self.device) != "cpu":
+                import torch
+
+                want = torch.device(self.device)
+                if built.device != want:
+                    built.model.to(want)
+                    built.device = want
             # transformers resolves .type from the model class; a CTC backend gets
             # no chunk window (see SEQ2SEQ_CHUNK_LENGTH_S) and no decode kwargs.
             self._is_ctc = getattr(built, "type", None) in _CTC_PIPELINE_TYPES
