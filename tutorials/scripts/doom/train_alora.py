@@ -286,6 +286,8 @@ def load_narration_rows(paths: list[Path], moments: Path, tok) -> list:
                 "recent": m["recent"],
                 "prev": r["prev"],
                 "player": r.get("player"),
+                "utype": r.get("utype"),  # what the partner asked, and the
+                "facts": m.get("facts"),  # match: factual answers are checked
                 "line": line,
             }
             target = tok.encode(line, add_special_tokens=False) + eot
@@ -461,6 +463,14 @@ def main() -> None:
         default=0,
         help="Narrator: held-out moments to sample a line for after training, "
         "from the adapter and from the base model (heldout_gen.jsonl)",
+    )
+    ap.add_argument(
+        "--gen-compare",
+        nargs="*",
+        default=[],
+        metavar="NAME=ADAPTER_DIR",
+        help="Narrator: also sample the --gen-n moments from these adapters "
+        "(e.g. the previous narrator), as column NAME",
     )
     ap.add_argument("--eval-data", type=Path, nargs="*", help="Explicit held-out set")
     ap.add_argument(
@@ -959,9 +969,15 @@ def main() -> None:
             k: generate_lines(raw, tok, ps, pad_id, device, adapter=k == "adapter")
             for k in ("adapter", "base")
         }
+        for spec in args.gen_compare:  # another narrator on the same moments
+            name, path = spec.split("=", 1)
+            raw.load_adapter(path, adapter_name=name)
+            raw.set_adapter(name)
+            said[name] = generate_lines(raw, tok, ps, pad_id, device)
+            raw.set_adapter("default")
         with open(args.out / "heldout_gen.jsonl", "w") as f:
             for i, r in enumerate(gen):
-                row = {**r[5], "adapter": said["adapter"][i], "base": said["base"][i]}
+                row = {**r[5], **{k: v[i] for k, v in said.items()}}
                 f.write(json.dumps(row) + "\n")
         for i in range(min(8, len(gen))):
             print(

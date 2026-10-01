@@ -169,9 +169,15 @@ CHAT_SYSTEM_PROMPT = (
 LAYOUTS = {"log": "SYSTEM_PROMPT", "chat": "CHAT_SYSTEM_PROMPT"}
 
 
+# Where the watcher's speech goes in a prompt (a checkpoint composed with
+# audio): vLLM's processor puts the ASR transcript's tokens in its place.
+AUDIO_MARKER = "<|audio|>"
+
+
 def talk_extra(brief: str = "", player: str | None = None) -> str:
     """Chat layout: what the harness adds to the user turn it closes, before the
-    state: the brief, then the watcher's words."""
+    state: the brief, then the watcher's words (or :data:`AUDIO_MARKER`, for
+    their speech transcribed inside the request)."""
     extra = f"{brief}\n" if brief else ""
     return extra + (f"Player: {player}\n" if player else "")
 

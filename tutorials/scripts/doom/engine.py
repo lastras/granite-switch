@@ -8,13 +8,15 @@ due, then plays the freshest action it has. A decision that arrives late is
 applied a tic or more later: its reaction time is real, not simulated.
 
 The server holds each game's tokenized history (the game sends its 5 Hz
-entries as text), asks the style adapter, critic and, on its cadence, the
-weapon planner for every tic, and lets the base model speak a short line every
-few seconds or right after a frag, a death or a new weapon. The line becomes a
-``me:`` history entry, so every adapter's next prompt holds it. All requests go
-to one vLLM ``AsyncLLM``: its engine core runs in its own process, so a spoken
-request (including audio transcribed in the model's ASR cascade) never holds up
-a reflex decision.
+entries as text, and the match facts of its :class:`talk.Tracker`), asks the
+style adapter, critic and, on its cadence, the weapon planner for every tic,
+and lets the player speak a short line soon after a salient event, after a
+silence, or when the person watching speaks (:class:`talk.TalkClock`, the same
+rule the narrator's data was written on). The line joins the history, so every
+adapter's next prompt holds it. All requests go to one vLLM ``AsyncLLM``: its
+engine core runs in its own process, so a spoken request (including the
+watcher's audio, transcribed by the model's ASR cascade inside the narrator's
+request) never holds up a reflex decision.
 
     python engine.py run --model models/doom-f-alora --games 8 --seconds 120
     # model on a GPU node, games on a CPU node:
@@ -47,6 +49,7 @@ from expert import BEHAVIORS, PLAN_EVERY_TICS
 from history import History, said_entry
 from policy import (
     ARMS,
+    AUDIO_MARKER,
     CRITIC,
     LAYOUTS,
     engine_kwargs,
@@ -56,31 +59,87 @@ from policy import (
     state_text,
     talk_extra,
 )
-from talk import SALIENT_EVENTS, brief
+from talk import IDLE_S, TalkClock, Tracker, brief
 
 TIC_S = 1.0 / TIC_HZ
-MIN_TALK_GAP_S = 2.5
+AUDIO_HZ = 16_000  # the watcher's speech, as the ASR takes it
 
 
 # ── Game side (one process per match) ──────────────────────────────────────────
+class SharedFrame:
+    """The latest game frame in shared memory. The game writes every tic and a
+    reader (the live demo's renderer) takes the newest when it wants one;
+    neither waits on the other. A sequence number around each write detects a
+    torn read (odd while writing). ``name=None`` creates it."""
+
+    SHAPE = (480, 640, 3)  # the 640X480 screen, RGB
+
+    def __init__(self, name: str | None = None):
+        from multiprocessing import shared_memory
+
+        self.owner = name is None
+        size = 16 + int(np.prod(self.SHAPE))
+        self.shm = shared_memory.SharedMemory(name=name, create=self.owner, size=size)
+        self.name = self.shm.name
+        self.meta = np.ndarray((2,), np.int64, self.shm.buf[:16])  # sequence, tick
+        self.img = np.ndarray(self.SHAPE, np.uint8, self.shm.buf[16:])
+        if self.owner:
+            self.meta[:] = 0
+
+    def put(self, tick: int, frame: np.ndarray) -> None:
+        self.meta[0] += 1
+        self.img[:] = frame
+        self.meta[1] = tick
+        self.meta[0] += 1
+
+    def get(self) -> tuple[int, np.ndarray] | None:
+        """(tick, a copy of the frame), or None before the first frame."""
+        for _ in range(5):
+            seq = int(self.meta[0])
+            if seq == 0:
+                return None
+            if seq % 2 == 0:
+                img, tick = self.img.copy(), int(self.meta[1])
+                if int(self.meta[0]) == seq:
+                    return tick, img
+            time.sleep(0.001)
+        return None
+
+    def close(self) -> None:
+        del self.meta, self.img  # the buffer views, before the memory goes
+        self.shm.close()
+        if self.owner:
+            self.shm.unlink()
+
+
 def game_worker(conn, spec: dict) -> None:
     """Play one match in real time. Messages to the server:
-    ``("obs", tick, state | None, entry | None, events)`` every tic (``entry`` is
-    the history entry the previous tic produced), then ``("done", stats, lags)``.
-    From the server: ``("act", tick, action, slot | None)``. The clock starts
-    only when the server says so (after ``("ready",)``), and the socket closes
-    only after the server's ``("bye",)``: closing with unread decisions in the
-    buffer sends a TCP reset that can destroy the final message."""
+    ``("obs", tick, state | None, entry | None, events, facts, fired)`` every
+    tic (``entry`` is the history entry the previous tic produced; ``facts``
+    and ``fired``: the match tracker's snapshot and this tic's events), then
+    ``("done", stats, lags)``. From the server: ``("act", tick, action, slot |
+    None)``. The clock starts only when the server says so (after
+    ``("ready",)``), and the socket closes only after the server's ``("bye",)``:
+    closing with unread decisions in the buffer sends a TCP reset that can
+    destroy the final message. ``spec["frames"]``: the name of a
+    :class:`SharedFrame` to publish every frame to (the live demo's video)."""
     isolate_workdir()
+    timeout = int(spec["seconds"] * TIC_HZ)
     env = DoomEnv(
         seed=spec["seed"],
-        resolution="640X480",  # the students' training data
-        timeout_tics=int(spec["seconds"] * TIC_HZ),
+        # As the students' training data (collect.py): the status bar hides the
+        # bottom of the view, so it changes which objects the state lists.
+        resolution="640X480",
+        hud=True,
+        timeout_tics=timeout,
         bots=spec["bots"],
         n_bots=spec["n_bots"],
     )
     hist = History()  # text only: the server tokenizes
+    tracker = Tracker(match_s=timeout / TIC_HZ)  # the same as collect.py's
+    frames = SharedFrame(spec["frames"]) if spec.get("frames") else None
     obs = env.reset(seed=spec["seed"])
+    fired = tracker.update(obs)
     action, fresh_of, slot, entry = "wait", -1, None, None
     lags: list[int] = []  # per live tic: ticks between the state and the action played
     overruns, step_ms = 0, 5.0
@@ -90,7 +149,10 @@ def game_worker(conn, spec: dict) -> None:
     t_tic = time.perf_counter()
     while not obs.done:
         state = None if obs.dead else state_text(obs)
-        conn.send(("obs", obs.tick, state, entry, list(obs.events)))
+        if frames is not None:
+            frames.put(obs.tick, env.frame())
+        msg = ("obs", obs.tick, state, entry, list(obs.events), tracker.facts(), fired)
+        conn.send(msg)
         deadline = t_tic + TIC_S - (step_ms + 1.0) / 1000
         while state is not None:
             left = deadline - time.perf_counter()
@@ -108,6 +170,7 @@ def game_worker(conn, spec: dict) -> None:
         entry = hist.observe(obs, None if obs.dead else action)
         t0 = time.perf_counter()
         obs = env.step(action, weapon=slot)
+        fired = [] if obs.done else tracker.update(obs)
         slot = None
         step_ms = 0.9 * step_ms + 0.1 * (time.perf_counter() - t0) * 1000
         t_tic += TIC_S
@@ -119,6 +182,8 @@ def game_worker(conn, spec: dict) -> None:
     stats = env.stats.as_dict()
     stats["overrun_tics"] = overruns
     env.close()
+    if frames is not None:
+        frames.close()
     conn.send(("done", stats, lags))
     t_end = time.perf_counter() + 10
     while time.perf_counter() < t_end:  # drain late decisions until the server's bye
@@ -159,6 +224,8 @@ class AsyncPolicy:
             self.tok, temperature=temperature, layout=layout, persona=persona
         )
         self.layout = layout
+        # The audio marker's id (a checkpoint composed with audio has one).
+        self.audio_id = self.tok.convert_tokens_to_ids(AUDIO_MARKER)
         # Temperature only (top-p autotunes a FlashInfer kernel on first use).
         self.talk_sp = SamplingParams(
             max_tokens=32,  # ~15 words; the system prompt asks for one short line
@@ -167,13 +234,16 @@ class AsyncPolicy:
             bad_words=["reload", "Another"],
         )
 
-    async def _one(self, ids: list[int], sp):
+    async def _one(self, ids: list[int], sp, audio: np.ndarray | None = None):
+        """One request; ``audio`` (16 kHz) is spliced in, transcribed, at the
+        prompt's audio marker."""
         from vllm.inputs import TokensPrompt
 
+        prompt = TokensPrompt(prompt_token_ids=ids)
+        if audio is not None:
+            prompt["multi_modal_data"] = {"audio": [(audio, AUDIO_HZ)]}
         final = None
-        async for out in self.engine.generate(
-            TokensPrompt(prompt_token_ids=ids), sp, uuid.uuid4().hex
-        ):
+        async for out in self.engine.generate(prompt, sp, uuid.uuid4().hex):
             final = out
         return final
 
@@ -189,20 +259,34 @@ class AsyncPolicy:
         return res
 
     async def talk(
-        self, hist_ids, state: str, brief_text: str, player: str | None = None
-    ) -> tuple[str, str]:
-        """One spoken line, and the text that closed the user turn before it
-        (chat layout; "" for the log layout). ``player``: what the person
-        watching just said, which the line answers."""
+        self, hist_ids, state: str, brief_text: str, player=None
+    ) -> tuple[str, str, str | None]:
+        """One spoken line, the text that closed the user turn before it (chat
+        layout; "" for the log layout) and what the person watching said, as
+        text. ``player``: their words, which the line answers: text, or their
+        speech (16 kHz float32), which the checkpoint's own ASR transcribes
+        inside this request (chat layout, a checkpoint composed with audio)."""
+        audio = None if player is None or isinstance(player, str) else player
         if self.layout == "chat":
-            extra = talk_extra(brief_text, player)
+            extra = talk_extra(
+                brief_text, AUDIO_MARKER if audio is not None else player
+            )
             ids = self.kit.pb.turn_ids(hist_ids, state, extra, self.kit.talker)
+        elif audio is not None:
+            raise ValueError("speech input needs the chat layout")
         else:
             extra = ""
             ids = self.kit.pb.talk_ids(hist_ids, state, brief_text, player)
-        o = await self._one(ids, self.talk_sp)
+        o = await self._one(ids, self.talk_sp, audio)
+        heard = player
+        if audio is not None:
+            # The transcript is what replaced the marker in the prompt.
+            at = ids.index(self.audio_id)
+            got = o.prompt_token_ids
+            heard = self.tok.decode(got[at : len(got) - (len(ids) - at - 1)]).strip()
+            extra = talk_extra(brief_text, heard)
         text = re.sub(r"\[[^\]]*\]\s*", "", o.outputs[0].text)  # tags: not the model's
-        return text.strip().strip('"').split("\n")[0], extra
+        return text.strip().strip('"').split("\n")[0], extra, heard
 
     async def warmup(self) -> None:
         state = (
@@ -251,10 +335,23 @@ AUTHKEY = b"granite-switch-doom"
 
 class Game:
     """One match on the server: its history, decisions and talk. With ``conn``
-    the match runs elsewhere (``engine.py play``); without, in a local process."""
+    the match runs elsewhere (``engine.py play``); without, in a local process.
+    ``idle_s``: the talk clock's silence before a remark (0: no talk of its
+    own; replies to the watcher still come).
+
+    Hooks for the live demo (``doom_live.py``): ``on_decision(tick, dists,
+    ms)`` after every decision, ``on_line(line_info)`` after every spoken line;
+    :meth:`hush` holds back remarks while the watcher is talking;
+    ``autostart=False`` holds the match's clock until :meth:`start`."""
 
     def __init__(
-        self, gid: int, spec: dict, pol: AsyncPolicy, talk_every: float, conn=None
+        self,
+        gid: int,
+        spec: dict,
+        pol: AsyncPolicy,
+        idle_s: float,
+        conn=None,
+        autostart: bool = True,
     ):
         self.proc = None
         if conn is None:
@@ -262,22 +359,24 @@ class Game:
             conn, child = ctx.Pipe()
             self.proc = ctx.Process(target=game_worker, args=(child, spec), daemon=True)
         self.conn, self.spec = conn, spec
-        self.gid, self.pol, self.talk_every = gid, pol, talk_every
+        self.gid, self.pol = gid, pol
+        self.clock = TalkClock(idle_s) if idle_s else None
         self.style = spec.get("style", BEHAVIORS[0])
         self.hist = History(pol.tok)
         self.inflight = self.talking = False
+        self.hushed = False
         self.lat_ms: list[float] = []
         self.skipped = self.decided = 0
-        self.lines: list[tuple[float, str, int]] = []
-        self.last_talk = -1e9
-        self.next_talk = time.perf_counter() + random.uniform(1, max(1.0, talk_every))
+        self.lines: list[tuple[float, str, int, str | None]] = []
         self.stats: dict = {}
         self.lags: list[int] = []
-        self.player_queue: list[str] = []  # what the watcher said, not yet answered
-        self.tally = [0, 0]  # frags, deaths: the brief's score (the history is 10 s)
+        self.player_queue: list = []  # what the watcher said (text or speech), unanswered
+        self.facts: dict | None = None  # the match tracker's latest snapshot
         self.state: str | None = None  # the latest live state, and its tick
         self.tick = 0
         self.done = self.lost = False
+        self.on_decision = self.on_line = None
+        self.autostart, self.ready = autostart, False
         self._tasks: set[asyncio.Task] = set()  # keep running tasks referenced
 
     def _spawn(self, coro) -> None:
@@ -306,7 +405,9 @@ class Game:
                     self.lost = self.done = True
                     return
                 if msg[0] == "ready":
-                    self.conn.send(("start",))
+                    self.ready = True
+                    if self.autostart:
+                        self.conn.send(("start",))
                     continue
                 if msg[0] == "done":
                     _, self.stats, self.lags = msg
@@ -314,11 +415,11 @@ class Game:
                     with contextlib.suppress(OSError):
                         self.conn.send(("bye",))
                     return
-                _, tick, state, entry, events = msg
-                self.tally[0] += events.count("frag")
-                self.tally[1] += events.count("died")
+                _, tick, state, entry, _events, self.facts, fired = msg
                 if entry is not None:
                     self.hist.append(entry)
+                if self.clock is not None:
+                    self.clock.event(fired)
                 if state is None:
                     continue
                 self.state, self.tick = state, tick
@@ -328,16 +429,15 @@ class Game:
                     self.inflight = True
                     self.decided += 1
                     self._spawn(self._decide(tick, state))
-                now = time.perf_counter()
-                due = now >= self.next_talk or any(e in SALIENT_EVENTS for e in events)
                 if (
-                    self.talk_every
+                    self.clock is not None
                     and not self.talking
-                    and due
-                    and now - self.last_talk >= MIN_TALK_GAP_S
+                    and not self.hushed
+                    and len(self.hist.entries) >= 5
+                    and (cue := self.clock.due(tick)) is not None
                 ):
                     self.talking = True
-                    self._spawn(self._talk(tick, state))
+                    self._spawn(self._talk(tick, state, cue["cue"]))
         finally:
             loop.remove_reader(fd)
 
@@ -345,41 +445,68 @@ class Game:
         t0 = time.perf_counter()
         want = [self.style, CRITIC] + ([ARMS] if tick % PLAN_EVERY_TICS == 0 else [])
         d = await self.pol.decide(self.hist.ids, state, want)
-        self.lat_ms.append((time.perf_counter() - t0) * 1000)
+        ms = (time.perf_counter() - t0) * 1000
+        self.lat_ms.append(ms)
         slot = int(d[ARMS][0]) if ARMS in d else None
         try:
             self.conn.send(("act", tick, d[self.style][0], slot))
         except (BrokenPipeError, OSError):
             pass  # the match just ended
         self.inflight = False
+        if self.on_decision is not None:
+            self.on_decision(tick, d, ms)
 
-    def player_said(self, text: str) -> None:
-        """The person watching spoke: the player answers as soon as it can (after
-        the line it may be saying now)."""
-        self.player_queue.append(text)
+    def start(self) -> None:
+        """Start the match's clock (made with ``autostart=False``)."""
+        if not self.autostart:
+            self.autostart = True
+            if self.ready:
+                self.conn.send(("start",))
+
+    def hush(self, on: bool) -> None:
+        """While the watcher talks, the player holds its own remarks."""
+        self.hushed = on
+
+    def player_said(self, what) -> None:
+        """The person watching spoke (text, or 16 kHz float32 speech): the
+        player answers as soon as it can (after the line it may be writing)."""
+        self.player_queue.append(what)
+        self.hushed = False
         if not self.talking and self.state is not None:
             self.talking = True
-            self._spawn(self._talk(self.tick, self.state))
+            self._spawn(self._talk(self.tick, self.state, "partner"))
 
-    async def _talk(self, tick: int, state: str) -> None:
+    async def _talk(self, tick: int, state: str, cue: str) -> None:
         player = self.player_queue.pop(0) if self.player_queue else None
+        if player is not None:
+            cue = "partner"  # the watcher spoke: whatever woke it, this is a reply
+        if self.clock is not None:
+            self.clock.said(tick)
         t0 = time.perf_counter()
-        chat = self.pol.layout == "chat"  # the chat layout's briefs carry the score
-        b = brief(self.hist.entries, state, tuple(self.tally) if chat else None)
-        line, extra = await self.pol.talk(self.hist.ids, state, b, player)
+        b = brief(self.hist.entries, state, self.facts)
+        line, extra, heard = await self.pol.talk(self.hist.ids, state, b, player)
         ms = int((time.perf_counter() - t0) * 1000)
-        if line:
+        if line and not (self.hushed and player is None):  # a remark talked over
             if self.pol.layout == "chat":
                 self.hist.append(spoken_entry(state, line, extra))
             else:
-                if player:
-                    self.hist.append(said_entry(tick, "user", player))
+                if heard:
+                    self.hist.append(said_entry(tick, "user", heard))
                 self.hist.append(said_entry(tick, "me", line))
-            self.lines.append((round(tick / TIC_HZ, 1), line, ms, player))
-        self.last_talk = time.perf_counter()
-        self.next_talk = self.last_talk + self.talk_every
+            self.lines.append((round(tick / TIC_HZ, 1), line, ms, heard))
+            if self.on_line is not None:
+                self.on_line(
+                    {
+                        "tick": tick,
+                        "cue": cue,
+                        "line": line,
+                        "heard": heard,
+                        "brief": b,
+                        "ms": ms,
+                    }
+                )
         if self.player_queue and self.state is not None:
-            self._spawn(self._talk(self.tick, self.state))  # answer what came in
+            self._spawn(self._talk(self.tick, self.state, "partner"))  # answer it
         else:
             self.talking = False
 
@@ -466,7 +593,7 @@ async def serve(args) -> dict:
     )
     await pol.warmup()
     print(f"engine ready in {time.time() - t0:.0f}s ({pol.kit.placement})", flush=True)
-    talk = 0 if args.no_talk else args.talk_every
+    talk = 0 if args.no_talk else args.idle_s
     games: list[Game] = []
     tasks: list[asyncio.Task] = []
 
@@ -597,7 +724,9 @@ def main() -> None:
         p.add_argument("--seed", type=int, default=0)
     for p in (run_p, serve_p):
         p.add_argument("--model", required=True)
-        p.add_argument("--talk-every", type=float, default=4.0)
+        p.add_argument(
+            "--idle-s", type=float, default=IDLE_S, help="Silence before a remark"
+        )
         p.add_argument("--no-talk", action="store_true")
         p.add_argument("--temperature", type=float, default=1.0, help="Style, planner")
         p.add_argument("--gpu-mem", type=float, default=0.5)

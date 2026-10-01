@@ -38,7 +38,8 @@ Outputs in ``--out``:
   state), ``hist_n`` (history entries so far), ``expert`` and ``soft`` (the
   teacher's move label and distribution), ``weapon`` / ``weapon_soft`` on
   planner tics, ``critic`` (outcome in the next second), ``probe`` (history-only
-  question, or null), ``act`` (executed).
+  question, or null), ``act`` (executed), ``facts`` (the match so far, from
+  :class:`talk.Tracker`: what the narrator's brief is rendered from).
 * ``<style>_history.jsonl``: per match, every history entry in order, so
   training rebuilds each row's windowed history (:class:`history.History`).
 * ``stats.jsonl``: one row per match; ``summary.txt``.
@@ -71,6 +72,7 @@ from doom_env import (
 )
 from expert import BEHAVIORS, PLAN_EVERY_TICS, Expert
 from history import History, critic_labels, probe_label
+from talk import Tracker
 
 RESOLUTION = "640X480"  # one setting everywhere: collection, bench and demo
 
@@ -174,6 +176,8 @@ class _Match:
         self.deaths: list[float] = []
         self.video = _writer(Path(task["video"])) if task["video"] else None
         self.obs = self.env.reset(seed=task["seed"])
+        self.tracker = Tracker(match_s=task["timeout"] / TIC_HZ)  # the brief's facts
+        self.tracker.update(self.obs)
         self.teacher.reset()
         self.agree = self.decided = 0
         self.mark_tick = task.get("mark")
@@ -195,6 +199,7 @@ class _Match:
             "weapon": _argmax(weapon) if plan else None,
             "weapon_soft": _round(weapon) if plan and self.teacher.soft else None,
             "probe": probe_label(self.hist, obs),
+            "facts": self.tracker.facts(),
         }
         return move, weapon, plan, row
 
@@ -226,6 +231,8 @@ class _Match:
         if entry is not None:
             self.hist_all.append(entry)
         self.obs = self.env.step(action, weapon=weapon)
+        if not self.obs.done:
+            self.tracker.update(self.obs)
 
     def finish(self, **extra) -> dict:
         if self.video is not None:
