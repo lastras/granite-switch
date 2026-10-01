@@ -366,6 +366,7 @@ class Game:
         self.inflight = self.talking = False
         self.hushed = False
         self.lat_ms: list[float] = []
+        self.lat_talking: list[bool] = []  # was a line being written then
         self.skipped = self.decided = 0
         self.lines: list[tuple[float, str, int, str | None]] = []
         self.stats: dict = {}
@@ -444,9 +445,11 @@ class Game:
     async def _decide(self, tick: int, state: str) -> None:
         t0 = time.perf_counter()
         want = [self.style, CRITIC] + ([ARMS] if tick % PLAN_EVERY_TICS == 0 else [])
+        talking = self.talking
         d = await self.pol.decide(self.hist.ids, state, want)
         ms = (time.perf_counter() - t0) * 1000
         self.lat_ms.append(ms)
+        self.lat_talking.append(talking or self.talking)
         slot = int(d[ARMS][0]) if ARMS in d else None
         try:
             self.conn.send(("act", tick, d[self.style][0], slot))
@@ -673,6 +676,14 @@ async def serve(args) -> dict:
                 "rank": s.get("rank"),
                 "decision_ms_p50": pct(g.lat_ms, 50),
                 "decision_ms_p99": pct(g.lat_ms, 99),
+                # while a spoken line was being written, and not
+                "decision_ms_p50_talking": pct(
+                    [m for m, t in zip(g.lat_ms, g.lat_talking) if t], 50
+                ),
+                "decision_ms_p50_quiet": pct(
+                    [m for m, t in zip(g.lat_ms, g.lat_talking) if not t], 50
+                ),
+                "talking_share": round(sum(g.lat_talking) / max(1, len(g.lat_talking)), 3),
                 "fresh_share": round(lags[0] / n, 4),  # the tic's own decision
                 "stale_1_share": round(lags[1] / n, 4),
                 "stale_2plus_share": round(

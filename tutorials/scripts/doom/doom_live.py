@@ -247,6 +247,9 @@ class Live:
         self.rng = random.Random(args.seed)  # which lines get a sound tag
         self._sending = False
         self._next_frame: bytes | None = None
+        # What happened in the last stats window (see stats()).
+        self.n = {"frames": 0, "frame_kb": 0, "voiced": 0, "heard": 0}
+        self.ms: list[float] = []
         self._tasks: set[asyncio.Task] = set()
 
     def spawn(self, coro) -> None:
@@ -281,6 +284,8 @@ class Live:
     async def _send_frames(self, data: bytes) -> None:
         while data is not None:
             await self.send(b"J" + data)
+            self.n["frames"] += 1
+            self.n["frame_kb"] += len(data) // 1024
             data, self._next_frame = self._next_frame, None
         self._sending = False
 
@@ -318,7 +323,30 @@ class Live:
         if g is self.game:
             await self.new_game(start=watched)
 
+    async def stats(self, every_s: float = 10.0) -> None:
+        """Every ``every_s``: decision latency in the window (as the panel
+        measures it: from asking the engine to having the answer, in this
+        process), with what else this process did (frames streamed, lines
+        voiced, utterances transcribed), and how late this event loop runs."""
+        while True:
+            t0 = time.perf_counter()
+            await asyncio.sleep(every_s)
+            lag = time.perf_counter() - t0 - every_s
+            ms, self.ms = self.ms, []
+            n = dict(self.n)
+            self.n = dict.fromkeys(self.n, 0)
+            if not ms:
+                continue
+            print(
+                f"[stats] decisions {len(ms) / every_s:4.1f}/s p50 {np.percentile(ms, 50):5.1f} "
+                f"ms p90 {np.percentile(ms, 90):5.1f} p99 {np.percentile(ms, 99):5.1f} | "
+                f"frames {n['frames'] / every_s:4.1f}/s ({n['frame_kb'] / every_s:5.0f} KB/s) "
+                f"| voiced {n['voiced']} heard {n['heard']} | loop lag {1000 * lag:.0f} ms",
+                flush=True,
+            )
+
     def on_decision(self, tick: int, d: dict, ms: float) -> None:
+        self.ms.append(ms)
         f = self.game.facts or {}
         board = f.get("board") or [["", 0]]
         me = f.get("frags", 0)
@@ -376,6 +404,7 @@ class Live:
             if lid in self.cancelled:
                 break
             pcm, sr, _ = await self.voice.say(part)
+            self.n["voiced"] += 1
             if lid in self.cancelled:
                 break
             if first is None:
@@ -414,6 +443,7 @@ class Live:
                 pcm = np.frombuffer(msg.data[1:], np.int16).astype(np.float32) / 32768
                 if len(pcm) >= AUDIO_HZ // 5 and self.game is not None:
                     self.said_at.append(time.perf_counter())
+                    self.n["heard"] += 1
                     self.game.player_said(pcm)
             elif msg.type == WSMsgType.TEXT:
                 m = json.loads(msg.data)
@@ -451,6 +481,7 @@ async def serve(args) -> None:
     gpu = torch.cuda.get_device_name(0).replace("NVIDIA ", "")
     live = Live(args, pol, voice, gpu)
     await live.new_game(start=False)
+    live.spawn(live.stats())
     loop = asyncio.get_running_loop()
     loop.add_reader(live.jpeg.fileno(), live.on_jpeg)
     app = web.Application()
