@@ -1,0 +1,104 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- The live demo's page (doom_pipecat.py serves it at /): the game's stream
+     fills the window, your microphone goes up, his voice comes down. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Granite Switch · Doom, live</title>
+<style>
+  [hidden] { display: none !important; }  /* over the display: flex below */
+  html, body { margin: 0; height: 100%; background: #000; color: #ddd;
+               font: 14px system-ui, sans-serif; overflow: hidden; }
+  video { position: fixed; inset: 0; width: 100vw; height: 100vh;
+          object-fit: contain; background: #000; }
+  #starts { position: fixed; inset: 0; margin: auto; width: 260px; height: 150px;
+            display: flex; flex-direction: column; gap: 10px; }
+  #starts button { height: 54px; font-size: 17px; }
+  #bar { position: fixed; left: 12px; bottom: 12px; display: flex; gap: 8px;
+         align-items: center; opacity: 0.35; transition: opacity 0.2s; }
+  #bar:hover { opacity: 0.95; }
+  button { background: #1d1d1d; color: #eee; border: 1px solid #444;
+           border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #status { padding: 4px 8px; }
+</style>
+</head>
+<body>
+<video id="screen" autoplay playsinline></video>
+<div id="starts">
+  <button id="start">Start (allow the microphone)</button>
+  <button id="watch">Watch only (no microphone)</button>
+  <div id="error" style="color:#f88; text-align:center"></div>
+</div>
+<div id="bar" hidden>
+  <button id="mute">Mute mic</button>
+  <button id="reset">New match</button>
+  <button id="full">Full screen</button>
+  <span id="status"></span>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const status = (s) => { $("status").textContent = s; };
+let pc, mic, channel;
+
+async function start(withMic) {
+  $("start").disabled = $("watch").disabled = true;
+  (withMic ? $("start") : $("watch")).textContent = "Connecting…";
+  try {
+    pc = new RTCPeerConnection();
+    if (withMic) {
+      // The browser's own echo cancellation, noise suppression and gain.
+      mic = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+      mic.getAudioTracks().forEach((t) => pc.addTrack(t, mic)); // first: audio
+    } else {
+      pc.addTransceiver("audio", { direction: "recvonly" });    // first: his voice
+      $("mute").hidden = true;
+    }
+    pc.addTransceiver("video", { direction: "recvonly" });     // second: the game
+    channel = pc.createDataChannel("app");
+    channel.onopen = () => setInterval(() => channel.send("ping"), 1000);
+    const remote = new MediaStream();
+    $("screen").srcObject = remote;
+    pc.ontrack = (e) => { remote.addTrack(e.track); $("screen").play().catch(() => {}); };
+    pc.onconnectionstatechange = () => status(pc.connectionState);
+    await pc.setLocalDescription(await pc.createOffer());
+    await new Promise((done) => {  // every candidate in the offer: no trickle
+      if (pc.iceGatheringState === "complete") return done();
+      pc.onicegatheringstatechange = () => pc.iceGatheringState === "complete" && done();
+      setTimeout(done, 3000);
+    });
+    const r = await fetch("/api/offer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type }),
+    });
+    await pc.setRemoteDescription(await r.json());
+    $("starts").hidden = true;
+    $("bar").hidden = false;
+  } catch (err) {
+    $("start").disabled = $("watch").disabled = false;
+    $("start").textContent = "Start (allow the microphone)";
+    $("watch").textContent = "Watch only (no microphone)";
+    $("error").textContent = "Could not start: " + err;
+  }
+}
+
+$("start").onclick = () => start(true);
+$("watch").onclick = () => start(false);
+$("mute").onclick = () => {
+  const t = mic.getAudioTracks()[0];
+  t.enabled = !t.enabled;
+  $("mute").textContent = t.enabled ? "Mute mic" : "Unmute mic";
+};
+// Pipecat's RTVI layer reads the data channel: a client-message reaches the pipeline.
+$("reset").onclick = () => channel && channel.readyState === "open" &&
+  channel.send(JSON.stringify({ label: "rtvi-ai", type: "client-message",
+                                id: String(Date.now()), data: { t: "reset", d: {} } }));
+$("full").onclick = () => document.fullscreenElement
+  ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+</script>
+</body>
+</html>
