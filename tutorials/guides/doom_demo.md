@@ -765,3 +765,67 @@ On an LSF cluster, give every GPU step cores on one host and a thread cap
 - Action probabilities, live agreement with the teacher, shadow decisions (what
   the other behaviors would do on the same state), and the exact text the model
   reads.
+
+### Talking to it live
+
+The player talks (the narrator adapter writes his lines, Chatterbox voices them),
+and you can talk back. The browser handles your microphone (echo cancellation,
+noise suppression, levels) over WebRTC to a small Pipecat app on your laptop; the
+game, the model and the voice run on one GPU node, one websocket away.
+
+```text
+browser ──WebRTC (your mic in; the game's video and his voice out)── doom_pipecat.py (laptop)
+                                                                          │ websocket over ssh -L
+                         doom_live.py (GPU node): the match at 35 Hz, vLLM (every adapter,
+                         the narrator, the in-model ASR), the voice, the overlay
+```
+
+What you say is cut into utterances by Pipecat's VAD and sent up as one audio
+segment each; the checkpoint's own ASR transcribes it inside the narrator's
+request (the prompt carries `<|audio|>` where your words go), so there is no
+separate speech-to-text step. Without you, he speaks soon after a salient event
+or after a silence (`talk.TalkClock`), from a brief rendered in code from a match
+tracker (`talk.Tracker`: who killed him, the score race, streaks, close calls).
+
+```bash
+# GPU node: a checkpoint composed with audio, and the TTS environment's python.
+# The ASR runs in vLLM's front-end process and the engine in another, so the GPU
+# must accept several processes (on LSF: -gpu "num=1:mode=shared:j_exclusive=yes").
+python build_model.py compose --runs runs/h-alora --router-runs runs/router \
+  --narrator runs/narr3-alora/narrator --base $BASE --out models/doom-narr3-audio \
+  --asr-model ibm-granite/granite-speech-5.0-470m-turboctc --asr-device cuda:0
+python doom_live.py serve --model models/doom-narr3-audio --port 8765 \
+  --tts-python /path/to/tts-env/bin/python --voice-ref voices/him.wav
+
+# Laptop: a small environment of its own, then open http://localhost:7860/ (the
+# stream full-window; Pipecat's own prebuilt page is at /client)
+uv venv doom-pipecat && uv pip install --python doom-pipecat/bin/python \
+  "pipecat-ai[webrtc,silero]" pipecat-ai-small-webrtc-prebuilt aiohttp pillow
+ssh -N -L 8765:<gpu-node>:8765 <login-node> &
+doom-pipecat/bin/python doom_pipecat.py
+# A browser on another machine needs HTTPS for the microphone: --https serves the
+# page with a self-signed certificate (accept it once), at https://<laptop>:7860/
+```
+
+`python doom_live.py smoke --questions <dir of q_*.wav>` checks the GPU side
+without a laptop: it asks "can you hear me", "who killed you" right after a
+death, and "what's the score", and reports what the ASR heard, the reply, and
+the time from the end of the question to his first audio. Measured on one H100
+with Turbo cloning the voice: the line is written 100-160 ms after the utterance
+arrives (the in-model ASR included), his voice starts 0.5-1.0 s after it (1.2-1.8 s
+after you stop talking, at the browser, with the VAD's wait for silence and
+WebRTC's buffering), and the stream runs at 20 fps (about 75 KB per frame at
+800x718). `record_video.py --talk --partner-events` records a match with a
+watcher who reacts to what happens (who got you, after a death).
+
+The narrator's data (`partner_ivr.py write`) keeps a line only if it is about its
+moment: the brief's headline is checked by the judge, factual answers in code (the
+killer named, the score right), and a contrast margin from a scoring model's
+log-probabilities must show the line fits its own moment better than six others
+of another kind. On 400 held-out moments the narrator trained on it (narr3) beats
+the one before (narr2) and the base model:
+
+| | narr3 | narr2 | base |
+|---|---|---|---|
+| Contrast margin, mean (nats) | +1.95 | -0.40 | +1.36 |
+| The judge picks the line's moment among three (chance 33%) | 70.0% | 51.7% | 64.5% |
