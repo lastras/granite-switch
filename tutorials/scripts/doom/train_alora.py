@@ -420,6 +420,34 @@ def generate_lines(
     return out
 
 
+def check_tokenizer(tok, serve_dir: str, rows: list, n: int = 50) -> None:
+    """Training's ids must be the ids serving will see: ``n`` training prompts,
+    decoded, re-encoded by the served checkpoint's tokenizer, must come back the
+    same (a transformers that loads the tokenizer differently splits words and
+    digits differently, and the adapter then trains on prompts it never sees)."""
+    from transformers import AutoTokenizer
+
+    ref = AutoTokenizer.from_pretrained(serve_dir)
+    bad = 0
+    for r in rows[:n]:
+        ids = (
+            r[2]
+            if isinstance(r[2], list)
+            else tok.encode(r[2], add_special_tokens=False)
+        )
+        text = tok.decode(ids)
+        if ref(text, add_special_tokens=False).input_ids != ids:
+            bad += 1
+    if bad:
+        raise SystemExit(
+            f"{bad} of {min(n, len(rows))} prompts tokenize differently under "
+            f"{serve_dir}'s tokenizer than in training: train where serving runs"
+        )
+    print(
+        f"tokenizer: training's ids are serving's ({serve_dir}), {min(n, len(rows))} prompts"
+    )
+
+
 def train_window(curve: list[dict], steps: int) -> str:
     """Mean training loss over the last ``steps`` steps (one pass: each batch is
     fresh, so this is the training distribution's own held-out loss)."""
@@ -502,6 +530,11 @@ def main() -> None:
         "its config (kind, rank, targets) is used as saved",
     )
     ap.add_argument("--base", default="ibm-granite/granite-4.1-3b")
+    ap.add_argument(
+        "--serve-tokenizer",
+        help="A composed checkpoint the adapter will be served from: training stops "
+        "unless its tokenizer gives the same ids as training's on the prompts",
+    )
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--rank", type=int, default=32)
     # alpha = rank (scale 1) and lr 1e-4: at alpha 64 / lr 2e-4 a rank-32
@@ -622,6 +655,8 @@ def main() -> None:
             if args.eval_data
             else None
         )
+    if args.serve_tokenizer and main_rank:
+        check_tokenizer(tok, args.serve_tokenizer, rows)
     classes = list(label_ids)
     allowed = torch.tensor(list(label_ids.values()), device=device)
     if val_rows is None:

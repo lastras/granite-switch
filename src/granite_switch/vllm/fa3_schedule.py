@@ -20,32 +20,57 @@ Other models are untouched.
 
 from __future__ import annotations
 
-_PATCHED = False
+import logging
+
+logger = logging.getLogger(__name__)
+# "patched", or why not: a vLLM whose internals differ leaves the bug in place,
+# so it is said, not swallowed.
+STATUS = "not installed"
+_ATTRS = ("num_heads_q", "num_heads_kv", "headdim")
 
 
-def patch_flash_attn_schedule() -> None:
-    """Install the patch (idempotent; a no-op if vLLM's internals differ)."""
-    global _PATCHED
-    if _PATCHED:
-        return
+def patch_flash_attn_schedule() -> str:
+    """Install the patch (idempotent); returns :data:`STATUS`. Where vLLM's
+    internals differ it warns and changes nothing."""
+    global STATUS
+    if STATUS == "patched":
+        return STATUS
     try:
         from vllm.config import get_layers_from_vllm_config
         from vllm.model_executor.layers.attention.attention import Attention
         from vllm.v1.attention.backends import flash_attn as fa
-    except ImportError:
-        return
+    except ImportError as e:
+        STATUS = f"unavailable: {e}"
+        logger.warning("Granite Switch FA3 schedule patch not installed (%s)", STATUS)
+        return STATUS
     builder = getattr(fa, "FlashAttentionMetadataBuilder", None)
-    if builder is None or getattr(builder, "_granite_switch_schedule", False):
-        _PATCHED = True
-        return
+    if builder is None:
+        STATUS = "unavailable: no FlashAttentionMetadataBuilder"
+        logger.warning("Granite Switch FA3 schedule patch not installed (%s)", STATUS)
+        return STATUS
+    if getattr(builder, "_granite_switch_schedule", False):
+        STATUS = "patched"
+        return STATUS
     original = builder.__init__
 
-    def __init__(self, kv_cache_spec, layer_names, vllm_config, device):
-        original(self, kv_cache_spec, layer_names, vllm_config, device)
-        hf = getattr(vllm_config.model_config, "hf_config", None)
+    def __init__(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        names = ("kv_cache_spec", "layer_names", "vllm_config", "device")
+        bound = {**dict(zip(names, args)), **kwargs}
+        vllm_config, layer_names = bound.get("vllm_config"), bound.get("layer_names")
+        hf = getattr(getattr(vllm_config, "model_config", None), "hf_config", None)
         if getattr(hf, "model_type", None) != "granite_switch" or not getattr(
             self, "aot_schedule", False
         ):
+            return
+        if not all(hasattr(self, a) for a in _ATTRS):
+            # A vLLM that sizes the schedule elsewhere: schedule each call.
+            logger.warning(
+                "Granite Switch: FA3 metadata builder has no %s; ahead-of-time "
+                "schedule disabled for this group",
+                "/".join(_ATTRS),
+            )
+            self.aot_schedule = False
             return
         layers = get_layers_from_vllm_config(vllm_config, Attention, layer_names)
         shapes = {(a.num_heads, a.num_kv_heads, a.head_size) for a in layers.values()}
@@ -56,4 +81,5 @@ def patch_flash_attn_schedule() -> None:
 
     builder.__init__ = __init__
     builder._granite_switch_schedule = True
-    _PATCHED = True
+    STATUS = "patched"
+    return STATUS

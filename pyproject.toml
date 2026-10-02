@@ -40,7 +40,7 @@ tutorials = [
     "datasets>=2.0.0",
 ]
 # Doom reflex demo (tutorials/scripts/doom). vLLM comes from the default
-# `vllm19` group on the GPU host; on a Mac use `uv sync --extra doom
+# `vllm26` group on the GPU host; on a Mac use `uv sync --extra doom
 # --no-default-groups` to run the env, expert and UI without it.
 doom = [
     "granite-switch[hf,compose]",
