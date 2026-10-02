@@ -7,8 +7,11 @@ laptop (``doom_pipecat.py``) connects over one websocket, carried by ``ssh -L``,
 and turns it into WebRTC for the browser. What you say arrives as one audio
 segment per utterance (the laptop's VAD cuts them); the model's ASR transcribes
 it inside the narrator's request (:meth:`engine.Game.player_said`), and the
-narrator answers. Without you he speaks soon after a salient event or after a
-silence (:class:`talk.TalkClock`).
+narrator answers, from his own conversation with you and the game state (the
+output of his ``get_game_state`` call, :func:`talk.game_state`). Without you he
+speaks soon after a salient event or after a silence (:class:`talk.TalkClock`).
+The run log (``--log-dir``) keeps that state with every line, so any answer can
+be checked afterwards (:mod:`probes`).
 
 Processes: this one (the decision loop, the websocket server), vLLM's engine
 core, the game (:func:`engine.game_worker`, publishing its frames to shared
@@ -21,7 +24,8 @@ The websocket, at ``/ws`` (one client at a time; a new one replaces the old):
 
 * down: ``b"J" + JPEG`` (a frame); ``b"A" + line id (4 bytes) + int16 PCM`` (a
   piece of his line); JSON ``{"type": "hello" | "line" | "heard" | "audio_end"
-  | "event" | "latency", ...}``.
+  | "event" | "latency", ...}`` (a line carries the game state he answered
+  from; events: ``died``, with the killer; ``frag``; ``match_over``).
 * up: ``b"U" + int16 PCM, 16 kHz`` (one utterance); JSON ``{"type":
   "speaking"}`` (you started: he holds his remarks and drops what he had not
   said yet), ``{"type": "reset"}`` (a new match).
@@ -29,12 +33,15 @@ The websocket, at ``/ws`` (one client at a time; a new one replaces the old):
 ::
 
     # his voice: Kokoro's am_michael, 2 semitones down
-    python doom_live.py serve --model models/doom-h-alora-narr3-audio --port 8765 \\
+    python doom_live.py serve --model models/doom-h-alora-narr4-audio --port 8765 \\
         --tts-python kokoro-env/bin/python
     # or Chatterbox-Turbo, cloning a clip
-    python doom_live.py serve --model models/doom-h-alora-narr3-audio --port 8765 \\
+    python doom_live.py serve --model models/doom-h-alora-narr4-audio --port 8765 \\
         --tts turbo --tts-python tts-env/bin/python --voice-ref voices/him.wav
-    # no laptop: a scripted check, with a spoken question after a death
+    # no laptop: a scripted check, with spoken questions (q_<name>.wav): some
+    # referring back ("who was that", two lines after a death or a frag), and
+    # probes of the state (q_probe_<type>.wav), each answer checked against the
+    # state he was given
     python doom_live.py smoke --url ws://localhost:8765/ws --questions out/b0
 """
 
@@ -56,7 +63,7 @@ import socket
 import subprocess
 import sys
 import time
-from collections import deque
+from collections import Counter, deque
 from pathlib import Path
 
 import numpy as np
@@ -64,10 +71,11 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from doom_env import TIC_HZ
+from conversation import CONV_EXCHANGES, Conversation
+from doom_env import BOT_SETS, TIC_HZ
 from engine import AUDIO_HZ, AsyncPolicy, Game, SharedFrame
 from expert import BEHAVIORS
-from policy import ARMS, CRITIC, NARRATOR, ROUTER
+from policy import ARMS, CRITIC, NARRATOR, ROUTER, WARM_STATE
 from talk import sound_tag
 
 TTS_AUTHKEY = b"granite-switch-doom-tts"  # voice_video.TTS_AUTHKEY
@@ -123,14 +131,17 @@ def render_loop(frames_name: str, inbox, out, opts: dict) -> None:
                 continue
             _, tick, d, ms, state, stats = msg  # a decision
             style = info["adapter"]
+            # One request per adapter asked (the base model only when it writes a
+            # line itself, in a checkpoint without the narrator).
+            talker = {opts["talker"]}
             for t in range(last_tick + 1, tick):  # tics with no decision (dead, busy)
                 view.heat.push({}, style, False, info["critic"])
-                view.act.push({"base", NARRATOR} if t <= talk_until else set())
+                view.act.push(talker if t <= talk_until else set())
             last_tick = tick
             probs = d[style][1]
             critic = d[CRITIC][1] if CRITIC in d else {}
             view.heat.push(probs, style, True, critic)
-            active = {"base", *d} | ({NARRATOR} if tick <= talk_until else set())
+            active = set(d) | (talker if tick <= talk_until else set())
             view.act.push(active)
             lat.append(ms)
             last_second.append(ms)
@@ -230,6 +241,7 @@ class Live:
             "quality": args.quality,
             "gpu": gpu,
             "placement": pol.kit.placement,
+            "talker": pol.kit.talker or "base",  # who writes his lines
         }
         self.renderer = ctx.Process(
             target=render_loop,
@@ -243,7 +255,7 @@ class Live:
         self.line_id = 0
         self.cancelled: set[int] = set()
         self.said_at: deque[float] = deque()  # when each utterance arrived
-        self.last_death = None
+        self.last_death, self.frags = None, 0  # for the client's events
         self.rng = random.Random(args.seed)  # which lines get a sound tag
         self._sending = False
         self._next_frame: bytes | None = None
@@ -251,6 +263,12 @@ class Live:
         self.n = {"frames": 0, "frame_kb": 0, "voiced": 0, "heard": 0}
         self.ms: list[float] = []
         self._tasks: set[asyncio.Task] = set()
+        self.log = None  # this run's lines and matches, as JSON rows
+        if args.log_dir:
+            args.log_dir.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+            self.log = open(args.log_dir / f"live_{stamp}.jsonl", "a")
+            print(f"logging lines to {self.log.name}", flush=True)
 
     def spawn(self, coro) -> None:
         t = asyncio.create_task(coro)
@@ -293,8 +311,15 @@ class Live:
     async def new_game(self, start: bool = True) -> None:
         """A new match; ``start=False`` loads it and holds its clock until a
         client connects (loading takes a while)."""
-        if self.game is not None and not self.game.done:
-            self.game.proc.kill()
+        old = self.game
+        if old is not None:
+            # Nothing of the old match is said any more: not a line it is still
+            # writing, nor the queued lines his voice has not reached.
+            old.on_line = old.on_decision = None
+            self.cancelled.update(range(1, self.line_id + 1))
+            self.said_at.clear()
+            if not old.done:
+                old.proc.kill()
         a = self.args
         spec = {
             "seed": self.seed,
@@ -304,9 +329,18 @@ class Live:
             "frames": self.frames.name,
         }
         self.seed += 1
-        g = Game(0, spec, self.pol, a.idle_s, autostart=start)
+        g = Game(0, spec, self.pol, a.idle_s, autostart=start, conv_n=a.conv_exchanges)
         g.on_decision, g.on_line = self.on_decision, self.on_line
-        self.game, self.last_death = g, None
+        self.game, self.last_death, self.frags = g, None, 0
+        self.record(
+            {
+                "type": "match",
+                "seed": spec["seed"],
+                "model": a.model,
+                "talker": self.pol.kit.talker or "base",
+                "conv_exchanges": a.conv_exchanges,
+            }
+        )
         self.tell(("new",))
         g.proc.start()
         self.spawn(self._play(g))
@@ -363,8 +397,23 @@ class Live:
         if death and death != self.last_death:
             self.last_death = death
             self.spawn(self.send({"type": "event", "kind": "died", **death}))
+        if me > self.frags:
+            self.frags = me
+            self.spawn(self.send({"type": "event", "kind": "frag", "frags": me}))
+
+    def record(self, row: dict) -> None:
+        """One row of this run's log (``--log-dir``): a match, or a line with
+        what the narrator was told (the game state, and the moment's events
+        his conversation keeps; the conversation is the lines before it, back
+        to the match's start, up to ``conv_exchanges``)."""
+        if self.log is not None:
+            row = {"utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), **row}
+            self.log.write(json.dumps(row) + "\n")
+            self.log.flush()
 
     def on_line(self, x: dict) -> None:
+        keys = ("tick", "cue", "heard", "line", "ms", "state", "moment", "brief")
+        self.record({"type": "line", **{k: x[k] for k in keys}})
         self.line_id += 1
         lid = self.line_id
         if x["heard"]:
@@ -381,7 +430,7 @@ class Live:
             {
                 "type": "line",
                 "id": lid,
-                **{k: x[k] for k in ("line", "heard", "cue", "ms")},
+                **{k: x[k] for k in ("line", "heard", "cue", "ms", "state")},
             }
         )
         if x["heard"]:
@@ -469,14 +518,13 @@ async def serve(args) -> None:
         gpu_mem=args.gpu_mem,
         temperature=args.temperature,
         layout="chat",
+        base_talk=args.base_talk,
+        max_model_len=args.max_model_len,
     )
     await pol.warmup()
     # The ASR loads on its first clip: a second of quiet noise, now, not on yours.
     hum = np.random.default_rng(0).normal(0, 1e-3, AUDIO_HZ).astype(np.float32)
-    ids = pol.tok.encode(
-        "t0.2 hp 100 face 90 | clear | did wait\n", add_special_tokens=False
-    )
-    await pol.talk(ids, "now t1.0 | hp 100 armor 0", "", hum)
+    await pol.talk(Conversation(), WARM_STATE, hum)
     voice = Voice(args) if args.tts_python else None
     gpu = torch.cuda.get_device_name(0).replace("NVIDIA ", "")
     live = Live(args, pol, voice, gpu)
@@ -502,15 +550,37 @@ async def serve(args) -> None:
 
 
 # ── A scripted client, for a check without the laptop ──────────────────────────
+# Spoken probes of the game state for the smoke test: q_probe_<type>.wav.
+SMOKE_PROBES = (
+    "frags",
+    "deaths",
+    "health",
+    "weapon",
+    "ammo",
+    "leader",
+    "time_left",
+    "rank",
+    "armor",
+)
+
+
 async def smoke(args) -> None:
-    """Connect, watch, and talk: "can you hear me" after a few seconds, "who
-    killed you" after each of the first deaths, then "what's the score". Prints
-    each reply (the transcript, the line, whether a killer was named) and the
-    latency from the end of the question to his first audio; saves his audio
-    and a frame."""
+    """Connect, watch, and talk: "can you hear me" after a few seconds, "what's
+    the score" later. Two back-references, asked two of his lines after the
+    event (so it is in the conversation, the past tool outputs): "who was that"
+    after the first death (the reply should name the killer) and after a frag
+    with no death since (the victim is not known: it should name nobody). "who
+    killed you" right after the next death. Then the spoken probes
+    (q_probe_<type>.wav, :data:`SMOKE_PROBES`), one every 12 s. Every answer to
+    a question about the game is checked against the state he was given
+    (:func:`probes.verify`, the state the server sends with his line). Prints
+    each reply (the transcript, the line, the verdict) and the latency from
+    the end of the question to his first audio; saves his audio, a frame and
+    smoke.json."""
     import wave
 
     import aiohttp
+    import probes
     import soundfile as sf
     from scipy.signal import resample_poly
 
@@ -520,10 +590,22 @@ async def smoke(args) -> None:
         x = resample_poly(x, AUDIO_HZ, sr)
         return (np.clip(x, -1, 1) * 32767).astype(np.int16).tobytes()
 
+    bots = {n for names in BOT_SETS.values() for n in names}
+    back = (args.questions / "q_who_was_that.wav").exists()
+    if not back:
+        print("no q_who_was_that.wav: no back-reference questions", flush=True)
     asked: deque = deque()
     audio: dict[int, list[bytes]] = {}
     rates, lines, frames = {}, {}, []
     t_start, deaths, plan = time.perf_counter(), 0, [(5, "hear"), (60, "score")]
+    spoken = [t for t in SMOKE_PROBES if (args.questions / f"q_probe_{t}.wav").exists()]
+    plan += [(75 + 12 * i, f"probe_{t}") for i, t in enumerate(spoken)]
+    if not spoken:
+        print("no q_probe_<type>.wav: no spoken probes", flush=True)
+    # Back-references waiting to be asked: [what, the killer or None, lines to wait].
+    recall: dict[str, list] = {}
+    done: set[str] = set() if back else {"death", "frag"}
+    death_at = None  # how many lines he had said at the last death
     replies = []
     args.out.mkdir(parents=True, exist_ok=True)
     async with (
@@ -551,10 +633,31 @@ async def smoke(args) -> None:
                     audio.setdefault(lid, []).append(msg.data[5:])
                 continue
             m = json.loads(msg.data)
-            if m["type"] == "event" and m["kind"] == "died" and deaths < 2:
-                deaths += 1
-                await asyncio.sleep(1.5)  # respawned
-                await ask("who_killed", m["by"])
+            if m["type"] == "event" and m["kind"] == "died":
+                death_at = len(lines)
+                named = m["by"] not in (None, "yourself")
+                if "frag" in recall:  # "who was that" would be about the death now
+                    del recall["frag"]
+                    done.discard("frag")
+                if "death" in recall:  # another death first: ask about this one
+                    if named:
+                        recall["death"] = ["back_death", m["by"], 2]
+                    else:
+                        del recall["death"]
+                        done.discard("death")
+                elif "death" not in done and named:
+                    recall["death"] = ["back_death", m["by"], 2]
+                    done.add("death")
+                elif deaths < 1:
+                    deaths += 1
+                    await asyncio.sleep(1.5)  # respawned
+                    await ask("who_killed", m["by"])
+            elif m["type"] == "event" and m["kind"] == "frag":
+                # No death in the conversation (its last 8 lines) to mix it up with.
+                quiet = death_at is None or len(lines) - death_at > 8
+                if "frag" not in done and not recall and quiet and el > 20:
+                    recall["frag"] = ["back_frag", None, 2]
+                    done.add("frag")
             elif m["type"] == "line":
                 lines[m["id"]] = m
                 print(
@@ -565,11 +668,25 @@ async def smoke(args) -> None:
                 if m["heard"] and asked:
                     name, killer, t_ask = asked.popleft()
                     replies.append((name, killer, t_ask, m))
+                for k, r in list(recall.items()):
+                    r[2] -= 1
+                    if r[2] == 0:
+                        del recall[k]
+                        await ws.send_bytes(b"U" + pcm16("who_was_that"))
+                        asked.append((r[0], r[1], time.perf_counter()))
             elif m["type"] == "audio":
                 rates[m["id"]] = m["sr"]
             elif m["type"] == "latency":
                 print(f"         server latency {m}", flush=True)
-            if el > args.seconds or (len(replies) >= 4 and not plan):
+            finished = not plan and not recall and not asked and deaths >= 1
+            if el > args.seconds or (finished and done == {"death", "frag"}):
+                break
+            if (
+                not plan
+                and not asked
+                and el > 75 + 12 * len(spoken) + 20
+                and deaths >= 1
+            ):
                 break
     for lid, parts in audio.items():
         with wave.open(str(args.out / f"line_{lid}.wav"), "wb") as w:
@@ -581,22 +698,53 @@ async def smoke(args) -> None:
     print(
         f"== {len(frames)} frames, {len(frames) / span:.1f} fps, {np.mean([b for _, b in frames]) / 1024:.0f} KB each"
     )
+    # What each question asks about the game state, checked against the state
+    # he was given for the line that answered it.
+    as_probe = {"who_killed": "killer_now", "score": "score", "back_frag": "victim"}
+    verdicts, out = Counter(), []
     for name, killer, t_ask, m in replies:
         first = m.get("first")
-        named = killer is not None and killer.lower() in m["line"].lower()
+        said = sorted(n for n in bots if re.search(rf"\b{n}\b", m["line"]))
+        check, ptype = "", as_probe.get(name)
+        if name.startswith("probe_"):
+            ptype = name[len("probe_") :]
+        if name == "back_death":
+            ok = killer in said
+            check = f"  [killer {killer}: {'named' if ok else 'NOT named'}]"
+        state = m.get("state")
+        verdict = None
+        if ptype and state:
+            if ptype in probes.allowed(state) or ptype in ("victim", "score"):
+                verdict, why = probes.verify({"type": ptype}, m["line"], state)
+                check += f"  [{ptype}: {verdict.upper()}; {probes.answer_text({'type': ptype}, state)}]"
+                verdicts[verdict] += 1
+            else:
+                check += f"  [{ptype}: not askable in this state]"
+        ok_claims = probes.claims(m["line"], state)[0] if state else None
+        if ok_claims is False:
+            check += "  [CLAIMS: " + probes.claims(m["line"], state)[1] + "]"
+        out.append(
+            {
+                "asked": name,
+                "heard": m["heard"],
+                "line": m["line"],
+                "verdict": verdict,
+                "claims": ok_claims,
+            }
+        )
         print(
-            f"  {name:<10} heard {m['heard']!r} -> {m['line']}"
-            + (
-                f"  [killer {killer}: {'named' if named else 'NOT named'}]"
-                if name == "who_killed"
-                else ""
-            )
+            f"  {name:<14} heard {m['heard']!r} -> {m['line']}"
+            + check
             + (
                 f"  first audio {1000 * (first - t_ask):.0f} ms after the question"
                 if first
                 else ""
             )
         )
+    print(f"SMOKE probes: {dict(verdicts)}", flush=True)
+    (args.out / "smoke.json").write_text(
+        json.dumps({"verdicts": verdicts, "replies": out}, indent=1)
+    )
 
 
 def main() -> None:
@@ -612,6 +760,22 @@ def main() -> None:
     s.add_argument("--n-bots", type=int, default=7)
     s.add_argument("--seed", type=int, default=5)
     s.add_argument("--idle-s", type=float, default=12.0, help="Silence before a remark")
+    s.add_argument(
+        "--base-talk",
+        action="store_true",
+        help="The base model writes his lines (on the narrator's prompt), not the "
+        "narrator adapter",
+    )
+    s.add_argument(
+        "--conv-exchanges",
+        type=int,
+        default=CONV_EXCHANGES,
+        help="Exchanges the narrator's conversation keeps",
+    )
+    s.add_argument(
+        "--max-model-len", type=int, default=16384, help="Room for a long conversation"
+    )
+    s.add_argument("--log-dir", type=Path, help="Write each run's lines here (JSONL)")
     s.add_argument("--temperature", type=float, default=1.0, help="Style, planner")
     s.add_argument("--gpu-mem", type=float, default=0.45)
     s.add_argument("--fps", type=float, default=20.0, help="Stream frame rate")
@@ -635,7 +799,7 @@ def main() -> None:
     k = sub.add_parser("smoke", help="A scripted client")
     k.add_argument("--url", default="ws://localhost:8765/ws")
     k.add_argument("--questions", type=Path, required=True, help="q_<name>.wav files")
-    k.add_argument("--seconds", type=float, default=150.0)
+    k.add_argument("--seconds", type=float, default=300.0)
     k.add_argument("--out", type=Path, default=Path("out/smoke"))
     args = ap.parse_args()
     if args.cmd == "serve" and args.pitch is None:

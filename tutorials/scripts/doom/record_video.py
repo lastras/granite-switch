@@ -30,7 +30,6 @@ import json
 import math
 import os
 import random
-import re
 import sys
 import time
 from collections import deque
@@ -40,21 +39,23 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from conversation import Conversation, Exchange
 from doom_env import AUDIO_HZ, MATCH_TICS, TIC_HZ, TIC_MS, DoomEnv
 from expert import BEHAVIORS, PLAN_EVERY_TICS
-from history import History, said_entry
+from history import History
 from overlay import KINDS, Overlay
-from policy import (
-    ARMS,
-    CRITIC,
-    NARRATOR,
-    ROUTER,
-    make_policy,
-    spoken_entry,
-    state_text,
-    talk_extra,
+from policy import ARMS, CRITIC, NARRATOR, ROUTER, make_policy, state_text
+from talk import (
+    IDLE_S,
+    EventLog,
+    EventPartner,
+    TalkClock,
+    Tracker,
+    brief,
+    game_state,
+    moment_events,
+    sound_tag,
 )
-from talk import IDLE_S, EventPartner, TalkClock, Tracker, brief, sound_tag
 
 
 def main() -> None:
@@ -73,8 +74,7 @@ def main() -> None:
     ap.add_argument(
         "--temperature", type=float, default=1.0, help="Style and planner sampling"
     )
-    ap.add_argument("--layout", default="log", help="The adapters' prompt layout")
-    ap.add_argument("--persona", default="marine", help="How it talks: marine, crime")
+    ap.add_argument("--layout", default="log", help="The game adapters' prompt layout")
     ap.add_argument(
         "--no-hud",
         action="store_true",
@@ -123,7 +123,6 @@ def main() -> None:
             warmup=100,
             temperature=args.temperature,
             layout=args.layout,
-            persona=args.persona,
             enforce_eager=args.eager,
             cudagraph_mode=args.cudagraph_mode,
             attention={"flash_attn_version": 2} if args.fa2 else None,
@@ -141,8 +140,10 @@ def main() -> None:
     sfx: list[np.ndarray] = []  # the game's sound, one tic per frame
     silent_tic = np.zeros((AUDIO_HZ // TIC_HZ, 2), np.int16)
     obs = env.reset(seed=args.seed)
-    hist = History(getattr(pol, "tok", None))
-    tracker = Tracker(match_s=MATCH_TICS / TIC_HZ)  # the brief's facts
+    hist = History(getattr(pol, "tok", None))  # the game log
+    conv = Conversation()  # what the narrator reads, with the game state
+    tracker = Tracker(match_s=MATCH_TICS / TIC_HZ)  # the game state's facts
+    log, last_ex = EventLog(), None  # the match's events; his last exchange's tick
     fired = tracker.update(obs)
     clock = TalkClock(args.idle_s) if args.talk else None
     partner = EventPartner(random.Random(args.seed)) if args.partner_events else None
@@ -186,6 +187,7 @@ def main() -> None:
             weapon = None
             active: set[str] = {ROUTER} if routed else set()  # models run this tic
             routed = False
+            log.add(fired)
             if clock is not None:
                 clock.event(fired)
             if partner is not None:
@@ -196,8 +198,8 @@ def main() -> None:
                 want = [adapter] if args.no_critic else [adapter, CRITIC]
                 if obs.tick % PLAN_EVERY_TICS == 0:
                     want.append(ARMS)
-                # The base model prefills the new state; each adapter reads its KV.
-                active |= {"base", *want}
+                # One request per adapter; vLLM computes their shared prefix once.
+                active |= set(want)
                 decs = pol.decide_many(obs, tuple(want), hist)
                 d = decs[adapter]
                 action = d.action
@@ -218,29 +220,21 @@ def main() -> None:
                 cue = None
                 if clock is not None and player is None and len(hist.entries) >= 5:
                     cue = clock.due(obs.tick)
-                if hasattr(pol, "talk") and (player or cue):
-                    state = state_text(obs)
-                    b = brief(hist.entries, state, tracker.facts())
-                    mine = [
-                        re.sub(r"\[[^\]]*\]\s*", "", x)
-                        for _, w, x in caps
-                        if w == "bot"
-                    ][-3:]
-                    last = " / ".join(f'"{x}"' for x in mine) or None
+                if hasattr(pol, "narrate") and (player or cue):
+                    facts = tracker.facts()
+                    b = brief(hist.entries, state_text(obs), facts)
+                    gs = game_state(state_text(obs), facts, log.events)
                     t_talk = time.perf_counter()
-                    line = pol.talk([(hist.ids, state)], [b], [player], [last])[0]
+                    line = pol.narrate([(conv, gs, player)])[0]
                     # Shown as running for as many tics as writing the line took.
                     talk_ms = (time.perf_counter() - t_talk) * 1000
                     talk_until = frame_i + max(1, math.ceil(talk_ms / TIC_MS)) - 1
-                    voiced = (
-                        sound_tag(b, tag_rng) + line
-                    )  # tags: voiced, not in history
-                    if args.layout == "chat":
-                        hist.append(spoken_entry(state, line, talk_extra(b, player)))
-                    else:
-                        if player:
-                            hist.append(said_entry(obs.tick, "user", player))
-                        hist.append(said_entry(obs.tick, "me", line))
+                    # Tags: voiced, not in the conversation.
+                    voiced = sound_tag(b, tag_rng) + line
+                    if line:
+                        moment = moment_events(log.since(last_ex, obs.tick))
+                        conv.add(Exchange(obs.tick, moment, player, line))
+                        last_ex = obs.tick
                     if clock is not None:
                         clock.said(obs.tick)
                     if player:
@@ -263,7 +257,9 @@ def main() -> None:
             if obs.done:
                 obs = env.reset()
                 hist.reset()
+                conv = Conversation()
                 tracker = Tracker(match_s=MATCH_TICS / TIC_HZ)
+                log, last_ex = EventLog(), None
             fired = tracker.update(obs)
             a = np.fromiter(lat, dtype=np.float64)
             img = view.draw(

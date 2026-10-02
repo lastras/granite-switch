@@ -114,7 +114,11 @@ class DoomLink(FrameProcessor):
             return
         if isinstance(frame, RTVIClientMessageFrame):  # the page's buttons (RTVI)
             if frame.type == "reset":
+                # His lines from the old match are not voiced any more.
+                self._dropped_upto = self._last_line
                 await self._send({"type": "reset"})
+                if self._bot_speaking:
+                    await self.broadcast_interruption()
                 logger.info("new match")
             return
         if isinstance(frame, InputAudioRawFrame):  # the microphone: up, not out

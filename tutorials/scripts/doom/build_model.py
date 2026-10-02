@@ -43,6 +43,7 @@ import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from conversation import Conversation, narrator_ids
 from policy import ADAPTERS, NARRATOR, alora_invocation_ids
 
 DEFAULT_TARGETS = (
@@ -220,7 +221,10 @@ def live_check(pol, seconds: float = 20.0, seed: int = 5) -> dict:
 def verify_lines(pol, rows: list[dict]) -> dict:
     """The narrator, teacher-forced: for each held-out line (its prompt, then
     the written line), the composed checkpoint's argmax at every line position
-    against PEFT's (``peft_ids`` in heldout_preds.jsonl)."""
+    against PEFT's (``peft_ids`` in heldout_preds.jsonl). The prompt is the
+    narrator's own (its conversation, the partner's words, the game state),
+    rebuilt from the row, with the narrator's control token as the demo serves
+    it."""
     from vllm import SamplingParams
     from vllm.inputs import TokensPrompt
 
@@ -230,7 +234,13 @@ def verify_lines(pol, rows: list[dict]) -> dict:
     for i in range(0, len(rows), 64):
         chunk = rows[i : i + 64]
         prompts = [
-            pol.pb.turn_ids(r["history_ids"], r["state"], r["extra"], NARRATOR)
+            narrator_ids(
+                pol.tok,
+                Conversation.from_json(r["conv"]),
+                r["tool"],
+                r["player"],
+                NARRATOR,
+            )
             + r["target_ids"]
             for r in chunk
         ]
@@ -293,7 +303,8 @@ def verify(
 
     # The demo's own engine settings: the FA3 schedule fault showed only with
     # the default max_num_seqs (16), not with 64.
-    pol = VLLMPolicy(model, warmup=5, layout=layout)
+    # Room for the narrator's 30-exchange conversation.
+    pol = VLLMPolicy(model, warmup=5, layout=layout, max_model_len=8192)
     report = {}
     if narrator is not None:
         rows = [json.loads(x) for x in open(narrator / "heldout_preds.jsonl")]

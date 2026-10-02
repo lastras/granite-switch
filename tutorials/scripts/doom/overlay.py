@@ -320,9 +320,10 @@ MODEL_LABELS = {
 
 
 class Activity:
-    """Which model runs on each tic: the base model and every adapter in the
-    checkpoint, one row each, a column per tic, newest at the right; the labels
-    light up while their model runs."""
+    """Which model runs on each tic: every adapter in the checkpoint, and the
+    base model when it is asked itself (not the shared prefill inside an
+    adapter's request), one row each, a column per tic, newest at the right;
+    the labels light up while their model runs."""
 
     def __init__(self, width: int, models: list[str]):
         self.models = models
@@ -356,8 +357,8 @@ class Activity:
         d.text((18, y0 + 8), "WHICH MODEL RUNS", font=self.f_small, fill=HELP)
         d.text(
             (170, y0 + 8),
-            "one column per tic, newest at the right  ·  every adapter reads the base "
-            "model's one shared KV cache (aLoRA)",
+            "one column per tic, newest at the right  ·  one request per adapter; "
+            "their shared prefix is computed once (aLoRA)",
             font=self.f_small,
             fill=HELP,
         )

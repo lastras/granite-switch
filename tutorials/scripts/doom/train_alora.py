@@ -18,9 +18,12 @@ Adapters and their labels (rows from ``collect.py``):
   used for the aLoRA-vs-LoRA comparison, not composed into the demo).
 * ``router``: rows from ``router_data.py`` (instruction, label); no history.
 * ``narrator``: a whole spoken line, the one generating adapter. Rows are the
-  lines ``narrate_ivr.py`` wrote that passed every check, each in its match's
-  conversation (chat layout, :func:`load_narration_rows`); the loss is
-  cross-entropy on the line's tokens and the end of the turn.
+  lines ``partner_ivr.py`` wrote that passed every check (and, with
+  ``--extra-rows``, the verified samples of ``rft.py``), each on the narrator's
+  own prompt: its conversation with the partner, the game reaching him as the
+  output of a ``get_game_state`` tool call, no game log
+  (:func:`load_narration_rows`); the loss is cross-entropy on the line's
+  tokens and the end of the turn.
 
 ``--kind lora`` trains a plain LoRA on the same data and prompts: the baseline
 the aLoRA is compared against. ``--kind sr`` trains a Shadow Residual adapter
@@ -63,6 +66,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from conversation import CONV_EXCHANGES, Conversation, narrator_ids
 from doom_env import TIC_HZ
 from history import PROBE_WORDS, History, said_entry
 from policy import (
@@ -82,7 +86,6 @@ from policy import (
     route_token_ids,
     spoken_entry,
     system_prompt,
-    talk_extra,
 )
 from talk import brief
 
@@ -233,65 +236,65 @@ def load_router_rows(paths: list[Path]):
     return out
 
 
-def load_narration_rows(paths: list[Path], moments: Path, tok) -> list:
-    """Narrator rows as (stream, n, (state, closing extra), target ids, match
-    key, meta), one per written line that passed every check.
-
-    A match's conversation is rebuilt as the chat layout's live game builds it:
-    its log entries, and at each earlier speaking moment the line written there
-    (passing or not: it is what the writer had said, and saw) as a closed turn,
-    ``policy.spoken_entry``, under the same 10 s window. The prompt is that
-    history up to the moment, closed by the moment's brief, what the person
-    watching said if anything (``partner_ivr.py`` rows' ``player``) and the
-    state (``PromptBuilder.turn_ids``); the target is the line and the end of
-    the turn. ``moments``: ``talk.py moments`` output, for each moment's state,
-    brief and last log lines."""
-    ctx = {}
-    for x in open(moments):
-        m = json.loads(x)
-        ctx[(m["data"], m["ep"])] = {mm["t"]: mm for mm in m["moments"]}
+def narration_matches(paths: list[Path]) -> dict:
+    """``partner_ivr.py`` rows by match, in order."""
     by_match: dict = {}
     for p in paths:
         for x in open(p):
             r = json.loads(x)
             by_match.setdefault((r["data"], r["style"], r["ep"]), []).append(r)
-    entries_of = {}
-    for data, style in {k[:2] for k in by_match}:
-        for x in open(Path(data) / f"{style}_history.jsonl"):
-            h = json.loads(x)
-            entries_of[(data, style, h["ep"])] = h["entries"]
+    for rows in by_match.values():
+        rows.sort(key=lambda r: r["t"])
+    return by_match
+
+
+def load_narration_rows(
+    paths: list[Path], tok, conv_n: int = CONV_EXCHANGES, extra: bool = False
+) -> list:
+    """Narrator rows as (None, 0, prompt ids, target ids, match key, meta), one
+    per written line that passed every check.
+
+    Each row holds the conversation the writer saw (``conv``: the exchanges
+    before it, as :class:`conversation.Conversation` keeps them live; at most
+    ``conv_n``), the partner's words and the game state he answers from
+    (``tool``). The prompt is :func:`conversation.narrator_ids` in its
+    base-model form (the chat template, the tool declared, every call and
+    output in place; PEFT's aLoRA activates at its last assistant header); the
+    target is the line and the end of the turn. ``extra``: rows of ``rft.py``
+    (several lines per prompt may pass), marked so they only ever train."""
     eot = tok.encode(_EOT, add_special_tokens=False)
     out = []
-    for key, rows in by_match.items():
-        rows.sort(key=lambda r: r["t"])
-        entries, conv, at, i = entries_of[key], [], [], 0
-        for r in rows:
-            m = ctx[(key[0], key[2])][r["t"]]
-            conv += entries[i : r["hist_n"]]
-            i = r["hist_n"]
-            extra = talk_extra(m["brief"], r.get("player"))
-            at.append((len(conv), m, extra, r))
-            if r["line"]:
-                conv.append(spoken_entry(m["state"], r["line"], extra))
-        stream = Stream(conv, tok)
-        for n, m, extra, r in at:
+    for p in paths:
+        for x in open(p):
+            r = json.loads(x)
             if not (r["ok"] and r["line"]):
                 continue
+            key = (r["data"], r["style"], r["ep"])
+            conv = (
+                Conversation.from_json(r["conv"][-conv_n:])
+                if r["conv"]
+                else Conversation()
+            )
             line = " ".join(r["line"].split())
+            player = r.get("player")
             meta = {
                 "data": key[0],
+                "style": key[1],
                 "ep": key[2],
                 "t": r["t"],
-                "brief": m["brief"],
-                "recent": m["recent"],
-                "prev": r["prev"],
-                "player": r.get("player"),
-                "utype": r.get("utype"),  # what the partner asked, and the
-                "facts": m.get("facts"),  # match: factual answers are checked
+                "conv": conv.to_json(),
+                "tool": r["tool"],
+                "player": player,
+                "utype": r.get("utype"),
+                "probe": r.get("probe"),  # a question about the game state:
+                "moment": r.get("moment"),  # its answer is checked (probes.py)
+                "prev": r.get("prev", []),
                 "line": line,
+                "extra": extra,
             }
+            ids = narrator_ids(tok, conv, r["tool"], player)
             target = tok.encode(line, add_special_tokens=False) + eot
-            out.append((stream, n, (m["state"], extra), target, key, meta))
+            out.append((None, 0, ids, target, key, meta))
     return out
 
 
@@ -450,12 +453,7 @@ def main() -> None:
         type=Path,
         nargs="+",
         required=True,
-        help="collect.py dirs (router: jsonl; narrator: narrate_ivr.py jsonl)",
-    )
-    ap.add_argument(
-        "--moments",
-        type=Path,
-        help="Narrator: the talk.py moments file the lines were written for",
+        help="collect.py dirs (router: jsonl; narrator: partner_ivr.py jsonl)",
     )
     ap.add_argument(
         "--gen-n",
@@ -471,6 +469,20 @@ def main() -> None:
         metavar="NAME=ADAPTER_DIR",
         help="Narrator: also sample the --gen-n moments from these adapters "
         "(e.g. the previous narrator), as column NAME",
+    )
+    ap.add_argument(
+        "--extra-rows",
+        type=Path,
+        nargs="*",
+        default=[],
+        help="Narrator: more lines to train on, never held out (rft.py's verified "
+        "samples; several per prompt)",
+    )
+    ap.add_argument(
+        "--conv-exchanges",
+        type=int,
+        default=CONV_EXCHANGES,
+        help="Narrator: exchanges its conversation keeps (as doom_live.py serves it)",
     )
     ap.add_argument("--eval-data", type=Path, nargs="*", help="Explicit held-out set")
     ap.add_argument(
@@ -569,13 +581,11 @@ def main() -> None:
         rows = load_router_rows(args.data)
         val_rows = load_router_rows(args.eval_data) if args.eval_data else None
     elif lines:
-        if args.moments is None:
-            raise SystemExit("--moments is required for the narrator")
         label_ids = {}
-        pb = PromptBuilder(tok, system_prompt("chat"))
-        rows = load_narration_rows(args.data, args.moments, tok)
+        pb = None  # the narrator's prompts are rendered by the chat template
+        rows = load_narration_rows(args.data, tok, args.conv_exchanges)
         val_rows = (
-            load_narration_rows(args.eval_data, args.moments, tok)
+            load_narration_rows(args.eval_data, tok, args.conv_exchanges)
             if args.eval_data
             else None
         )
@@ -618,6 +628,14 @@ def main() -> None:
         train_rows, val_rows = split_by_episode(rows, args.val_frac, args.seed)
     else:
         train_rows = rows
+    if lines and args.extra_rows:
+        held = {r[4] for r in val_rows}
+        extra = load_narration_rows(
+            args.extra_rows, tok, args.conv_exchanges, extra=True
+        )
+        extra = [r for r in extra if r[4] not in held]  # never a held-out match
+        print(f"narrator: {len(extra)} extra rows from {len(args.extra_rows)} files")
+        train_rows = train_rows + extra
     rng = random.Random(args.seed)
     if len(train_rows) > args.max_examples:
         train_rows = rng.sample(train_rows, args.max_examples)
@@ -627,10 +645,10 @@ def main() -> None:
 
     def prompt(r) -> list[int]:
         stream, n, state = r[0], r[1], r[2]
+        if lines:
+            return state  # the narrator's prompt, assembled when loaded
         if stream is None:
             return pb.ids(state, None)
-        if lines:
-            return pb.turn_ids(stream.ids(n), *state)
         return pb.game_ids(stream.ids(n), state, [None])[0]
 
     def target(r) -> list[float]:
@@ -828,8 +846,9 @@ def main() -> None:
     train_curve: list[dict] = []  # training loss, every 50 steps
     best = {"soft_ce": math.inf, "step": None}
     lengths = [
-        (r[0].length(r[1]) if r[0] is not None else 0)
-        + len(r[2] if isinstance(r[2], str) else "".join(r[2])) // 3
+        len(r[2])
+        if lines
+        else (r[0].length(r[1]) if r[0] is not None else 0) + len(r[2]) // 3
         for r in train_rows
     ]
     model.train()
@@ -942,11 +961,10 @@ def main() -> None:
         for r, q in zip(val_rows, probs):
             stream, n, state = r[0], r[1], r[2]
             if lines:
-                row = {
-                    "history_ids": stream.ids(n),
-                    "state": state[0],
-                    "extra": state[1],
-                    "line": r[5]["line"],
+                meta = r[5]
+                row = {  # the narrator's prompt, to rebuild (build_model.py verify)
+                    **{k: meta[k] for k in ("conv", "t", "tool", "player")},
+                    "line": meta["line"],
                     "target_ids": r[3],
                     "peft_ids": q[0],
                     "peft_margin": [round(x, 4) for x in q[1]],
@@ -962,14 +980,14 @@ def main() -> None:
             f.write(json.dumps(row) + "\n")
     if lines and args.gen_n:
         # The same held-out moments, a line from the adapter and one from the
-        # base model: narrate_ivr.py --judge scores both.
+        # base model (and from other narrators): partner_ivr.py judge scores them.
         gen = val_rows[: args.gen_n]
         ps = [prompt(r) for r in gen]
         said = {
             k: generate_lines(raw, tok, ps, pad_id, device, adapter=k == "adapter")
             for k in ("adapter", "base")
         }
-        for spec in args.gen_compare:  # another narrator on the same moments
+        for spec in args.gen_compare:  # other narrators
             name, path = spec.split("=", 1)
             raw.load_adapter(path, adapter_name=name)
             raw.set_adapter(name)
@@ -980,8 +998,9 @@ def main() -> None:
                 row = {**r[5], **{k: v[i] for k, v in said.items()}}
                 f.write(json.dumps(row) + "\n")
         for i in range(min(8, len(gen))):
+            asked = gen[i][5]["player"] or "(nothing)"
             print(
-                f"  {gen[i][5]['brief']}\n    written: {gen[i][5]['line']}\n"
+                f"  partner: {asked}\n    written: {gen[i][5]['line']}\n"
                 f"    adapter: {said['adapter'][i]}\n    base:    {said['base'][i]}"
             )
     metrics = {

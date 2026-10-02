@@ -87,9 +87,25 @@ JUDGE = {
 }
 
 
+# Typographic punctuation, as plain ASCII (the dashes stay: the calm check reads them).
+_PLAIN = str.maketrans(
+    {
+        "\u2019": "'",
+        "\u2018": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u2011": "-",
+        "\u2010": "-",
+        "\u00a0": " ",
+        "\u2026": "...",
+    }
+)
+
+
 def clean(text: str) -> str:
-    """The spoken line: no reasoning, no quote marks, one line."""
-    text = re.sub(r"(?s)<think>.*?</think>", "", str(text))
+    """The spoken line: no reasoning, no quote marks, one line, plain ASCII
+    punctuation."""
+    text = re.sub(r"(?s)<think>.*?</think>", "", str(text)).translate(_PLAIN)
     text = text.split("</think>")[-1]
     lines = [x.strip().strip('"').strip("“”").strip() for x in text.splitlines()]
     return next((x for x in lines if x), "")

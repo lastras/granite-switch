@@ -12,11 +12,15 @@ entries as text, and the match facts of its :class:`talk.Tracker`), asks the
 style adapter, critic and, on its cadence, the weapon planner for every tic,
 and lets the player speak a short line soon after a salient event, after a
 silence, or when the person watching speaks (:class:`talk.TalkClock`, the same
-rule the narrator's data was written on). The line joins the history, so every
-adapter's next prompt holds it. All requests go to one vLLM ``AsyncLLM``: its
-engine core runs in its own process, so a spoken request (including the
-watcher's audio, transcribed by the model's ASR cascade inside the narrator's
-request) never holds up a reflex decision.
+rule the narrator's data was written on). Two streams: the game adapters read
+only the game log, and the narrator reads its own conversation with the
+watcher (:class:`conversation.Conversation`), the game reaching him as the
+output of a ``get_game_state`` tool call (:func:`talk.game_state`, built from
+the state line, the tracker's facts and the match's events as the game sends
+them). The line joins the conversation, never the game log. All
+requests go to one vLLM ``AsyncLLM``: its engine core runs in its own process,
+so a spoken request (including the watcher's audio, transcribed by the model's
+ASR cascade inside the narrator's request) never holds up a reflex decision.
 
     python engine.py run --model models/doom-f-alora --games 8 --seconds 120
     # model on a GPU node, games on a CPU node:
@@ -44,22 +48,31 @@ from collections import Counter
 from pathlib import Path
 
 import numpy as np
+from conversation import CONV_EXCHANGES, Conversation, Exchange, narrator_ids
 from doom_env import TIC_HZ, DoomEnv, isolate_workdir
 from expert import BEHAVIORS, PLAN_EVERY_TICS
-from history import History, said_entry
+from history import History
 from policy import (
     ARMS,
     AUDIO_MARKER,
     CRITIC,
     LAYOUTS,
+    WARM_MOMENT,
+    WARM_STATE,
     engine_kwargs,
     output_dist,
     prompt_kit,
-    spoken_entry,
     state_text,
-    talk_extra,
 )
-from talk import IDLE_S, TalkClock, Tracker, brief
+from talk import (
+    IDLE_S,
+    EventLog,
+    TalkClock,
+    Tracker,
+    brief,
+    game_state,
+    moment_events,
+)
 
 TIC_S = 1.0 / TIC_HZ
 AUDIO_HZ = 16_000  # the watcher's speech, as the ASR takes it
@@ -197,7 +210,11 @@ def game_worker(conn, spec: dict) -> None:
 # ── Server side ────────────────────────────────────────────────────────────────
 class AsyncPolicy:
     """The composed checkpoint behind a vLLM AsyncLLM, with the same prompts,
-    vocabularies and engine settings as :class:`policy.VLLMPolicy`."""
+    vocabularies and engine settings as :class:`policy.VLLMPolicy`.
+    ``base_talk``: the base model writes the spoken lines, on the narrator's
+    prompt, even if the checkpoint has the narrator adapter.
+    ``max_model_len``: room for the narrator's conversation (30 exchanges
+    are about 3-4k tokens)."""
 
     def __init__(
         self,
@@ -207,7 +224,8 @@ class AsyncPolicy:
         gpu_mem: float,
         temperature: float,
         layout: str = "log",
-        persona: str = "marine",
+        base_talk: bool = False,
+        max_model_len: int = 4096,
     ):
         from transformers import AutoTokenizer
         from vllm import AsyncEngineArgs, SamplingParams
@@ -215,15 +233,20 @@ class AsyncPolicy:
         from vllm.v1.engine.async_llm import AsyncLLM
 
         kw = engine_kwargs(
-            model, max_num_seqs=max_num_seqs, gpu_memory_utilization=gpu_mem
+            model,
+            max_num_seqs=max_num_seqs,
+            gpu_memory_utilization=gpu_mem,
+            max_model_len=max_model_len,
         )
         kw["compilation_config"] = CompilationConfig(**kw["compilation_config"])
         self.engine = AsyncLLM.from_engine_args(AsyncEngineArgs(**kw))
         self.tok = AutoTokenizer.from_pretrained(model)
-        self.kit = prompt_kit(
-            self.tok, temperature=temperature, layout=layout, persona=persona
-        )
-        self.layout = layout
+        # The narrator's prompt is rendered in another thread: its own copy (a
+        # fast tokenizer is not safe to share across threads).
+        self.ntok = AutoTokenizer.from_pretrained(model)
+        self.kit = prompt_kit(self.tok, temperature=temperature, layout=layout)
+        if base_talk:
+            self.kit.talker = None
         # The audio marker's id (a checkpoint composed with audio has one).
         self.audio_id = self.tok.convert_tokens_to_ids(AUDIO_MARKER)
         # Temperature only (top-p autotunes a FlashInfer kernel on first use).
@@ -259,24 +282,21 @@ class AsyncPolicy:
         return res
 
     async def talk(
-        self, hist_ids, state: str, brief_text: str, player=None
-    ) -> tuple[str, str, str | None]:
-        """One spoken line, the text that closed the user turn before it (chat
-        layout; "" for the log layout) and what the person watching said, as
-        text. ``player``: their words, which the line answers: text, or their
-        speech (16 kHz float32), which the checkpoint's own ASR transcribes
-        inside this request (chat layout, a checkpoint composed with audio)."""
+        self, conv: Conversation, state: dict, player=None
+    ) -> tuple[str, str | None]:
+        """One spoken line, on the narrator's own prompt (the conversation, then
+        the tool call and ``state``, its output: :func:`talk.game_state`), and
+        what the person watching said, as text. ``player``: their words, which
+        the line answers: text, or their speech (16 kHz float32), which the
+        checkpoint's own ASR transcribes inside this request (a checkpoint
+        composed with audio)."""
         audio = None if player is None or isinstance(player, str) else player
-        if self.layout == "chat":
-            extra = talk_extra(
-                brief_text, AUDIO_MARKER if audio is not None else player
-            )
-            ids = self.kit.pb.turn_ids(hist_ids, state, extra, self.kit.talker)
-        elif audio is not None:
-            raise ValueError("speech input needs the chat layout")
-        else:
-            extra = ""
-            ids = self.kit.pb.talk_ids(hist_ids, state, brief_text, player)
+        said = AUDIO_MARKER if audio is not None else player
+        # The chat template's render (~5 ms at the full window), off the loop
+        # that dispatches decisions.
+        ids = await asyncio.get_running_loop().run_in_executor(
+            None, narrator_ids, self.ntok, conv, state, said, self.kit.talker
+        )
         o = await self._one(ids, self.talk_sp, audio)
         heard = player
         if audio is not None:
@@ -284,9 +304,8 @@ class AsyncPolicy:
             at = ids.index(self.audio_id)
             got = o.prompt_token_ids
             heard = self.tok.decode(got[at : len(got) - (len(ids) - at - 1)]).strip()
-            extra = talk_extra(brief_text, heard)
         text = re.sub(r"\[[^\]]*\]\s*", "", o.outputs[0].text)  # tags: not the model's
-        return text.strip().strip('"').split("\n")[0], extra, heard
+        return text.strip().strip('"').split("\n")[0], heard
 
     async def warmup(self) -> None:
         state = (
@@ -296,6 +315,7 @@ class AsyncPolicy:
         ids = self.tok.encode(
             "t0.2 hp 100 face 90 | bot -12 8m | did forward\n", add_special_tokens=False
         )
+        conv = Conversation([Exchange(35, WARM_MOMENT, None, "Hm.")])
         for n in (1, 4, 16):
             await asyncio.gather(
                 *(
@@ -303,7 +323,7 @@ class AsyncPolicy:
                     for _ in range(n)
                 )
             )
-            await asyncio.gather(*(self.talk(ids, state, "") for _ in range(n)))
+            await asyncio.gather(*(self.talk(conv, WARM_STATE) for _ in range(n)))
 
 
 def nodelay(conn) -> None:
@@ -334,15 +354,17 @@ AUTHKEY = b"granite-switch-doom"
 
 
 class Game:
-    """One match on the server: its history, decisions and talk. With ``conn``
-    the match runs elsewhere (``engine.py play``); without, in a local process.
+    """One match on the server: its game log and decisions, and the narrator's
+    conversation and talk. With ``conn`` the match runs elsewhere (``engine.py
+    play``); without, in a local process.
     ``idle_s``: the talk clock's silence before a remark (0: no talk of its
     own; replies to the watcher still come).
 
     Hooks for the live demo (``doom_live.py``): ``on_decision(tick, dists,
     ms)`` after every decision, ``on_line(line_info)`` after every spoken line;
     :meth:`hush` holds back remarks while the watcher is talking;
-    ``autostart=False`` holds the match's clock until :meth:`start`."""
+    ``autostart=False`` holds the match's clock until :meth:`start`.
+    ``conv_n``: how many exchanges the narrator's conversation keeps."""
 
     def __init__(
         self,
@@ -352,6 +374,7 @@ class Game:
         idle_s: float,
         conn=None,
         autostart: bool = True,
+        conv_n: int = CONV_EXCHANGES,
     ):
         self.proc = None
         if conn is None:
@@ -362,7 +385,10 @@ class Game:
         self.gid, self.pol = gid, pol
         self.clock = TalkClock(idle_s) if idle_s else None
         self.style = spec.get("style", BEHAVIORS[0])
-        self.hist = History(pol.tok)
+        self.hist = History(pol.tok)  # the game log: what every game adapter reads
+        self.conv = Conversation(n=conv_n)  # what the narrator reads, and the state
+        self.log = EventLog()  # the match's events, for the state and each exchange
+        self.last_ex: int | None = None  # the tick of his last exchange
         self.inflight = self.talking = False
         self.hushed = False
         self.lat_ms: list[float] = []
@@ -419,6 +445,7 @@ class Game:
                 _, tick, state, entry, _events, self.facts, fired = msg
                 if entry is not None:
                     self.hist.append(entry)
+                self.log.add(fired)
                 if self.clock is not None:
                     self.clock.event(fired)
                 if state is None:
@@ -486,16 +513,13 @@ class Game:
         if self.clock is not None:
             self.clock.said(tick)
         t0 = time.perf_counter()
-        b = brief(self.hist.entries, state, self.facts)
-        line, extra, heard = await self.pol.talk(self.hist.ids, state, b, player)
+        gs = game_state(state, self.facts, self.log.events)
+        moment = moment_events(self.log.since(self.last_ex, tick))
+        line, heard = await self.pol.talk(self.conv, gs, player)
         ms = int((time.perf_counter() - t0) * 1000)
         if line and not (self.hushed and player is None):  # a remark talked over
-            if self.pol.layout == "chat":
-                self.hist.append(spoken_entry(state, line, extra))
-            else:
-                if heard:
-                    self.hist.append(said_entry(tick, "user", heard))
-                self.hist.append(said_entry(tick, "me", line))
+            self.conv.add(Exchange(tick, moment, heard, line))
+            self.last_ex = tick
             self.lines.append((round(tick / TIC_HZ, 1), line, ms, heard))
             if self.on_line is not None:
                 self.on_line(
@@ -504,7 +528,9 @@ class Game:
                         "cue": cue,
                         "line": line,
                         "heard": heard,
-                        "brief": b,
+                        "state": gs,  # what get_game_state returned
+                        "moment": moment,
+                        "brief": brief(self.hist.entries, state, self.facts),
                         "ms": ms,
                     }
                 )
@@ -592,7 +618,6 @@ async def serve(args) -> dict:
         gpu_mem=args.gpu_mem,
         temperature=args.temperature,
         layout=args.layout,
-        persona=args.persona,
     )
     await pol.warmup()
     print(f"engine ready in {time.time() - t0:.0f}s ({pol.kit.placement})", flush=True)
@@ -683,7 +708,9 @@ async def serve(args) -> dict:
                 "decision_ms_p50_quiet": pct(
                     [m for m, t in zip(g.lat_ms, g.lat_talking) if not t], 50
                 ),
-                "talking_share": round(sum(g.lat_talking) / max(1, len(g.lat_talking)), 3),
+                "talking_share": round(
+                    sum(g.lat_talking) / max(1, len(g.lat_talking)), 3
+                ),
                 "fresh_share": round(lags[0] / n, 4),  # the tic's own decision
                 "stale_1_share": round(lags[1] / n, 4),
                 "stale_2plus_share": round(
@@ -743,10 +770,10 @@ def main() -> None:
         p.add_argument("--gpu-mem", type=float, default=0.5)
         p.add_argument("--json", type=Path)
         p.add_argument(
-            "--layout", default="log", choices=sorted(LAYOUTS), help="Prompt layout"
-        )
-        p.add_argument(
-            "--persona", default="marine", help="How it talks: marine, crime"
+            "--layout",
+            default="log",
+            choices=sorted(LAYOUTS),
+            help="The game adapters' prompt layout",
         )
         p.add_argument(
             "--player-lines",

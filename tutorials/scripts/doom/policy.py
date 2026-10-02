@@ -33,10 +33,29 @@ then has its own KV from the first token on, and nothing is shared. A **Shadow
 Residual** checkpoint puts it last: it replaces the final ``<|end_of_role|>``,
 so the adapter stream runs on that one position and reads only base K/V.
 
-Prompt ids are assembled directly each tick, which skips Jinja rendering.
-``python policy.py --check-template <model_dir>`` confirms the ids are identical
-to ``apply_chat_template(adapter_name=...)`` (without the block padding, which
-has no chat-template form).
+The narrator's prompt is a conversation of its own, with no game log, in the
+OpenAI message format with the game as a tool (:mod:`conversation`)::
+
+    <|start_of_role|>system<|end_of_role|>{NARRATOR_SYSTEM_PROMPT} ... <tools>...<|end_of_text|>
+    <|start_of_role|>user<|end_of_role|>who got you<|end_of_text|>
+    <|start_of_role|>assistant<|end_of_role|><tool_call>
+    {"name": "get_game_state", "arguments": {}}
+    </tool_call><|end_of_text|>
+    <|start_of_role|>user<|end_of_role|>
+    <tool_response>
+    {"time": "2:31", "events": [...]}
+    </tool_response><|end_of_text|>
+    <|start_of_role|>assistant<|end_of_role|>Rambo. Twice now.<|end_of_text|>
+       ... the last exchanges, then the call now and the whole state ...
+    <|narrator|>assistant<|end_of_role|>            -> his line
+
+Game prompt ids are assembled directly each tick, which skips Jinja rendering;
+the narrator's, rare, are rendered by the chat template itself
+(:func:`conversation.narrator_ids`). ``python policy.py --check-template
+<model_dir>`` confirms the game ids are identical to
+``apply_chat_template(adapter_name=...)`` (without the block padding, which has
+no chat-template form), and that the narrator's control token changes nothing
+in his prompt but its last header.
 """
 
 from __future__ import annotations
@@ -52,6 +71,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
+from conversation import Conversation, Exchange, narrator_ids, narrator_text
 from doom_env import ACTIONS, WEAPON_SLOTS, Observation
 from expert import BEHAVIORS, Expert
 from history import History, now_prefix
@@ -167,6 +187,32 @@ CHAT_SYSTEM_PROMPT = (
     + "), a weapon slot (1-7), or the danger of being hit soon (low mid high)."
 )
 LAYOUTS = {"log": "SYSTEM_PROMPT", "chat": "CHAT_SYSTEM_PROMPT"}
+# A get_game_state output for warming up the talk path (talk.game_state's form).
+WARM_STATE = {
+    "time": "1:42",
+    "time_left": "8:18",
+    "you": {
+        "frags": 3,
+        "deaths": 2,
+        "rank": 2,
+        "players": 8,
+        "health": 100,
+        "armor": 0,
+        "holding": {"weapon": "pistol", "ammo": 50},
+        "weapons": {"pistol": 50},
+        "best_loaded_weapon": "pistol",
+        "frags_last_10s": 0,
+    },
+    "scoreboard": {"Rambo": 4, "you": 3},
+    "bots_in_view": [],
+    "last_death": {"killer": "Rambo", "your_weapon": "shotgun", "seconds_ago": 2},
+    "killed_by": {"Rambo": 1},
+    "recent_events": [
+        {"time": "1:40", "type": "death", "killer": "Rambo", "your_weapon": "shotgun"}
+    ],
+    "notes": "your_weapon is your own weapon at the time",
+}
+WARM_MOMENT = [{"type": "pickup", "item": "shotgun"}]
 
 
 # Where the watcher's speech goes in a prompt (a checkpoint composed with
@@ -471,6 +517,7 @@ def check_template(
     games: list[tuple[str, str]],
     routes: list[str],
     layout: str = "log",
+    talks: list[tuple[int, str]] = (),
 ):
     """Assert direct id assembly == ``apply_chat_template`` for every adapter.
 
@@ -479,6 +526,15 @@ def check_template(
     closed turn (a brief, the watcher's words, the state), a spoken line, and
     the rest of the log as the open turn. Checked there: every adapter's
     decision prompt, and the base model's next turn to speak.
+
+    ``talks`` holds (tick, game state, the moment's events) moments of real
+    play, in order: each ends a narrator prompt whose conversation is the
+    moments before it (some with the watcher's words). The narrator's prompt is
+    the chat template's own rendering (tools declared, every tool call and
+    output in place); checked there: that the narrator's control token changes
+    nothing but the last assistant header, where PEFT's aLoRA activates (the
+    last occurrence of its invocation tokens), so the tool calls and outputs
+    run on base weights.
     """
     from transformers import AutoTokenizer
 
@@ -545,12 +601,44 @@ def check_template(
         for a in route_names:
             ref, r = rendered_ids(ROUTER_SYSTEM_PROMPT, text, a)
             assert rb.ids(text, a) == ref, f"adapter={a}\n{r!r}"
+    words = ("who got you", None, None, "what is the score", None, AUDIO_MARKER)
+    lines = (
+        "Rambo. Twice now.",
+        "Now we can talk like adults.",
+        "Nobody home. I'll wait.",
+    )
+    inv = alora_invocation_ids(tok)
+    ctl = tok.encode(control_token(NARRATOR), add_special_tokens=False)
+    conv, longest = Conversation(), 0
+    for i, (tick, state, moment) in enumerate(talks):
+        player = words[i % len(words)]
+        base = narrator_ids(tok, conv, state, player)
+        text = narrator_text(tok, conv, state, player)
+        declared = '"name": "get_game_state", "description"'
+        assert text.count(declared) == 1, "the tool is declared once"
+        n_calls = len(conv) + 1  # each past exchange's, and now
+        call = '<tool_call>\n{"name": "get_game_state", "arguments": {}}\n</tool_call>'
+        for tag in (call, "<tool_response>"):
+            assert text.count(tag) == n_calls, f"{n_calls} calls want {tag}: {text!r}"
+        assert base[-len(inv) :] == inv, "the prompt ends with the assistant header"
+        if narrator:
+            got = narrator_ids(tok, conv, state, player, NARRATOR)
+            if placement == "lora":
+                want = ctl + base[1:]
+            elif placement == "sr":
+                want = base[:-1] + ctl
+            else:
+                want = base[: -len(inv)] + ctl + inv[1:]
+            assert got == want, f"narrator prompt\n got={got[-12:]}\n want={want[-12:]}"
+        longest = max(longest, len(base))
+        conv.add(Exchange(tick, moment, player, lines[i % len(lines)]))
     check_output_tokens(tok)
     kind = {"lora": "LoRA", "sr": "Shadow Residual", "alora": "aLoRA"}[placement]
     what = f"{kind} adapters {', '.join(adapters)} and base" if composed else "base"
     print(
         f"OK: prompt ids match apply_chat_template for {what} on {len(games)} "
-        f"history+state prompts ({layout} layout) and {len(routes)} instructions."
+        f"history+state prompts ({layout} layout), {len(routes)} instructions and "
+        f"{len(talks)} narrator conversations (up to {longest} tokens)."
     )
 
 
@@ -983,11 +1071,13 @@ class VLLMPolicy:
         lasts: list[str | None] | None = None,
         **kw,
     ) -> list[str]:
-        """One spoken line per game (history ids, state text), in one engine call.
-        ``players``: what the person watching just said to each game, answered.
-        Chat layout: the player's turn (the brief and the words close the user
-        turn), written by the narrator adapter if the checkpoint has one; log
-        layout: an extra user turn asking the base model for a line."""
+        """One spoken line per game (history ids, state text), in one engine call,
+        on the game log (the round-3 prompts; :meth:`narrate` is the
+        narrator's own conversation). ``players``: what the person watching just
+        said to each game, answered. Chat layout: the player's turn (the brief
+        and the words close the user turn), written by the narrator adapter if
+        the checkpoint has one; log layout: an extra user turn asking the base
+        model for a line."""
         briefs = briefs or [""] * len(games)
         players = players or [None] * len(games)
         lasts = lasts or [None] * len(games)
@@ -1001,6 +1091,19 @@ class VLLMPolicy:
                 self.pb.talk_ids(h, s, b, w, last)
                 for (h, s), b, w, last in zip(games, briefs, players, lasts)
             ]
+        return self._lines(prompts, **kw)
+
+    def narrate(
+        self, talks: list[tuple[Conversation, dict, str | None]], **kw
+    ) -> list[str]:
+        """One spoken line per (conversation, game state, what the person
+        watching just said), in one engine call: the narrator's own prompt
+        (:func:`conversation.narrator_ids`), written by the narrator adapter if
+        the checkpoint has one, else by the base model."""
+        prompts = [narrator_ids(self.tok, c, s, w, self.talker) for c, s, w in talks]
+        return self._lines(prompts, **kw)
+
+    def _lines(self, prompts: list[list[int]], **kw) -> list[str]:
         outs = self.run(prompts, [self.talk_params(**kw)] * len(prompts))
         # Sound tags are chosen by the harness (talk.sound_tag), not the model.
         return [
@@ -1019,8 +1122,9 @@ class VLLMPolicy:
             hist = hist + self.tok.encode(entry, add_special_tokens=False)
             self.decide_games([(hist, state)], [list(GAME_ADAPTERS[: 1 + i % 5])])
         self.route("go kill everything")
+        conv = Conversation([Exchange(35, WARM_MOMENT, None, "Hm.")])
         for n_games in (1, 4, 16):  # the talk path, at a few batch sizes
-            self.talk([(hist, state)] * n_games, max_tokens=4)
+            self.narrate([(conv, WARM_STATE, None)] * n_games, max_tokens=4)
 
 
 def make_policy(kind: str, model: str | None = None, **kw):
@@ -1049,21 +1153,30 @@ def main() -> None:
 
     from doom_env import TIC_HZ, DoomEnv
     from expert import PLAN_EVERY_TICS
+    from talk import EventLog, Tracker, game_state, moment_events
 
     env = DoomEnv(seed=0, timeout_tics=int(args.seconds * TIC_HZ))
     ex, hist = Expert(), History()
-    games = []
+    tracker, log = Tracker(match_s=args.seconds), EventLog()
+    games, talks, last = [], [], None
     obs = env.reset(seed=0)
+    log.add(tracker.update(obs))
     while not obs.done:
         a = ex.act(obs, BEHAVIORS[obs.tick // 350 % len(BEHAVIORS)])
         if not obs.dead and obs.tick % 5 == 0:
             games.append((hist.text, state_text(obs)))
+        if not obs.dead and obs.tick % 70 == 0 and obs.tick:  # a remark every 2 s
+            state = game_state(state_text(obs), tracker.facts(), log.events)
+            talks.append((obs.tick, state, moment_events(log.since(last, obs.tick))))
+            last = obs.tick
         hist.observe(obs, a)
         w = ex.weapon(obs) if obs.tick % PLAN_EVERY_TICS == 0 else None
         obs = env.step(a, weapon=w)
+        if not obs.done:
+            log.add(tracker.update(obs))
     env.close()
     routes = ["go kill everything", "stay alive, grab health", "collect all the loot"]
-    check_template(args.check_template, games[::5], routes, args.layout)
+    check_template(args.check_template, games[::5], routes, args.layout, talks)
 
 
 if __name__ == "__main__":

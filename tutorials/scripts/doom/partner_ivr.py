@@ -2,51 +2,59 @@
 """Write the partner dataset: the player's replies and remarks, with Mellea IVR.
 
 The player is a calm, dry professional out of a 1990s crime movie, and the
-person watching is his partner, sitting next to him. The speaking moments are a
-recorded match's (``talk.py moments``): soon after a salient event, or after a
-silence, each with its brief and the tracker's facts. At about half of them the
-partner says something first: lines written for that moment by a model, of a
-type the moment allows (who killed you, only after a death; praise, only after
-something good; the score, a greeting, who are you, backseat driving, a request
-to play differently, ...), one kept and rendered the way speech recognition
-writes it (sometimes with a misheard word). The player replies, and the joke is
-the angle the reply takes on the partner's words: one of :data:`MOVES`, shown
-with a model exchange drawn from :data:`EXAMPLES`. A factual question is
-answered first (the killer's name, the score), then with his angle. At the
-other moments he says a line of his own, in a form the moment calls for
-(:data:`REMARKS`): after an event he reacts to it, names it or says what it
-means; tangents and complaints come only in quiet stretches, and rarely.
+person watching is his partner, sitting next to him. The speaking moments are
+a recorded match's, every one in order (``talk.py moments``): soon after a
+salient event, or after a silence, each with the output of his
+``get_game_state`` call (``tool``, :func:`talk.game_state`) and what had
+happened since the moment before (``moment``). Whole matches are written in
+order, so the conversations reach the full window, as they do live.
 
-The writer (Granite 4.2 30B or gpt-oss-120b) sees what the trained narrator
-will see: the brief, the last log lines, and the exchanges still inside the
-10 s history window. Checks in code: length, no numbers (but in a score), no
-status-report opening, no stock phrase, calm punctuation, mild language, not a
-film line, not a repeat, and the facts of a factual answer (the killer named,
-the score right). Checks judged by gpt-oss-120b: true, consistent, in the
-voice, funny, specific to this moment; for a reply, that it answers the
-partner, and a swap test (the judge must pick the partner's line among the two
-others written for that moment).
+At about 55% of moments the partner asks about the game state (:mod:`probes`:
+who killed you, the score, your health, what you just picked up, ... or a value
+asserted, true or false: "i see 12"); its answer is checked in code. At about
+15% the partner says something else: lines written for that moment by a model,
+of a type the moment allows (praise, only after something good; a greeting,
+who are you, backseat driving, a request to play differently, ...), one kept
+and rendered the way speech recognition writes it (sometimes with a misheard
+word). At the rest he says a line of his own, in a form the moment calls for
+(:data:`REMARKS`). A probe is answered first, exactly as the game state says
+(the writer is told the verified answer), then with his angle; any other reply
+plays off the partner's words with one of :data:`MOVES`, shown with a model
+exchange drawn from :data:`EXAMPLES`.
 
-**Contrast.** A line that fits other moments as well as its own is refused.
-Its margin, ``log p(line | its moment) - log mean_k p(line | moment_k)`` over
-``--contrast-k`` other moments (half from the same match, at least 20 s away,
-half from other matches), comes from a scoring model's prompt log-probabilities
-(Granite 30B, one prefill per moment, :class:`Scorer`). A generic line ("the
-bots finally learned to hide") scores about the same everywhere; a memorable
-one ("Rambo, twice in a row?") far better at its own moment. A reply is scored
-with the partner's words in every context, so the moment is what varies. The
-repair names the moment it fit as well. ``score`` reports margins for lines
-written elsewhere (calibrating ``--tau``, comparing narrators); ``swap`` asks
-the judge to pick a line's moment among three.
+The writer (Granite 4.2 30B or gpt-oss-120b) and the judge see what the
+trained narrator will see (:mod:`conversation`), nothing more: the last
+CONV_EXCHANGES exchanges (what the partner said, the game's output at that
+line, his line), then the partner's words and the whole game state. Checks in
+code: a probe's answer (:func:`probes.verify`) and, for every line, its claims
+against the state (:func:`probes.claims`: no bot takes a weapon, no victim
+named, no killer, lead or number the state does not have); length, no numbers
+(but where a number is asked), no status-report opening, no stock phrase, calm
+punctuation, mild language, not a film line, not a repeat. Checks judged by
+gpt-oss-120b: true, consistent, coherent with the conversation, in the voice,
+funny, specific to this moment; for a reply, that it answers the partner, and a
+swap test (the judge must pick the partner's line among the two others written
+for that moment).
+
+**Contrast.** A remark (or a reply about the game) that fits other moments as
+well as its own is refused. Its margin, ``log p(line | its moment) - log mean_k
+p(line | moment_k)`` over ``--contrast-k`` other moments (half from the same
+match, at least 20 s away, half from other matches), comes from a scoring
+model's prompt log-probabilities (Granite 30B, one prefill per moment,
+:class:`Scorer`), each moment given by its game state. ``score`` reports
+margins for lines written elsewhere; ``swap`` asks the judge to pick a line's
+moment among three; ``judge`` asks the judged questions once, without repair,
+and runs the code checks (a probe's answer, the claims) on lines written
+elsewhere (a narrator's held-out samples).
 
 A failed check's reason goes back to the writer, which repairs its line
 (MultiTurnStrategy). Runs in an environment with Mellea (``pip install mellea``)::
 
-    python partner_ivr.py write --moments data/narr/moments_v3.jsonl \\
-        --out data/narr/partner_v3.jsonl --base-url http://WRITER:PORT/v1 \\
-        --judge-url http://JUDGE:PORT/v1 --tau 2.0
-    python partner_ivr.py score --rows data/narr/partner_granite_0.jsonl \\
-        --moments data/narr/moments6.jsonl --score-url http://WRITER:PORT/v1
+    python partner_ivr.py write --moments data/narr/moments_v6_write.jsonl \\
+        --out data/narr/v6/partner_0.jsonl --base-url http://WRITER:PORT/v1 \\
+        --judge-url http://JUDGE:PORT/v1 --tau 0.5
+    python partner_ivr.py judge --rows runs/narr6/narrator/heldout_gen.jsonl \\
+        --keys adapter,base --judge-url http://JUDGE:PORT/v1
 """
 
 from __future__ import annotations
@@ -63,20 +71,17 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import probes
+from conversation import (
+    TIC_HZ,
+    Conversation,
+    Exchange,
+    new_stretch,
+    past_output,
+    tool_text,
+)
 from narrate_ivr import FILM, STRONG, clean, words
-
-TIC_HZ = 35
-MAX_ENTRIES = 50  # history.History: 10 s of 5 Hz entries, then the older half goes
-
-
-def window_len(n: int) -> int:
-    """How many of a conversation's first ``n`` entries the live history still
-    holds (``history.History.append``: grow to MAX_ENTRIES, then keep half)."""
-    if n <= MAX_ENTRIES:
-        return n
-    keep = MAX_ENTRIES // 2
-    return keep + 1 + (n - MAX_ENTRIES - 1) % keep
-
+from probes import heard
 
 PERSONA = (
     "You write the lines of a character in a Doom deathmatch against bots: a calm, "
@@ -84,25 +89,22 @@ PERSONA = (
     "sits next to him watching the screen, and the two of them talk like partners "
     "on a long job: they bicker, needle each other and never get flustered. He is "
     "deadpan, unbothered and quick, and the humor is in how he takes what was just "
-    "said or what just happened. He never says numbers, except when asked the "
-    "score. Every line is original: never quote or paraphrase any film. Mild "
-    "language at most."
+    "said or what just happened. He speaks for himself, as I and me (in the game "
+    'state, "you" is him). He is never wrong about the game: every fact he '
+    "says is in his game state. He says numbers only when asked for one. Every line "
+    "is original: never quote or paraphrase any film. Mild language at most."
 )
 # Events after which the partner might praise him.
 GOOD = ("frag", "streak", "took_lead", "close_call", "drought_ended")
-DEATH_ASK_S = 20  # "who killed you" makes sense this long after a death
-# What the partner says: (weight, instruction to the partner's voice, when):
-# when is None (any moment), "event" (something just happened), "good" (one of
-# GOOD just happened) or "death" (he died in the last DEATH_ASK_S).
+# What the partner says when not probing the game state: (weight, instruction
+# to the partner's voice, when): when is None (any moment), "event" (something
+# just happened) or "good" (one of GOOD just happened).
 UTTERANCES = {
     "backseat": (3, "Tell him what to do right now, like a backseat driver.", None),
     "praise": (2, "React to something good he just did.", "good"),
     "tease": (2, "Tease him or trash-talk his play, the way a friend would.", None),
     "worry": (2, "Get nervous about what is about to happen to him.", None),
-    "question": (2, "Ask him something about what is going on in the game.", None),
     "what_happened": (2, "Ask him what just happened.", "event"),
-    "who_killed": (4, "Ask him who just killed him.", "death"),
-    "score": (2, "Ask him the score, or who is winning.", None),
     "greeting": (
         1,
         "Check that he can hear you, or say hi, the way you do when you sit down "
@@ -145,10 +147,6 @@ MOVES = {
     "misheard": "Speech recognition may have misheard a word: play off the odd "
     "word, then answer what they meant.",
     "callback": "Call back to something that was said earlier in the conversation.",
-    "killer": "Say who killed you, by name, first; then your angle on it (a grudge, "
-    "an excuse, a plan for them).",
-    "score": "Give the score in words first (yours, and the leader's or whoever is "
-    "closest), then your angle on it.",
     "tell": "Tell them what just happened, in your own dry way.",
     "hear": "Say you hear them, deadpan, and add a dry word about how it is going.",
     "identity": "Say who you are: Granite, the calm professional at the controls. "
@@ -157,18 +155,151 @@ MOVES = {
 REQUEST_MOVES = ("echo", "correct", "behind", "understate", "pride", "theory", "bicker")
 # The moves a type of utterance allows (any other: every general move).
 TYPE_MOVES = {
-    "who_killed": ("killer",),
-    "score": ("score",),
     "what_happened": ("tell", "understate", "behind", "pride", "correct"),
     "greeting": ("hear",),
     "identity": ("identity",),
     "request": REQUEST_MOVES,
 }
 GENERAL_MOVES = tuple(
-    k
-    for k in MOVES
-    if k not in ("misheard", "killer", "score", "tell", "hear", "identity")
+    k for k in MOVES if k not in ("misheard", "tell", "hear", "identity")
 )
+# A probe's answer comes first, then one of these angles, in a few words.
+PROBE_ANGLES = (
+    "a grudge or a plan for a bot",
+    "understatement",
+    "professional pride",
+    "a dry theory nobody asked for",
+    "bickering with your partner",
+    "quiet menace toward the bots",
+    "nothing more: the answer is the joke",
+)
+# Model exchanges for a probe, by what it asks about (a situation, what the
+# partner said, the reply): the answer first, exact, then the angle.
+PROBE_FAMILY = {
+    **dict.fromkeys(("killer_now", "killer_before", "nemesis"), "killer"),
+    **dict.fromkeys(
+        (
+            "deaths",
+            "frags",
+            "streak",
+            "health",
+            "armor",
+            "ammo",
+            "ammo_of",
+            "bots_in_view",
+        ),
+        "number",
+    ),
+    **dict.fromkeys(("score", "leader", "second", "rank"), "score"),
+    **dict.fromkeys(("weapon", "weapons", "best_gun", "pickup"), "weapon"),
+    "victim": "victim",
+    "time_left": "number",
+    "side": "side",
+    "challenge": "challenge",
+}
+PROBE_EXAMPLES = {
+    "killer": (
+        (
+            "Rambo just killed him, the second time in a row",
+            "who got you",
+            "Rambo. Twice now. I'm starting to take it personally.",
+        ),
+        (
+            "McClane killed him with a rocket",
+            "who killed you",
+            "McClane. He'll be getting a thank-you note. Unsigned.",
+        ),
+        (
+            "he killed himself with his own rocket",
+            "who got you",
+            "Me, apparently. I'll be having words with myself.",
+        ),
+    ),
+    "score": (
+        (
+            "he has twelve frags, Rambo leads with thirteen",
+            "what's the score",
+            "Twelve to Rambo's thirteen. It's a long afternoon.",
+        ),
+        (
+            "he leads with nine, the next best has six",
+            "are you winning",
+            "Nine to six. Winning's a strong word. Leading.",
+        ),
+        (
+            "he has three, the leader has eight",
+            "what's the score",
+            "Three to eight. I'm letting them get comfortable.",
+        ),
+    ),
+    "number": (
+        (
+            "his health is 64",
+            "how much health do you have",
+            "Sixty-four. I've had worse Mondays.",
+        ),
+        (
+            "he has died five times",
+            "how many times have you died",
+            "Five. Each one was a learning experience.",
+        ),
+        (
+            "no bot is in view",
+            "how many bots can you see",
+            "None. They heard I was coming.",
+        ),
+    ),
+    "weapon": (
+        (
+            "he holds the shotgun",
+            "what gun are you holding",
+            "The shotgun. We understand each other.",
+        ),
+        (
+            "he just picked up armor",
+            "what did you just pick up",
+            "Armor. Fashion and function.",
+        ),
+        (
+            "he owns the pistol and the rocket launcher",
+            "what guns do you have",
+            "Pistol and the rocket launcher. Sentimental value.",
+        ),
+    ),
+    "victim": (
+        (
+            "he just fragged a bot",
+            "who did you just kill",
+            "Didn't catch a name. He didn't stay long enough to give one.",
+        ),
+        (
+            "he fragged a bot with the shotgun",
+            "who was that you got",
+            "No idea. They all look the same from this end.",
+        ),
+    ),
+    "side": (
+        (
+            "a bot to his left",
+            "where is he",
+            "On my left. Give him a moment to make his mistake.",
+        ),
+        ("a bot ahead", "where is the bot", "Right in front of me. Bold choice."),
+    ),
+    "challenge": (
+        (
+            "he has ten kills",
+            "i see 12",
+            "Ten. You're counting the ones I thought about.",
+        ),
+        ("Rambo killed him", "rambo got you right", "Rambo. Don't rub it in."),
+        (
+            "he has 64 health",
+            "you are at 90 health",
+            "Sixty-four. Ninety was a long time ago.",
+        ),
+    ),
+}
 # For the tangent move: something ordinary, drawn at random (left to itself the
 # writer drifted to coffee every time).
 TANGENTS = (
@@ -370,40 +501,6 @@ EXAMPLES = {
             "I heard you. I'm going to keep doing it my way, but I heard you.",
         ),
     ),
-    "killer": (
-        (
-            "Rambo just killed him, the second time in a row",
-            "who got you",
-            "Rambo. Twice now. I'm starting to take it personally.",
-        ),
-        (
-            "McClane killed him with a rocket",
-            "who killed you",
-            "McClane. He'll be getting a thank-you note. Unsigned.",
-        ),
-        (
-            "he killed himself with his own rocket",
-            "who got you",
-            "Me, apparently. I'll be having words with myself.",
-        ),
-    ),
-    "score": (
-        (
-            "he has twelve frags, Rambo leads with thirteen",
-            "what's the score",
-            "Twelve to Rambo's thirteen. It's a long afternoon.",
-        ),
-        (
-            "he leads with nine, the next best has six",
-            "are you winning",
-            "Nine to six. Winning's a strong word. Leading.",
-        ),
-        (
-            "he has three, the leader has eight",
-            "what's the score",
-            "Three to eight. I'm letting them get comfortable.",
-        ),
-    ),
     "tell": (
         (
             "a bot shot him from behind and he died",
@@ -449,8 +546,8 @@ REMARKS = {
     "react": (
         3,
         0,
-        "React to what just happened (the first thing under Just now), in your own "
-        "dry way.",
+        "React to what just happened (the latest events in the game state), in your "
+        "own dry way.",
     ),
     "name": (2, 0, "Name what just happened, the way he would put it to his partner."),
     "consequence": (
@@ -552,29 +649,36 @@ REMARK_EXAMPLES = {
     ),
     "tangent": (("a quiet stretch", "Reminds me, the car's due for an oil change."),),
 }
-BOT_EVENTS = ("killed you", "you fragged", "you took", "in view, nearest")
+# The moment's events that are a bot's doing, for the "bots" form.
+BOT_EVENTS = ("death", "frag", "close_call")
 
-CONTEXT = """What is happening right now:
-{brief}
-The last moments of the game log (most recent last):
-{recent}
-What was said in the last few seconds (oldest first):
-{conv}"""
+# What the narrator reads: his conversation, the game's output at each of his
+# lines (a past one holds only what had happened since the line before), then
+# the whole game state now.
+CONTEXT = """Before each of his lines he checks the game with a tool, get_game_state; \
+"you" there means him, the player. What has happened and been said so far, oldest \
+first: what his partner said (Partner:), the game's answer at that line (Game: its \
+time and what had happened since his line before) and what he said (Granite:):
+{conv}
+
+Now the game state ({clock}), the whole of it:
+{state}"""
 REPLY_TASK = """{persona}
 
 {context}
 
 Your partner just said to you: "{player}"
 {how}
-Write what you say back: 4 to 16 words, one to three short sentences. Output only \
-the line."""
+Write what you say back: {lo} to 16 words, one to three short sentences. Output \
+only the line."""
 REMARK_TASK = """{persona}
 
 {context}
 
 Say one line out loud now. {how}
-It is his take on this moment, the thing he would only say now, in natural spoken \
-sentences: not a list of what is on the screen. Say it in 4 to 14 words. Output only \
+It is his take on this moment, the thing he would only say now: one thought about one \
+thing, in a natural spoken sentence, never an inventory of the game state (at most two \
+facts from it, and every fact in it must be in it). Say it in 4 to 14 words. Output only \
 the line."""
 UTTER_TASK = """You and your partner are on a long job together. He is playing a Doom \
 deathmatch against bots and you sit next to him watching the screen. You talk to him \
@@ -582,24 +686,25 @@ the way you always do: casual, reactive, a little cheeky, with feeling. He is th
 playing; you only watch, so never talk as if you were in the game yourself. You never \
 read numbers or stats off the screen. {how}
 
-What is happening right now:
-{brief}
-What was said in the last few seconds (oldest first):
+What is happening right now (the game's own state; "you" there is him):
+{state}
+What has happened and been said so far (oldest first; Partner: is you, Granite: is \
+him):
 {conv}
 
 Write four different things you might say to him now, one per line, each 2 to 12 \
-words of casual spoken English. They must differ in meaning. Output only the four \
-lines."""
+words of casual spoken English. They must differ in meaning, and from what you said \
+before. Output only the four lines."""
 ASK_TASK = """You sit next to your partner while he plays a Doom deathmatch against \
 bots, and you talk to him the way you always do: casual, a little cheeky. {how}
 
-What is happening right now:
-{brief}
+What is happening right now (the game's own state; "you" there is him):
+{state}
 
 Write four different ways you might say it now, one per line, each 2 to 10 words of \
 casual spoken English. Output only the four lines."""
 # Utterances that are one plain question, written with ASK_TASK.
-ASKS = ("who_killed", "score", "greeting", "identity", "what_happened")
+ASKS = ("greeting", "identity", "what_happened")
 MISHEAR = """A speech recognizer heard this sentence and got exactly one word wrong: \
 it swapped it for a similar-sounding real word, and the sentence came out a little \
 funny. For example, "go get the rocket launcher" heard as "go get the rocket lunch".
@@ -608,13 +713,19 @@ Write the sentence as it was heard, with the same number of words. Output only t
 sentence."""
 
 JUDGE_ALL = {
-    "true": "Does the line avoid saying anything false about the game at this moment "
-    "(kills, deaths, who killed whom, the score, damage, pickups, weapons, health, "
-    "ammo, enemies in view)? A line with no game facts at all is YES; jokes, "
-    "opinions, plans and flavor details (a sticky floor, the coffee) are fine.",
+    "true": "Does the line avoid saying anything false about the game, against the "
+    "game state now or earlier as the conversation tells it (kills, deaths, who "
+    "killed whom, the score, damage, pickups, weapons, health, ammo, enemies in "
+    "view)? Who he fragged is never known, so naming one is false; bots never take "
+    "his weapons (a death drops them), so saying one did is false. A line with no "
+    "game facts at all is YES; jokes, opinions, plans and flavor details (a sticky "
+    "floor, the coffee) are fine.",
     "consistent": "Is it consistent with what he said earlier (no contradicting his "
     "own earlier lines; a callback only to something actually said)? Disagreeing "
     "with his partner is fine.",
+    "coherent": "Does it fit the conversation so far, as the next thing he would say "
+    "to his partner? When the partner refers back to something earlier, does it "
+    "answer from the conversation?",
     "voice": "Does it sound like a calm, dry, deadpan professional from a 1990s crime "
     "movie talking to his partner (not a soldier, a sports announcer or a "
     "cheerleader)?",
@@ -622,10 +733,10 @@ JUDGE_ALL = {
     "a generic quip?",
 }
 JUDGE_SPECIFIC = {
-    "specific": "Is it about this moment: the first thing under Just now, or, in a "
-    "quiet stretch, something particular to this match (the race with a named bot, "
-    "a streak, a drought, who killed him)? A line that would fit almost any moment "
-    "of any match is NO."
+    "specific": "Is it about this moment: what just happened (the latest events in "
+    "the game state), or, in a quiet stretch, something particular to this match "
+    "(the race with a named bot, a streak, a drought, who killed him)? A line that "
+    "would fit almost any moment of any match is NO."
 }
 JUDGE_REPLY = {
     "answers": "Does it respond to what the partner actually said, playing off their "
@@ -636,17 +747,13 @@ JUDGE_REQUEST = {
     "it off? Agreeing to do it is a NO."
 }
 
+SPEAKER = re.compile(r"\s*(he|granite|partner|game|player)\s*:", re.I)
 NUMBER = re.compile(
     r"\d|\b(zero|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
     r"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|"
     r"forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|dozen)\b",
     re.I,
 )
-_UNITS = (
-    "zero one two three four five six seven eight nine ten eleven twelve thirteen "
-    "fourteen fifteen sixteen seventeen eighteen nineteen"
-).split()
-_TENS = {"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60}
 # A status report's first word ("Health's low...", "BFG's warm..."): the habit of
 # the first dataset.
 STATUS = {
@@ -667,126 +774,59 @@ STOCK = (
 )
 
 
-# The demo's ASR (granite-speech turboctc) writes contractions out: "what's the
-# score" comes back "what is the score".
-_CONTRACTIONS = (
-    (r"\bwon't\b", "will not"),
-    (r"\bcan't\b", "can not"),
-    (r"\blet's\b", "let us"),
-    (r"\b(\w+)n't\b", r"\1 not"),
-    (r"\bi'm\b", "i am"),
-    (r"\b(\w+)'re\b", r"\1 are"),
-    (r"\b(\w+)'ll\b", r"\1 will"),
-    (r"\b(\w+)'ve\b", r"\1 have"),
-    (r"\b(\w+)'d\b", r"\1 would"),
-    (r"\b(it|he|she|that|there|what|where|who|how|here)'s\b", r"\1 is"),
-)
-
-
-def heard(text: str) -> str:
-    """As the demo's speech recognition writes it: lower case, no punctuation,
-    contractions written out."""
-    text = text.lower().replace("\u2019", "'")  # a curly apostrophe
-    for pat, rep in _CONTRACTIONS:
-        text = re.sub(pat, rep, text)
-    return " ".join(re.sub(r"[^\w\s']", " ", text).split())
-
-
 def one_word_off(a: str, b: str) -> bool:
     """``b`` is ``a`` with exactly one word swapped (a mishearing)."""
     x, y = a.split(), b.split()
     return len(x) == len(y) and sum(p != q for p, q in zip(x, y)) == 1
 
 
-def said_numbers(text: str) -> list[int]:
-    """The numbers in a line, in digits or words (up to nine hundred and
-    sixty-nine). A lone "one" is left out: it is a pronoun as often as a
-    number."""
-    toks = re.findall(r"\d+|[a-z]+", text.lower().replace("-", " "))
-    out, i = [], 0
+def claims_fn(state: dict, past: list[list[dict]], said: str | None):
+    """Every fact a line states must agree with the game state
+    (:func:`probes.claims`; ``past``: the past exchanges' events, ``said``: the
+    partner's words)."""
 
-    def small(j: int) -> tuple[int | None, int]:
-        """A number under a hundred at token j, and the tokens it took."""
-        t = toks[j] if j < len(toks) else ""
-        if t in _TENS:
-            if j + 1 < len(toks) and toks[j + 1] in _UNITS[1:10]:
-                return _TENS[t] + _UNITS.index(toks[j + 1]), 2
-            return _TENS[t], 1
-        if t in _UNITS:
-            return _UNITS.index(t), 1
-        if t == "a" and toks[j + 1 : j + 2] == ["hundred"]:
-            return 1, 1
-        return None, 0
+    def fn(x):
+        ok, why = probes.claims(clean(x), state, past, said or "")
+        return ok, f"{why} Every fact you say must be in the game state."
 
-    while i < len(toks):
-        if toks[i].isdigit():
-            out.append(int(toks[i]))
-            i += 1
-            continue
-        n, used = small(i)
-        if n is not None and i + used < len(toks) and toks[i + used] == "hundred":
-            j = i + used + 1
-            j += toks[j : j + 1] == ["and"]
-            rest, more = small(j)
-            out.append(100 * n + (rest or 0))
-            i = j + more
-        elif n is not None and toks[i] != "one":
-            out.append(n)
-            i += used
-        else:
-            i += max(1, used)
-    return out
+    return fn
 
 
-def fact_fns(utype: str | None, facts: dict | None):
-    """A factual answer checked against the tracker's facts: who killed him
-    (named), the score (his frags said, and no number that is not in the
-    match)."""
-    if not facts:
-        return []
-    if utype == "who_killed" and facts.get("last_death"):
-        by = facts["last_death"]["by"]
-        if by is None:
-            return []
+def probe_fn(probe: dict, state: dict):
+    """A probe's answer, checked against the game state (:func:`probes.verify`)."""
 
-        def killer(x):
-            c = clean(x).lower()
-            if by == "yourself":
-                ok = re.search(r"\b(me|myself|my own|i did)\b", c) is not None
-                return ok, "He killed himself; say so (it was me, my own rocket)."
-            return by.lower() in c, f"Say who killed him: {by}."
+    def fn(x):
+        verdict, why = probes.verify(probe, clean(x), state)
+        right = probes.answer_text(probe, state)
+        return verdict == probes.CORRECT, f"{why} The game state says: {right}"
 
-        return [("Names the killer", killer)]
-    if utype == "score":
-        me = facts["frags"]
-        board = [f for _, f in facts["board"]]
-        ok_nums = {me, facts["deaths"], *board, len(board) + 1}
-        ok_nums.add(1 + sum(f > me for f in board))  # his rank
+    return fn
 
-        def score(x):
-            nums = said_numbers(clean(x))
-            said_me = me in nums or (
-                me == 1 and re.search(r"\bone\b", clean(x).lower())
-            )
-            wrong = [n for n in nums if n not in ok_nums]
-            top = facts["board"][0] if board else None
-            right = f"you {me}" + (f", {top[0]} {top[1]}" if top else "")
-            return bool(said_me) and not wrong, (
-                f"Get the score right ({right}), in words, before your angle."
-            )
 
-        return [("The score, right", score)]
-    return []
+def numeric(probe: dict | None) -> bool:
+    """Whether a probe asks for a number (its answer may hold numbers)."""
+    if probe is None:
+        return False
+    if probe["type"] == "challenge":
+        return probe["field"] not in ("killer", "leader")
+    return probe["type"] in probes.NUMERIC
 
 
 def code_fns(
-    kind: str, prev: list[str], player: str | None = None, shown=(), utype=None
+    kind: str,
+    prev: list[str],
+    player: str | None = None,
+    shown=(),
+    probe: dict | None = None,
 ):
     """Requirements checked in code, as (description, fn -> (ok, reason)).
     ``player``: the partner's words (a reply may open by echoing one);
     ``shown``: the example lines the writer was shown, not to be copied;
-    ``utype``: what the partner asked (a score answer may hold numbers)."""
+    ``probe``: the question about the game state it answers (an answer may be
+    one word, may open with it, and may hold numbers if one is asked)."""
     lo, hi = (4, 16) if kind == "reply" else (4, 14)
+    if probe is not None:
+        lo = 1
     echo = set(words(player or ""))
 
     def length(x):
@@ -811,6 +851,36 @@ def code_fns(
         ok = bool(w) and (first not in STATUS or first.split("'")[0] in echo)
         return ok, (
             f'Do not open with "{first}": no status report; open with his angle on it.'
+        )
+
+    def not_list(x):
+        c = clean(x)
+        parts = [
+            p for p in re.split(r"[,;\u2014\u2013]|\s-\s|[.?!]\s+", c) if p.strip()
+        ]
+        sizes = sorted(len(p.split()) for p in parts)
+        if probe is not None and probe["type"] == "weapons":
+            return True, ""  # the answer is a list of guns
+        listy = len(parts) >= 3 and sizes[len(sizes) // 2] <= 3
+        many = probes.facts_said(c) >= (4 if probe is not None else 3)
+        return not (listy or many), (
+            "That reads as a status report. Say one thought, in a natural sentence, "
+            "with at most two facts from the game state."
+        )
+
+    def first_person(x):
+        bad = re.search(
+            r"\b(?:you have|you've|you are|you're|you got|you just|you're currently|"
+            r"you are currently|your)\s+(?:\w+\s+){0,2}?(?:frags?|kills?|deaths?|died|"
+            r"health|armou?r|ammo|holding|rank|in first|in second|place|weapons?|guns?|"
+            r"fragged|picked|streak|leading|ahead)\b"
+            r"|\byou\s+(?:just\s+)?(?:fragged|died|picked up|grabbed|respawned|took the "
+            r"lead|lost the lead|switched)\b",
+            clean(x).lower(),
+        )
+        return not bad, (
+            f'He speaks for himself, as I and me ("{bad.group(0) if bad else ""}" '
+            'reads the game state\'s "you" as his partner).'
         )
 
     def not_copy(x):
@@ -842,7 +912,11 @@ def code_fns(
 
     def plain(x):
         ok = not re.search(r"[\[\]*#\"]|reload", clean(x), re.I)
-        return ok, "No brackets, asterisks or quote marks, and Doom has no reloading."
+        ok = ok and not SPEAKER.match(clean(x))
+        return ok, (
+            "No brackets, asterisks, quote marks or speaker label, just the line; "
+            "and Doom has no reloading."
+        )
 
     def mild(x):
         bad = [s for s in STRONG if s in clean(x).lower()]
@@ -865,16 +939,19 @@ def code_fns(
 
     fns = [
         (f"{lo} to {hi} words", length),
-        ("No status-report opening", opening),
         ("No stock phrase", stock),
         ("Calm punctuation", calm),
         ("Plain spoken text", plain),
         ("Mild language", mild),
         ("Original, not a film quote", original),
         ("Not a repeat of recent lines", fresh),
+        ("Not a status list", not_list),
+        ("Speaks as himself (I, me)", first_person),
         ("Not a copy of the example", not_copy),
     ]
-    if utype != "score":
+    if probe is None:
+        fns.insert(1, ("No status-report opening", opening))
+    if not numeric(probe):
         fns.insert(1, ("No numbers", numbers))
     if kind == "reply":
         fns.insert(1, ("At most three sentences", sentences))
@@ -889,11 +966,11 @@ SCORE_HEAD = (
 CONTRAST_GAP_S = 20  # same-match negatives at least this far from the moment
 
 
-def score_prefix(brief: str, player: str | None) -> str:
-    """What the scoring model reads before the line: the moment, and what the
-    partner said."""
+def score_prefix(state: dict, player: str | None) -> str:
+    """What the scoring model reads before the line: the moment (its game
+    state), and what the partner said."""
     said = f'His partner says: "{player}"\n' if player else ""
-    return f'{SCORE_HEAD}{brief}\n{said}He says: "'
+    return f'{SCORE_HEAD}The game state ("you" is him): {tool_text(state)}\n{said}He says: "'
 
 
 class Scorer:
@@ -967,10 +1044,15 @@ def negatives(
     return mine + out
 
 
-def contrast_fn(scorer: Scorer, brief: str, others: list[dict], player, tau, seen):
+def happened(m: dict) -> str:
+    """What had just happened at a moment, for a repair message."""
+    return json.dumps(m.get("moment") or []) if m.get("moment") else "a quiet stretch"
+
+
+def contrast_fn(scorer: Scorer, m: dict, others: list[dict], player, tau, seen):
     """The contrast check; ``seen`` keeps each scored line's margin."""
-    prefixes = [score_prefix(brief, player)] + [
-        score_prefix(o["brief"], player) for o in others
+    prefixes = [score_prefix(m["tool"], player)] + [
+        score_prefix(o["tool"], player) for o in others
     ]
 
     def fn(x):
@@ -978,17 +1060,16 @@ def contrast_fn(scorer: Scorer, brief: str, others: list[dict], player, tau, see
         if not line:
             return False, "Write a line."
         lps = scorer.logps(prefixes, line)
-        m = margin(lps[0], lps[1:])
-        seen[line] = round(m, 3)
-        if m >= tau:
+        mg = margin(lps[0], lps[1:])
+        seen[line] = round(mg, 3)
+        if mg >= tau:
             return True, ""
         j = max(range(1, len(lps)), key=lps.__getitem__)
-        other = others[j - 1]["brief"].split(" Right now:")[0]
-        here = brief.split(" Right now:")[0]
         return False, (
-            f'This line would fit another moment just as well ("{other}"). Make it '
-            f'turn on what is particular to this one ("{here}"), as his own take, in '
-            "a natural sentence: not a list of facts."
+            "This line would fit another moment just as well (when this had just "
+            f"happened: {happened(others[j - 1])}). Make it turn on what is "
+            f"particular to this one ({happened(m)}), as his own take, in a natural "
+            "sentence: not a list of facts."
         )
 
     return fn
@@ -1005,23 +1086,30 @@ def judge_opts(args) -> dict:
     }
 
 
+def verdicts(judge, context: str, questions: dict, line: str, args):
+    """The judge's YES (True) or NO per question on one line, in one call, and
+    its answer text."""
+    listing = "\n".join(f"{k}: {q}" for k, q in questions.items())
+    q = (
+        f"Judge one spoken line from a Doom deathmatch.\n\n{context}\n\n"
+        f'The line he says: "{clean(line)}"\n\nQuestions:\n{listing}\n\n'
+        f"Answer with exactly {len(questions)} lines, one per question, each as "
+        "`name: YES` or `name: NO - short reason`."
+    )
+    judge.reset()
+    a = str(judge.instruct(q, strategy=None, model_options=judge_opts(args)))
+    found = {k: re.search(rf"{k}\W*?:\W*(YES|NO)", a, re.I) for k in questions}
+    return {k: bool(v) and v.group(1).upper() == "YES" for k, v in found.items()}, a
+
+
 def judge_fn(judge, context: str, questions: dict, args):
     """The judged requirements in one call: the line passes only if every
     verdict is YES; the verdicts are the repair feedback."""
-    listing = "\n".join(f"{k}: {q}" for k, q in questions.items())
 
     def fn(x):
-        q = (
-            f"Judge one spoken line from a Doom deathmatch.\n\n{context}\n\n"
-            f'The line he says: "{clean(x)}"\n\nQuestions:\n{listing}\n\n'
-            f"Answer with exactly {len(questions)} lines, one per question, each as "
-            "`name: YES` or `name: NO - short reason`."
-        )
-        judge.reset()
-        a = str(judge.instruct(q, strategy=None, model_options=judge_opts(args)))
-        verdicts = {k: re.search(rf"{k}\W*?:\W*(YES|NO)", a, re.I) for k in questions}
-        bad = [k for k, v in verdicts.items() if not v or v.group(1).upper() != "YES"]
-        return not bad, (a.strip() if bad else "")
+        got, a = verdicts(judge, context, questions, x, args)
+        ok = all(got.values())
+        return ok, ("" if ok else a.strip())
 
     return fn
 
@@ -1062,27 +1150,44 @@ def swap_fn(judge, player: str, others: list[str], rng: random.Random, args):
     return fn
 
 
-def render_conv(turns: list[dict], now: int) -> str:
+def render_conv(conv: Conversation) -> str:
+    """The narrator's past exchanges (what :func:`conversation.messages`
+    holds), in order: the partner's words, the game's output, his line."""
     out = []
-    for tr in turns:
-        when = f"{max(0, round((now - tr['t']) / TIC_HZ))} s ago"
-        if tr.get("player"):
-            out.append(f'{when}, your partner: "{tr["player"]}"')
-        out.append(f'{when}, you: "{tr["line"]}"')
+    for ex in conv:
+        if ex.player:
+            out.append(f'Partner: "{ex.player}"')
+        out.append(f"Game: {tool_text(past_output(ex))}")
+        out.append(f'Granite: "{ex.line}"')
     return "\n".join(out) or "(nothing yet)"
 
 
+def context_text(conv: Conversation, state: dict) -> str:
+    """What the writer and the judge read: what the narrator will read."""
+    return CONTEXT.format(
+        conv=render_conv(conv), clock=state["time"], state=tool_text(state)
+    )
+
+
 def partner_lines(
-    voice, how: str, brief: str, conv: str, ask: bool = False
+    voice,
+    how: str,
+    state: dict,
+    conv: str,
+    ask: bool = False,
+    keep=None,
+    before: tuple[str, ...] = (),
 ) -> list[str]:
     """Three things the partner might say at this moment (``ask``: three ways
-    of asking one plain question)."""
+    of asking one plain question; ``keep``: a test each must pass). None close
+    to what the partner said ``before``: shown the conversation, the voice
+    repeated its own earlier lines."""
     from mellea.backends import ModelOption
 
     task = ASK_TASK if ask else UTTER_TASK
     a = str(
         voice.instruct(
-            task.format(how=how, brief=brief, conv=conv),
+            task.format(how=how, state=tool_text(state), conv=conv),
             strategy=None,
             model_options={
                 ModelOption.THINKING: False,
@@ -1098,9 +1203,16 @@ def partner_lines(
             2 <= len(x.split()) <= 14
             and not NUMBER.search(x)
             and heard(x) not in map(heard, out)
+            and (keep is None or keep(x))
+            and not any(jaccard(heard(x), b) > 0.5 for b in before)
         ):
             out.append(x)
     return out[:3]
+
+
+def jaccard(a: str, b: str) -> float:
+    x, y = set(a.split()), set(b.split())
+    return len(x & y) / max(1, len(x | y))
 
 
 def clean_lines(text: str) -> list[str]:
@@ -1114,13 +1226,9 @@ def clean_lines(text: str) -> list[str]:
 
 
 def allowed(m: dict) -> list[str]:
-    """The partner's utterance types this moment allows."""
-    facts, events = m.get("facts") or {}, m.get("events", [])
-    d = facts.get("last_death")
-    died = (
-        bool(d) and d["by"] is not None and m["t"] - d["tick"] <= DEATH_ASK_S * TIC_HZ
-    )
-    ok = {None: True, "event": m.get("cue") == "event", "death": died}
+    """The partner's other utterance types this moment allows."""
+    events = m.get("events", [])
+    ok = {None: True, "event": m.get("cue") == "event"}
     ok["good"] = any(k in events for k in GOOD)
     return [k for k, (_, _, when) in UTTERANCES.items() if ok[when]]
 
@@ -1128,16 +1236,19 @@ def allowed(m: dict) -> list[str]:
 def remark_form(m: dict, rng) -> str:
     """His own line's form, by the moment's cue."""
     col = 0 if m.get("cue", "event") == "event" else 1
-    forms = [
-        k
-        for k in REMARKS
-        if REMARKS[k][col] > 0
-        and (k != "bots" or any(e in m["brief"] for e in BOT_EVENTS))
-    ]
+    bots = any(e.get("type") in BOT_EVENTS for e in m.get("moment") or ())
+    forms = [k for k in REMARKS if REMARKS[k][col] > 0 and (k != "bots" or bots)]
     return rng.choices(forms, [REMARKS[k][col] for k in forms])[0]
 
 
-def run_match(match: dict, args, write, pool: list[dict]) -> int:
+def probe_weights(moments: list[dict]) -> dict[str, float]:
+    """Each question type weighted by how rarely a moment allows it, so the
+    types come out about evenly (the rarest at most 6 times a common one)."""
+    n = Counter(t for m in moments for t in probes.allowed(m["tool"]))
+    return {t: min(6.0, len(moments) / max(1, n[t])) for t in probes.TYPES}
+
+
+def run_match(match: dict, args, write, pool: list[dict], weights: dict) -> int:
     from mellea import start_session
     from mellea.backends import ModelOption
     from mellea.stdlib.context import ChatContext
@@ -1172,32 +1283,45 @@ def run_match(match: dict, args, write, pool: list[dict]) -> int:
     judge = start_session("openai", model_id=args.judge_model, **jkw)
     scorer = Scorer(args.score_url.split(","), args.score_model) if args.tau else None
     others_pool = [p for p in pool if (p["data"], p["ep"]) != key]
-    turns: list[dict] = []  # what was said: conversation position, tick, words
+    said_so_far: list[Exchange] = []  # every exchange of this stretch
+    pending: list[dict] = []  # what happened since his last line
     prev: list[str] = []
+    last_t = None
     for m in match["moments"]:
-        n = m["hist_n"] + len(turns)  # conversation entries before this turn
-        win = [tr for tr in turns if tr["pos"] >= n - window_len(n)]
-        conv = render_conv(win, m["t"])
+        if new_stretch(last_t, m["t"]):
+            said_so_far, pending = [], []  # a new stretch: a new conversation
+        last_t = m["t"]
+        state = m["tool"]
+        pending = pending + list(m.get("moment") or [])
+        conv = Conversation(said_so_far)
+        past = [ex.events for ex in conv]
         kind, utype, player, said, others, moves = "remark", None, None, None, [], []
-        last = win[-1] if win else None
-        if last and last.get("player") and rng.random() < args.follow_rate:
-            utype = "followup"
-        elif rng.random() < args.reply_rate:
-            names = allowed(m)
-            utype = rng.choices(names, [UTTERANCES[k][0] for k in names])[0]
-        if utype:
+        probe = None
+        last = conv.exchanges[-1] if len(conv) else None
+        roll = rng.random()
+        if roll < args.probe_rate:
+            types = probes.allowed(state)
+            ptype = rng.choices(types, [weights[t] for t in types])[0]
+            probe = probes.make(ptype, state, rng)
+            kind, utype, player = "reply", "probe", probe["text"]
+        elif roll < args.probe_rate + args.reply_rate:
+            if last and last.player and rng.random() < args.follow_rate:
+                utype = "followup"
+            else:
+                names = allowed(m)
+                utype = rng.choices(names, [UTTERANCES[k][0] for k in names])[0]
             how = FOLLOW_UP if utype == "followup" else UTTERANCES[utype][1]
-            cands = partner_lines(voice, how, m["brief"], conv, utype in ASKS)
+            before = tuple(ex.player for ex in conv if ex.player)
+            cands = partner_lines(
+                voice, how, state, render_conv(conv), utype in ASKS, None, before
+            )
             if len(cands) == 3:
                 kind = "reply"
                 i = rng.randrange(3)
                 said = cands[i]
                 player = heard(said)
                 others = [heard(c) for j, c in enumerate(cands) if j != i]
-                if rng.random() < args.misheard_rate and utype not in (
-                    "who_killed",
-                    "score",
-                ):
+                if rng.random() < args.misheard_rate:
                     mis = clean_lines(
                         voice.instruct(
                             MISHEAR.format(x=player),
@@ -1213,20 +1337,41 @@ def run_match(match: dict, args, write, pool: list[dict]) -> int:
                         player, moves = heard(mis[0]), ["misheard"]
             else:
                 utype = None
-        context = CONTEXT.format(
-            brief=m["brief"], recent="\n".join(m["recent"]), conv=conv
-        )
-        grounded = kind == "remark" or utype not in SOCIAL
-        if kind == "reply":
+        context = context_text(conv, state)
+        grounded = kind == "remark" or utype not in (*SOCIAL, "probe")
+        jctx = f'{context}\nHis partner just said: "{player}"'
+        if probe is not None:
+            fam = PROBE_FAMILY[probe["type"]]
+            sit, ex_said, ex_line = rng.choice(PROBE_EXAMPLES[fam])
+            moves = [rng.choice(PROBE_ANGLES)]
+            words_ = " in words" if numeric(probe) else ""
+            how = (
+                f"The game state answers it: {probes.answer_text(probe, state)} Say "
+                f"that first, exactly (the name, the number{words_}, the weapon, or "
+                "that you don't know), in his own words (I, me: the game state's "
+                '"you" is him), then his angle on it in a few words: '
+                f"{moves[0]}. For example, when {sit} and the partner said "
+                f'"{ex_said}", he said: "{ex_line}" Write your own line; do not reuse '
+                "that one."
+            )
+            task = REPLY_TASK.format(
+                persona=PERSONA, context=context, player=player, how=how, lo=1
+            )
+            questions = {
+                **{
+                    q: JUDGE_ALL[q] for q in ("true", "consistent", "coherent", "voice")
+                },
+                **JUDGE_REPLY,
+            }
+        elif kind == "reply":
             if not moves:
                 pool_moves = TYPE_MOVES.get(utype) or [
-                    k for k in GENERAL_MOVES if k != "callback" or win
+                    k for k in GENERAL_MOVES if k != "callback" or len(conv)
                 ]
                 moves = [rng.choice(list(pool_moves))]
             desc = MOVES[moves[0]].format(topic=rng.choice(TANGENTS))
-            sit, ex_said, ex_line = rng.choice(
-                EXAMPLES["request" if utype == "request" else moves[0]]
-            )
+            ex_key = utype if utype == "request" else moves[0]
+            sit, ex_said, ex_line = rng.choice(EXAMPLES[ex_key])
             how = f"Move: {desc}"
             if utype == "request":
                 how = (
@@ -1238,12 +1383,11 @@ def run_match(match: dict, args, write, pool: list[dict]) -> int:
                 f'said: "{ex_line}" Write your own line; do not reuse that one.'
             )
             task = REPLY_TASK.format(
-                persona=PERSONA, context=context, player=player, how=how
+                persona=PERSONA, context=context, player=player, how=how, lo=4
             )
             questions = {**JUDGE_ALL, **JUDGE_REPLY}
             if utype == "request":
                 questions.update(JUDGE_REQUEST)
-            jctx = f'{context}\nHis partner just said: "{player}"'
         else:
             moves = [remark_form(m, rng)]
             sit, ex_line = rng.choice(REMARK_EXAMPLES[moves[0]])
@@ -1259,16 +1403,29 @@ def run_match(match: dict, args, write, pool: list[dict]) -> int:
             questions.update(JUDGE_SPECIFIC)
         reqs = [
             req(d, validation_fn=simple_validate(f))
-            for d, f in code_fns(kind, prev, player, (ex_line,), utype)
-            + fact_fns(utype, m.get("facts"))
+            for d, f in code_fns(kind, prev, player, (ex_line,), probe)
         ]
+        if probe is not None:
+            reqs.insert(
+                0,
+                req(
+                    "Answers right, by the game state",
+                    validation_fn=simple_validate(probe_fn(probe, state)),
+                ),
+            )
+        reqs.append(
+            req(
+                "Every fact in the game state",
+                validation_fn=simple_validate(claims_fn(state, past, player)),
+            )
+        )
         reqs.append(
             req(
                 "Judged: " + ", ".join(questions),
                 validation_fn=simple_validate(judge_fn(judge, jctx, questions, args)),
             )
         )
-        if kind == "reply":
+        if kind == "reply" and probe is None:
             reqs.append(
                 req(
                     "Answers the partner's words (swap test)",
@@ -1284,7 +1441,7 @@ def run_match(match: dict, args, write, pool: list[dict]) -> int:
                 req(
                     "About this moment (contrast)",
                     validation_fn=simple_validate(
-                        contrast_fn(scorer, m["brief"], negs, player, args.tau, margins)
+                        contrast_fn(scorer, m, negs, player, args.tau, margins)
                     ),
                 )
             )
@@ -1313,26 +1470,30 @@ def run_match(match: dict, args, write, pool: list[dict]) -> int:
                 "events": m.get("events"),
                 "kind": kind,
                 "utype": utype,
+                "probe": probe,
                 "player": player,
                 "said": said,
                 "others": others,
                 "moves": moves,
                 "line": line,
                 "ok": bool(getattr(res, "success", not fails)),
+                "verdict": probes.verify(probe, line, state)[0] if probe else None,
+                "claims_ok": probes.claims(line, state, past, player or "")[0],
                 "margin": margins.get(line),
                 "attempts": len(getattr(res, "sample_generations", None) or []) or 1,
                 "fails": fails,
-                "window": [[tr.get("player"), tr["line"]] for tr in win],
-                "brief": m["brief"],
+                "conv": conv.to_json(),  # what the narrator reads before now
+                "tool": state,  # the game state he answers from
+                "moment": pending,  # what this exchange keeps of the moment
                 "facts": m.get("facts"),
-                "recent": m["recent"],
                 "prev": prev[-5:],
                 "s": round(time.time() - t0, 1),
             }
         )
         if line:  # what he said, pass or not: the next moment follows it
             prev.append(line)
-            turns.append({"pos": n, "t": m["t"], "player": player, "line": line})
+            said_so_far.append(Exchange(m["t"], pending, player, line))
+            pending = []
     return len(match["moments"])
 
 
@@ -1353,7 +1514,7 @@ def load_rows(paths: list[Path], keys: list[str]) -> list[dict]:
     for p in paths:
         for x in open(p):
             r = json.loads(x)
-            if all(r.get(k) for k in keys) and r.get("brief"):
+            if all(r.get(k) for k in keys) and r.get("tool"):
                 rows.append(r)
     return rows
 
@@ -1381,8 +1542,8 @@ def score_file(args) -> None:
             rng,
         )
         player = r.get("player")
-        prefixes = [score_prefix(r["brief"], player)] + [
-            score_prefix(o["brief"], player) for o in negs
+        prefixes = [score_prefix(r["tool"], player)] + [
+            score_prefix(o["tool"], player) for o in negs
         ]
         out = {}
         for k in keys:
@@ -1428,7 +1589,7 @@ def score_file(args) -> None:
 
 def swap_file(args) -> None:
     """The judge's moment-swap test: shown a line (and the partner's words, if
-    any) with its moment's brief and two others' (one from the same match, one
+    any) with its moment's game state and two others' (one from the same match, one
     from another), it must pick the moment; chance is a third."""
     from mellea import start_session
 
@@ -1452,7 +1613,7 @@ def swap_file(args) -> None:
         negs = negatives(
             r, by.get(key, []), [p for p in pool if (p["data"], p["ep"]) != key], 2, rng
         )
-        opts = [r["brief"], *(o["brief"] for o in negs)]
+        opts = [tool_text(r["tool"]), *(tool_text(o["tool"]) for o in negs)]
         order = list(range(len(opts)))
         rng.shuffle(order)
         out = {}
@@ -1474,6 +1635,84 @@ def swap_file(args) -> None:
         print(f"{k}: moment-swap accuracy {100 * acc:.1f}% (n={len(res)}, chance 33%)")
 
 
+JUDGED = ("true", "consistent", "coherent")
+
+
+def judge_file(args) -> None:
+    """Lines written elsewhere (a narrator's held-out samples, ``--keys
+    adapter,base``; a dataset's, ``--keys line``), judged once and without
+    repair, in the context the narrator read (each row's ``conv``, game state
+    and partner's words): true, consistent, coherent, and specific where the
+    writer asks it. Then the code checks: a probe's answer
+    (:func:`probes.verify`) and every line's claims (:func:`probes.claims`)."""
+    from mellea import start_session
+
+    keys = args.keys.split(",")
+    rows = load_rows(args.rows, keys)
+    if args.limit:
+        rows = random.Random(0).sample(rows, min(args.limit, len(rows)))
+    urls = args.judge_url.split(",")
+
+    def one(ir):
+        i, r = ir
+        judge = start_session(
+            "openai",
+            model_id=args.judge_model,
+            base_url=urls[i % len(urls)],
+            api_key="none",
+        )
+        conv = Conversation.from_json(r.get("conv") or [])
+        player, utype, probe = r.get("player"), r.get("utype"), r.get("probe")
+        context = context_text(conv, r["tool"])
+        jctx = context + (
+            f'\nHis partner just said: "{player}"'
+            if player
+            else "\nHis partner said nothing."
+        )
+        questions = {q: JUDGE_ALL[q] for q in JUDGED}
+        if not player or utype not in (*SOCIAL, "probe"):
+            questions.update(JUDGE_SPECIFIC)
+        past = [ex.events for ex in conv]
+        out = {}
+        for k in keys:
+            got, _ = verdicts(judge, jctx, questions, r[k], args)
+            got["claims"] = probes.claims(clean(r[k]), r["tool"], past, player or "")[0]
+            if probe:
+                got["verdict"] = probes.verify(probe, clean(r[k]), r["tool"])[0]
+            out[k] = got
+        return {**r, "judged": out}
+
+    with ThreadPoolExecutor(args.concurrency) as ex:
+        judged = list(ex.map(one, enumerate(rows)))
+    if args.out:
+        with open(args.out, "w") as f:
+            f.writelines(json.dumps(r) + "\n" for r in judged)
+    for k in keys:
+        parts = []
+        for q in (*JUDGED, "specific", "claims"):
+            v = [r["judged"][k][q] for r in judged if q in r["judged"][k]]
+            parts.append(f"{q} {100 * sum(v) / max(1, len(v)):.0f}%")
+        every = [
+            all(v for q, v in r["judged"][k].items() if q != "verdict") for r in judged
+        ]
+        print(
+            f"{k:<8} (n={len(judged)}): "
+            + ", ".join(parts)
+            + f"; all of them {100 * sum(every) / max(1, len(every)):.0f}%"
+        )
+    rs = [r for r in judged if r.get("probe")]
+    if rs:
+        print(
+            f"probes (n={len(rs)}): correct "
+            + ", ".join(
+                f"{k} {100 * sum(r['judged'][k]['verdict'] == probes.CORRECT for r in rs) / len(rs):.0f}%"
+                for k in keys
+            )
+        )
+    if args.out:
+        print(f"-> {args.out}")
+
+
 def write_file(args) -> None:
     matches = [json.loads(x) for x in open(args.moments)]
     pool = [
@@ -1483,6 +1722,7 @@ def write_file(args) -> None:
     ]
     if args.matches:
         matches = matches[: args.matches]
+    weights = probe_weights(pool)  # over every match, so every shard agrees
     k, n = map(int, args.shard.split("/"))
     matches = matches[k::n]
     if args.per_match:
@@ -1523,7 +1763,7 @@ def write_file(args) -> None:
 
     def one(m):
         try:
-            return run_match(m, args, write, pool)
+            return run_match(m, args, write, pool, weights)
         except Exception as e:  # a server went away: the others carry on
             failed.append((m["data"], m["ep"]))
             print(f"match {m['ep']} failed: {type(e).__name__}: {e}", flush=True)
@@ -1543,27 +1783,30 @@ def main() -> None:
     w = sub.add_parser("write", help="Write the dataset")
     sc = sub.add_parser("score", help="Contrast margins of lines written elsewhere")
     sw = sub.add_parser("swap", help="The judge's moment-swap test on lines")
+    jd = sub.add_parser("judge", help="Judged questions and code checks on lines")
     for p in (w, sc, sw):
         p.add_argument("--moments", type=Path, required=True)
-        p.add_argument("--concurrency", type=int, default=32)
         p.add_argument("--contrast-k", type=int, default=6, help="Other moments")
+    for p in (w, sc, sw, jd):
+        p.add_argument("--concurrency", type=int, default=32)
     for p in (w, sc):
         p.add_argument(
             "--score-url",
             help="Scoring server(s) (default: --voice-url, then --base-url)",
         )
         p.add_argument("--score-model", default="granite-4.2-30b")
-    for p in (w, sw):
+    for p in (w, sw, jd):
         p.add_argument(
             "--judge-url", required=True, help="Judge server(s), comma-separated"
         )
         p.add_argument("--judge-model", default="gpt-oss-120b")
         p.add_argument("--judge-effort", default="low", help="Judge reasoning effort")
-    for p in (sc, sw):
+    for p in (sc, sw, jd):
         p.add_argument("--rows", type=Path, nargs="+", required=True)
         p.add_argument("--keys", default="line", help="Columns holding lines")
         p.add_argument("--limit", type=int, default=0, help="A random sample of rows")
     sc.add_argument("--out", type=Path, required=True)
+    jd.add_argument("--out", type=Path, help="Each row with its verdicts")
     sc.add_argument(
         "--probe", default="hide,coffee", help="Words to locate in the ranking"
     )
@@ -1585,10 +1828,22 @@ def main() -> None:
     w.add_argument("--matches", type=int, default=0, help="0: all")
     w.add_argument("--per-match", type=int, default=0, help="0: all moments")
     w.add_argument(
-        "--reply-rate", type=float, default=0.5, help="Moments the partner speaks at"
+        "--probe-rate",
+        type=float,
+        default=0.55,
+        help="Moments the partner asks about the game state at (probes.py)",
     )
     w.add_argument(
-        "--follow-rate", type=float, default=0.3, help="Follow-ups to a reply"
+        "--reply-rate",
+        type=float,
+        default=0.15,
+        help="Moments the partner says something else at",
+    )
+    w.add_argument(
+        "--follow-rate",
+        type=float,
+        default=0.3,
+        help="Of those, follow-ups to his last reply (where there is one)",
     )
     w.add_argument("--misheard-rate", type=float, default=0.12)
     w.add_argument("--loop-budget", type=int, default=3)
@@ -1597,13 +1852,15 @@ def main() -> None:
     w.add_argument("--effort", default="low", help="Writer reasoning effort")
     w.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
-    if args.cmd != "swap" and not args.score_url:
+    if args.cmd in ("write", "score") and not args.score_url:
         args.score_url = getattr(args, "voice_url", None) or getattr(
             args, "base_url", None
         )
         if not args.score_url:
             raise SystemExit("--score-url is required")
-    {"write": write_file, "score": score_file, "swap": swap_file}[args.cmd](args)
+    run = {"write": write_file, "score": score_file, "swap": swap_file}
+    run["judge"] = judge_file
+    run[args.cmd](args)
 
 
 if __name__ == "__main__":

@@ -1,32 +1,42 @@
 # SPDX-License-Identifier: Apache-2.0
 """The player's own voice: what it is told before it speaks, and when it speaks.
 
-A talk request reads the same prompt every game adapter reads, up to the end of
-the state (so it reuses their prefilled KV), then closes the user turn with a
-*brief* of the moment in plain words, and the narrator writes the line. The
-history is terse (``t12.4 hp 64 face 135 | bot +10 8m | did cl | frag``) and
-holds only 10 s, so the brief carries what the model could not work out:
+The narrator does not read the game log the game adapters read (terse, ``t12.4
+hp 64 face 135 | bot +10 8m | did cl | frag``, and only 10 s of it). It reads
+its own conversation with the person watching (:mod:`conversation`), and before
+each line it calls the ``get_game_state`` tool; :func:`game_state` is what the
+tool returns, JSON with no prose in it::
 
-    Just now: Rambo killed you again, twice in a row; you had the BFG. Match: you
-    12, Rambo 13 leads (Rambo took the lead); rank 2 of 8; 5 deaths; 6 minutes
-    left. Right now: health 100; holding the pistol with 50 ammo; no bot in view.
+    {"time": "2:31", "time_left": "7:29",
+     "you": {"frags": 12, "deaths": 5, "rank": 2, "players": 8, "health": 64, ...},
+     "scoreboard": {"Rambo": 13, "you": 12, "Leone": 9, ...},
+     "last_death": {"killer": "Rambo", "your_weapon": "BFG", "seconds_ago": 4},
+     "recent_events": [{"time": "2:27", "type": "death", "killer": "Rambo", ...}, ...],
+     ...}
 
 The facts come from a :class:`Tracker`, fed every tic with the observation (its
 scoreboard included): frags and the weapon held, deaths and the killer (the bot
 whose frag count rose on the tic the player died), streaks and droughts, close
-calls, lead changes, weapon pickups, time left. The brief is rendered from them
-in code, in microseconds. The same tracker runs in collect.py's workers, in the
-engine's game worker and in record_video, so the narrator is trained and served
-on briefs rendered the same way from the same facts; ``python talk.py check``
-replays a match through both paths and compares them.
+calls, lead changes, every pickup (a weapon by name; health, armor and each kind
+of ammo with the amount), time left. Each event it fires carries an index, so
+the match's events can be gathered once each into an :class:`EventLog`: live,
+from the events every tic sends; in the dataset, from the rows' recent news.
+The same tracker runs in collect.py's workers, in the engine's game worker and
+in record_video, so the narrator is trained and served on the same JSON from
+the same facts; ``python talk.py check`` replays a match through both paths
+and compares them.
+
+The older *brief* (:func:`brief`, the moment in plain sentences) is still
+rendered for the videos' sound tags and the round-3 prompts.
 
 When to speak (:class:`TalkClock`): soon after a salient event (a death, a lead
 change, a streak, a close call, the first frag in a while, a new weapon: at
 least ``MIN_GAP_S`` after the last line; a plain frag, ``FRAG_GAP_S``), after
 ``IDLE_S`` of silence, and whenever the person watching speaks.
 
-The line it speaks goes back into the history (:func:`policy.spoken_entry`), so
-every adapter's next prompt contains it.
+The line it speaks joins the narrator's conversation, with what happened since
+his last line (:func:`moment_events`) and what the partner said; the game log
+never holds it.
 """
 
 from __future__ import annotations
@@ -34,6 +44,7 @@ from __future__ import annotations
 import re
 from collections import deque
 
+from conversation import clock
 from doom_env import TIC_HZ, WEAPON_NAMES
 
 # ── Match facts ────────────────────────────────────────────────────────────────
@@ -55,16 +66,27 @@ SAY = {
     "plasma": "plasma rifle",
     "bfg": "BFG",
 }
+# The ammo each gun fires (the pistol and the chaingun share bullets, the plasma
+# rifle and the BFG cells).
+AMMO_OF = {
+    2: "bullets",
+    3: "shells",
+    4: "bullets",
+    5: "rockets",
+    6: "cells",
+    7: "cells",
+}
 
 
 class Tracker:
-    """The match's memory, for the brief: what the 10 s history cannot hold.
+    """The match's memory: what the 10 s history cannot hold.
 
     Call :meth:`update` with every observation, dead or alive, in order (the
-    one from ``reset`` too); it returns the events that tic produced. ``facts()``
-    is a small JSON-able snapshot: :func:`brief` renders it, collect.py stores
-    it with every row and the engine's game worker sends it with every state.
-    ``match_s``: the match length, for the time left.
+    one from ``reset`` too); it returns the events that tic produced, each with
+    its tick, its kind and ``i``, its index in the match. ``facts()`` is a small
+    JSON-able snapshot: collect.py stores it with every row and the engine's
+    game worker sends it with every state; :func:`game_state` and
+    :func:`brief` render it. ``match_s``: the match length, for the time left.
     """
 
     def __init__(self, match_s: float | None = None):
@@ -77,6 +99,7 @@ class Tracker:
         self.frag_ticks: list[int] = []
         self.killed_by: dict[str, int] = {}
         self.last_death: dict | None = None
+        self._n = 0  # events fired so far
         self._boards: deque[dict[str, int]] = deque(maxlen=KILLER_TICS + 1)
         self._death: dict | None = None  # waiting for the killer's frag count
         self._hp: deque[tuple[int, int]] = deque()
@@ -84,6 +107,7 @@ class Tracker:
         self._last_close = -(10**9)
         self._leading = False
         self._arms: set[int] = {1, 2}
+        self._hud: tuple[int, int, dict[int, int]] | None = None  # the last live tic's
         self._last_frag = 0
 
     def update(self, obs) -> list[dict]:
@@ -93,13 +117,15 @@ class Tracker:
         fired: list[dict] = []
 
         def fire(kind: str, **kw) -> None:
-            fired.append({"tick": tick, "kind": kind, **kw})
+            fired.append({"tick": tick, "kind": kind, "i": self._n, **kw})
+            self._n += 1
 
         for _ in range(ev.count("frag")):
             gap = (tick - self._last_frag) / TIC_HZ
             self._last_frag = tick
             self.frag_ticks.append(tick)
-            fire("frag", weapon=SAY[obs.weapon])
+            drought = {"first_in_s": round(gap)} if gap >= DROUGHT_S else {}
+            fire("frag", weapon=SAY[obs.weapon], **drought)
             if gap >= DROUGHT_S:
                 fire("drought_ended", gap=round(gap))
             n = self._streak()
@@ -141,9 +167,11 @@ class Tracker:
         if "got weapon" in ev:
             for slot in sorted(set(obs.arms) - self._arms):
                 fire("weapon", name=SAY[WEAPON_NAMES[slot]])
+        self._pickups(obs, fire)
         if not obs.dead:
             self.weapon = obs.weapon
             self._arms = set(obs.arms)
+        self._hud = None if obs.dead else (obs.hp, obs.armor, dict(obs.arms))
         self._close_call(obs, fire)
 
         self.frags, self.deaths = obs.frags, obs.deaths
@@ -165,6 +193,27 @@ class Tracker:
     def _streak(self) -> int:
         span = STREAK_S * TIC_HZ
         return sum(1 for t in self.frag_ticks if self.tick - t <= span)
+
+    def _pickups(self, obs, fire) -> None:
+        """Health, armor and ammo picked up, with the amount (the HUD's rise
+        since the last live tic; a weapon is its own event, its ammo with it).
+        The amount is left out when damage on the same tic hides it."""
+        got = {e[4:] for e in obs.events if e.startswith("got ")}
+        if obs.dead or self._hud is None or not got:
+            return
+        hp, armor, arms = self._hud
+        for item, gain in (("health", obs.hp - hp), ("armor", obs.armor - armor)):
+            if item in got:
+                fire("pickup", item=item, **({"amount": gain} if gain > 0 else {}))
+        if "ammo" in got:
+            gains: dict[str, int] = {}
+            for slot, ammo in obs.arms.items():
+                if slot in AMMO_OF and slot in arms:
+                    kind = AMMO_OF[slot]
+                    gains[kind] = max(gains.get(kind, 0), ammo - arms[slot])
+            for kind, gain in sorted(gains.items()):
+                if gain > 0:
+                    fire("pickup", item=kind, amount=gain)
 
     def _close_call(self, obs, fire) -> None:
         """A big drop in health that the player lives through."""
@@ -208,16 +257,203 @@ class Tracker:
         }
 
 
-# ── The brief ──────────────────────────────────────────────────────────────────
-BRIEF_ENTRIES = 15  # the last 3 s of history (the brief without facts)
+class EventLog:
+    """A match's events in order, each once (by its index ``i``), gathered
+    from what the tracker fired (live: every tic's events) or from the rows'
+    recent news (the dataset: rows come every 0.2 s, news holds 4 s)."""
+
+    def __init__(self):
+        self.events: list[dict] = []
+        self._seen: set[int] = set()
+
+    def add(self, events) -> None:
+        for e in events:
+            if e["i"] not in self._seen:
+                self._seen.add(e["i"])
+                self.events.append(e)
+
+    def since(self, after: int | None, upto: int) -> list[dict]:
+        """The events after tick ``after`` (None: from the start) up to ``upto``."""
+        lo = -1 if after is None else after
+        return [e for e in self.events if lo < e["tick"] <= upto]
+
+
+# ── The game state (the get_game_state tool's output) ──────────────────────────
+LOG_S = 90  # recent_events: this far back
+KEEP_FRAGS = KEEP_SUPPLIES = 5  # ... but only the latest frags and supply pickups
+MOMENT_EVENTS = 8  # a past moment keeps at most this many events
 # Ammo below which a weapon is nearly empty (the BFG spends 40 cells a shot).
 LOW_AMMO = {2: 20, 3: 4, 4: 20, 5: 3, 6: 20, 7: 40}
-LOW_HP = 35
+STATE_NOTES = (
+    "your_weapon is your own weapon at the time; a bot's weapon and whom you "
+    "fragged are never reported; times are match time"
+)
 
 _ARMS = re.compile(r"\barms ((?:\d:\d+ ?)+)")
 _HELD = re.compile(r"\| (\w+) (\d+) \| arms")
 _NUM = {k: re.compile(rf"\b{k} (-?\d+)") for k in ("hp", "armor", "hit")}
 _FOES = re.compile(r"\bbot ([+-]\d+) (\d+)m")
+
+
+def _owned(state: str) -> dict[int, int]:
+    """Owned gun slots (the fist left out) -> ammo, from the state line."""
+    arms = _ARMS.search(state)
+    out = {}
+    for part in arms.group(1).split() if arms else ():
+        slot, ammo = part.split(":")
+        out[int(slot)] = int(ammo)
+    return out
+
+
+def _best_loaded(owned: dict[int, int]) -> str:
+    """The best gun with enough ammo for a few shots; else the best with any;
+    else the fist."""
+    for enough in (True, False):
+        for s in sorted(owned, reverse=True):
+            if s in LOW_AMMO and owned[s] >= (LOW_AMMO[s] if enough else 1):
+                return SAY[WEAPON_NAMES[s]]
+    return "fist"
+
+
+def _side(bearing: int) -> str:
+    return "ahead" if abs(bearing) <= 20 else ("left" if bearing < 0 else "right")
+
+
+def _ago(now: int, tick: int) -> int:
+    return round((now - tick) / TIC_HZ)
+
+
+def event_json(e: dict) -> dict | None:
+    """A tracker event as the tool reports it (None: not reported)."""
+    k = e["kind"]
+    if k == "died":
+        d = {
+            "type": "death",
+            "killer": e["by"] or "unknown",
+            "your_weapon": e["weapon"],
+        }
+        if e["again"] >= 2:
+            d["in_a_row"] = e["again"]
+        return d
+    if k == "frag":
+        d = {"type": "frag", "your_weapon": e["weapon"]}
+        if "first_in_s" in e:
+            d["first_in_s"] = e["first_in_s"]
+        return d
+    if k == "weapon":
+        return {"type": "pickup", "item": e["name"]}
+    if k == "pickup":
+        d = {"type": "pickup", "item": e["item"]}
+        if "amount" in e:
+            d["amount"] = e["amount"]
+        return d
+    if k == "took_lead":
+        return {"type": "lead", "leader": "you"}
+    if k == "lost_lead":
+        d = {"type": "lead", "leader": e["by"]}
+        if e["tied"]:
+            d["tied_with_you"] = True
+        return d
+    if k == "close_call":
+        return {"type": "close_call", "health_lost": e["lost"], "health_left": e["low"]}
+    if k == "streak" and e["n"] in STREAK_LEVELS:
+        return {"type": "streak", "frags_in_10s": e["n"]}
+    return None
+
+
+def _thin(events: list[dict], keep_frags: int, keep_supplies: int) -> list[dict]:
+    """Every reported event, but only the latest frags and supply pickups
+    (health, armor, ammo), oldest first."""
+    rep = [(e, j) for e in events if (j := event_json(e)) is not None]
+    frags = [e["i"] for e, j in rep if j["type"] == "frag"][-keep_frags:]
+    supply = [e["i"] for e, _ in rep if e["kind"] == "pickup"][-keep_supplies:]
+    keep = set(frags) | set(supply)
+    return [
+        e
+        for e, j in rep
+        if e["i"] in keep or (j["type"] != "frag" and e["kind"] != "pickup")
+    ]
+
+
+def moment_events(events: list[dict]) -> list[dict]:
+    """What a past moment keeps (the events since the line before it): what
+    happened, which stays true afterwards, and none of the readings of how
+    things stood. At most MOMENT_EVENTS, oldest first."""
+    kept = _thin(events, MOMENT_EVENTS, MOMENT_EVENTS)
+    if len(kept) > MOMENT_EVENTS:  # the supplies go first, then the frags
+        for kind in ("pickup", "frag"):
+            while len(kept) > MOMENT_EVENTS and any(e["kind"] == kind for e in kept):
+                kept.remove(next(e for e in kept if e["kind"] == kind))
+    return [event_json(e) for e in kept]
+
+
+def game_state(state: str, facts: dict, events: list[dict]) -> dict:
+    """What ``get_game_state`` returns at a moment: ``state`` (the state line,
+    :func:`policy.state_text`), ``facts`` (:meth:`Tracker.facts`) and the
+    match's events so far (:class:`EventLog`; later ones are ignored)."""
+    now = round(facts["t"] * TIC_HZ)
+    me = facts["frags"]
+    board = facts["board"]
+    nums = {k: int(m.group(1)) for k, r in _NUM.items() if (m := r.search(state))}
+    held = _HELD.search(state)
+    owned = _owned(state)
+    you: dict = {
+        "frags": me,
+        "deaths": facts["deaths"],
+        "rank": 1 + sum(n > me for _, n in board),
+        "players": len(board) + 1,
+        "health": nums.get("hp"),
+        "armor": nums.get("armor"),
+    }
+    if held:
+        weapon = SAY.get(held.group(1), held.group(1))
+        you["holding"] = {"weapon": weapon}
+        if weapon != "fist":
+            you["holding"]["ammo"] = int(held.group(2))
+    you["weapons"] = {SAY[WEAPON_NAMES[s]]: a for s, a in sorted(owned.items())}
+    you["best_loaded_weapon"] = _best_loaded(owned)
+    you["frags_last_10s"] = facts["streak"]
+    at = next((i for i, (_, f) in enumerate(board) if f <= me), len(board))
+    scores = dict([*board[:at], ("you", me), *board[at:]])  # best first
+    foes = _FOES.findall(state.split("| see", 1)[1]) if "| see" in state else []
+    out = {
+        "time": clock(now),
+        "time_left": None if facts["left"] is None else clock(facts["left"] * TIC_HZ),
+        "you": you,
+        "scoreboard": scores,
+        "bots_in_view": [
+            {"side": _side(int(b)), "distance_m": int(d)} for b, d in foes
+        ],
+    }
+    d = facts["last_death"]
+    if d:
+        out["last_death"] = {
+            "killer": d["by"] or "unknown",
+            "your_weapon": d["weapon"],
+            "seconds_ago": _ago(now, d["tick"]),
+        }
+        if d["again"] >= 2:
+            out["last_death"]["in_a_row"] = d["again"]
+    out["killed_by"] = dict(sorted(facts["killed_by"].items(), key=lambda kv: -kv[1]))
+    recent = [e for e in events if now - LOG_S * TIC_HZ < e["tick"] <= now]
+    picks = [e for e in recent if e["kind"] in ("weapon", "pickup")]
+    if picks:
+        out["last_pickup"] = {
+            **event_json(picks[-1]),
+            "seconds_ago": _ago(now, picks[-1]["tick"]),
+        }
+        del out["last_pickup"]["type"]
+    out["recent_events"] = [
+        {"time": clock(e["tick"]), **event_json(e)}
+        for e in _thin(recent, KEEP_FRAGS, KEEP_SUPPLIES)
+    ]
+    out["notes"] = STATE_NOTES
+    return out
+
+
+# ── The brief ──────────────────────────────────────────────────────────────────
+BRIEF_ENTRIES = 15  # the last 3 s of history (the brief without facts)
+LOW_HP = 35
 
 
 def _count(n: int, what: str) -> str:
@@ -559,14 +795,18 @@ def match_moments(
     """The moments a live game speaks at on its own, in order (the
     :class:`TalkClock` over the match's rows; ``limit``: the first so many, 0
     for all). ``rows``: one match's collect.py rows (tick, history length,
-    state, tracker facts); each moment carries its cue, brief, facts and last
+    state, tracker facts); each moment carries its cue, the tool's output
+    (``tool``, :func:`game_state`), what happened since the moment before
+    (``moment``, :func:`moment_events`), the brief, the facts and the last
     log lines."""
-    clock, out, prev = TalkClock(idle_s), [], -1
+    talk, log, out, prev, last = TalkClock(idle_s), EventLog(), [], -1, None
     for r in sorted(rows, key=lambda r: r["t"]):
-        clock.event([e for e in r["facts"]["news"] if prev < e["tick"] <= r["t"]])
+        news = r["facts"]["news"]
+        log.add(news)
+        talk.event([e for e in news if prev < e["tick"] <= r["t"]])
         prev = r["t"]
         n = r["hist_n"]
-        if n < 5 or (cue := clock.due(r["t"])) is None:
+        if n < 5 or (cue := talk.due(r["t"])) is None:
             continue
         out.append(
             {
@@ -574,12 +814,15 @@ def match_moments(
                 "hist_n": n,
                 "state": r["state"],
                 **cue,
+                "tool": game_state(r["state"], r["facts"], log.events),
+                "moment": moment_events(log.since(last, r["t"])),
                 "facts": r["facts"],
                 "brief": brief(entries[:n], r["state"], r["facts"]),
                 "recent": [e.strip() for e in entries[max(0, n - 3) : n]],
             }
         )
-        clock.said(r["t"])
+        talk.said(r["t"])
+        last = r["t"]
         if limit and len(out) >= limit:
             break
     return out
@@ -588,11 +831,19 @@ def match_moments(
 # ── Checks ─────────────────────────────────────────────────────────────────────
 def check_tracker() -> None:
     """The tracker on a scripted match: the killer from the scoreboard delta, a
-    lead taken and lost, a streak, a drought ended, a close call, a pickup."""
+    lead taken and lost, a streak, a drought ended, a close call, pickups with
+    their amounts; then the tool's JSON at the end, and a past moment's."""
     from types import SimpleNamespace
 
     board = {"Rambo": 0, "Leone": 0}
-    state = {"frags": 0, "deaths": 0, "hp": 100, "dead": False, "arms": {1: 0, 2: 50}}
+    state = {
+        "frags": 0,
+        "deaths": 0,
+        "hp": 100,
+        "armor": 0,
+        "dead": False,
+        "arms": {1: 0, 2: 50},
+    }
 
     def obs(tick, events=(), **kw):
         state.update(kw)
@@ -602,6 +853,7 @@ def check_tracker() -> None:
             events=tuple(events),
             dead=state["dead"],
             hp=state["hp"],
+            armor=state["armor"],
             weapon="pistol",
             arms=dict(state["arms"]),
             frags=state["frags"],
@@ -617,7 +869,9 @@ def check_tracker() -> None:
         2200: lambda: (["frag"], {"frags": 3}),  # three in 10 s: a streak
         2300: lambda: (["got weapon"], {"arms": {1: 0, 2: 50, 5: 10}}),
         2400: lambda: ([], {"hp": 30}),  # 70 lost at once, survived: a close call
-        2500: lambda: ([], {"hp": 100}),
+        2500: lambda: (["got health"], {"hp": 100}),
+        2550: lambda: (["got ammo"], {"arms": {1: 0, 2: 60, 5: 10}}),  # a clip
+        2560: lambda: (["got armor"], {"armor": 100}),
     }
     for tick in range(0, 3300):
         events, kw = script.get(tick, lambda: ([], {}))()
@@ -642,19 +896,87 @@ def check_tracker() -> None:
         (2200, "streak"),
         (2300, "weapon"),
         (2435, "close_call"),
+        (2500, "pickup"),
+        (2550, "pickup"),
+        (2560, "pickup"),
         (2800, "lost_lead"),
         (3000, "died"),
         (3035, "respawn"),
         (3200, "died"),
     ]
     assert kinds == want, f"tracker events\n got  {kinds}\n want {want}"
+    assert [e["i"] for e in seen] == list(range(len(seen))), "event indices"
     died = [e for e in seen if e["kind"] == "died"]
     assert died[0]["by"] == "Rambo" and died[1]["again"] == 2, died
     assert next(e for e in seen if e["kind"] == "lost_lead")["tied"], "3-3 is a tie"
-    b = brief([], "hp 100 armor 0 | pistol 50 | arms 2:50 | see nothing", tr.facts())
+    picks = [(e["item"], e.get("amount")) for e in seen if e["kind"] == "pickup"]
+    assert picks == [("health", 70), ("bullets", 10), ("armor", 100)], picks
+    line = "hp 100 armor 0 | pistol 50 | arms 2:50 | see bot -40 7m, medikit +3 2m"
+    b = brief([], line, tr.facts())
     assert b.startswith("Just now: Rambo killed you again, twice in a row"), b
     assert "Rambo 5 leads" in b and "Rambo has killed you" not in b, b
-    print("OK: tracker events, killer, streak, drought, close call, lead\n  " + b)
+
+    log = EventLog()
+    for k in range(0, len(seen), 3):  # in pieces, overlapping, as rows' news are
+        log.add(seen[max(0, k - 2) : k + 3])
+    assert log.events == seen, "the event log keeps each event once, in order"
+    js = game_state(line, tr.facts(), log.events)
+    you = js["you"]
+    assert (you["frags"], you["deaths"], you["rank"], you["players"]) == (3, 2, 2, 3)
+    assert (you["health"], you["armor"], you["holding"]) == (
+        100,
+        0,
+        {"weapon": "pistol", "ammo": 50},
+    ), you
+    assert you["weapons"] == {"pistol": 50} and you["best_loaded_weapon"] == "pistol"
+    assert list(js["scoreboard"].items()) == [("Rambo", 5), ("you", 3), ("Leone", 0)]
+    assert js["bots_in_view"] == [{"side": "left", "distance_m": 7}], js
+    assert js["last_death"] == {
+        "killer": "Rambo",
+        "your_weapon": "pistol",
+        "seconds_ago": 3,
+        "in_a_row": 2,
+    }, js["last_death"]
+    assert js["killed_by"] == {"Rambo": 2} and js["time"] == "1:34", js
+    assert js["last_pickup"] == {"item": "armor", "amount": 100, "seconds_ago": 21}
+    types = [e["type"] for e in js["recent_events"]]
+    assert types.count("frag") == 3 and types.count("death") == 2, types
+    assert js["recent_events"][0] == {
+        "time": "0:57",
+        "type": "frag",
+        "your_weapon": "pistol",
+        "first_in_s": 57,
+    }, js["recent_events"][0]
+    tied = {"time": "1:20", "type": "lead", "leader": "Rambo", "tied_with_you": True}
+    assert tied in js["recent_events"], js["recent_events"]
+    # A past moment: what happened since the line before (here, the deaths).
+    past = moment_events(log.since(2900, 3299))
+    assert past == [
+        {"type": "death", "killer": "Rambo", "your_weapon": "pistol"},
+        {"type": "death", "killer": "Rambo", "your_weapon": "pistol", "in_a_row": 2},
+    ], past
+    many = [
+        {"tick": t, "kind": "pickup", "item": "bullets", "amount": 5, "i": t}
+        for t in range(20)
+    ]
+    many.append(
+        {
+            "tick": 20,
+            "kind": "died",
+            "by": "Leone",
+            "weapon": "BFG",
+            "again": 1,
+            "i": 20,
+        }
+    )
+    short = moment_events(many)
+    assert len(short) == MOMENT_EVENTS and short[-1]["type"] == "death", short
+    import json
+
+    print(
+        "OK: tracker events, killer, streak, drought, close call, lead, pickups; "
+        f"the tool's JSON ({len(json.dumps(js))} chars):\n  {json.dumps(js)}"
+    )
 
 
 def check_parity(seconds: float = 40.0, seed: int = 5) -> None:
@@ -662,8 +984,9 @@ def check_parity(seconds: float = 40.0, seed: int = 5) -> None:
     player. Dataset: collect.py's worker (rows with the tracker's facts, a
     JSON round trip), then :func:`match_moments`. Live: engine.py's game worker
     plays the same actions on the wall clock, and its messages drive the talk
-    clock as the engine's Game does. Every state, every fact and every brief at
-    every moment must be identical."""
+    clock as the engine's Game does, and its events fill the event log. Every
+    state and every fact, and at every moment the brief, the tool's JSON and
+    the past moment's events, must be identical."""
     import json
     import multiprocessing as mp
 
@@ -696,7 +1019,7 @@ def check_parity(seconds: float = 40.0, seed: int = 5) -> None:
     proc = ctx.Process(target=engine.game_worker, args=(child, spec), daemon=True)
     proc.start()
     got: dict[int, tuple] = {}
-    hist, clock, live = [], TalkClock(), []
+    hist, talk, live, log, last = [], TalkClock(), [], EventLog(), None
     while True:
         msg = conn.recv()
         if msg[0] == "ready":
@@ -708,23 +1031,30 @@ def check_parity(seconds: float = 40.0, seed: int = 5) -> None:
         _, tick, state, entry, _events, facts, fired = msg
         if entry is not None:
             hist.append(entry)
-        clock.event(fired)
+        talk.event(fired)
+        log.add(fired)
         if state is None:
             continue
         act, slot = plan.get(tick, ("wait", None))
         conn.send(("act", tick, act, None if slot is None else int(slot)))
         got[tick] = (state, json.loads(json.dumps(facts)))
-        if len(hist) >= 5 and (cue := clock.due(tick)) is not None:
-            live.append((tick, cue["cue"], brief(hist, state, facts)))
-            clock.said(tick)
+        if len(hist) >= 5 and (cue := talk.due(tick)) is not None:
+            tool = json.loads(json.dumps(game_state(state, facts, log.events)))
+            past = moment_events(log.since(last, tick))
+            live.append((tick, cue["cue"], brief(hist, state, facts), tool, past))
+            talk.said(tick)
+            last = tick
     proc.join(10)
     bad = [r["t"] for r in rows if got.get(r["t"]) != (r["state"], r["facts"])]
     assert not bad, f"{len(bad)} of {len(rows)} tics differ, first at tick {bad[0]}"
-    want = [(m["t"], m["cue"], m["brief"]) for m in data]
-    assert live == want, f"moments differ\n live {live[:3]}\n data {want[:3]}"
+    want = [(m["t"], m["cue"], m["brief"], m["tool"], m["moment"]) for m in data]
+    for a, b in zip(live, want):
+        assert a == b, f"moment at tick {b[0]} differs\n live {a}\n data {b}"
+    assert len(live) == len(want), f"{len(live)} live moments, {len(want)} in the data"
     print(
         f"OK: {len(rows)} tics, same state and facts; {len(data)} moments, same "
-        f"cue and brief on both paths, e.g.\n  " + (data[-1]["brief"] if data else "")
+        "cue, brief, tool JSON and past events on both paths, e.g.\n  "
+        + (json.dumps(data[-1]["tool"]) if data else "")
     )
 
 
@@ -784,7 +1114,9 @@ def main() -> None:
     )
     mo.add_argument("--style", default="fighter")
     mo.add_argument("--matches", type=int, default=400)
-    mo.add_argument("--per-match", type=int, default=60)
+    mo.add_argument(
+        "--per-match", type=int, default=0, help="Moments per match (0: every one)"
+    )
     mo.add_argument(
         "--runs", type=int, default=3, help="Unbroken stretches per match (pick_runs)"
     )
@@ -792,6 +1124,11 @@ def main() -> None:
         "--idle-s", type=float, default=IDLE_S, help="Silence before a remark"
     )
     mo.add_argument("--seed", type=int, default=0)
+    mo.add_argument(
+        "--split",
+        help="NAME=N,...: the shuffled matches cut into files <out>_<NAME>.jsonl "
+        "(e.g. write=150,pool=30,heldout=20), split by match",
+    )
     mo.add_argument("--out", type=Path, required=True)
     ck = sub.add_parser("check", help="The tracker, and dataset vs live briefs")
     ck.add_argument("--seconds", type=float, default=40.0)
@@ -817,23 +1154,27 @@ def main() -> None:
             if h["ep"] in rows_by:
                 matches.append((str(d), h["ep"], h["entries"], rows_by[h["ep"]]))
     random.Random(args.seed).shuffle(matches)
+    matches = matches[: args.matches]
+    parts = [("", len(matches))]
+    if args.split:
+        parts = [(k, int(v)) for k, v in (p.split("=") for p in args.split.split(","))]
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    n = 0
-    cues: dict[str, int] = {}
-    with open(args.out, "w") as f:
-        for d, ep, entries, rows in matches[: args.matches]:
-            ms = match_moments(entries, rows, idle_s=args.idle_s)
-            ms = pick_runs(ms, args.per_match, args.runs)
-            for m in ms:
-                cues[m["cue"]] = cues.get(m["cue"], 0) + 1
-            f.write(
-                json.dumps({"data": d, "style": args.style, "ep": ep, "moments": ms})
-                + "\n"
-            )
-            n += len(ms)
-    print(
-        f"{min(len(matches), args.matches)} matches, {n} moments ({cues}) -> {args.out}"
-    )
+    at = 0
+    for name, size in parts:
+        path = args.out.with_name(f"{args.out.stem}_{name}.jsonl") if name else args.out
+        n, cues = 0, {}
+        with open(path, "w") as f:
+            for d, ep, entries, rows in matches[at : at + size]:
+                ms = match_moments(entries, rows, idle_s=args.idle_s)
+                if args.per_match:
+                    ms = pick_runs(ms, args.per_match, args.runs)
+                for m in ms:
+                    cues[m["cue"]] = cues.get(m["cue"], 0) + 1
+                row = {"data": d, "style": args.style, "ep": ep, "moments": ms}
+                f.write(json.dumps(row) + "\n")
+                n += len(ms)
+        print(f"{len(matches[at : at + size])} matches, {n} moments ({cues}) -> {path}")
+        at += size
 
 
 if __name__ == "__main__":
