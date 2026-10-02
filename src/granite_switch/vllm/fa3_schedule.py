@@ -21,6 +21,7 @@ Other models are untouched.
 from __future__ import annotations
 
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 # "patched", or why not: a vLLM whose internals differ leaves the bug in place,
@@ -62,6 +63,9 @@ def patch_flash_attn_schedule() -> str:
         if getattr(hf, "model_type", None) != "granite_switch" or not getattr(
             self, "aot_schedule", False
         ):
+            return
+        if os.environ.get("GRANITE_SWITCH_FA3_AOT", "1") == "0":
+            self.aot_schedule = False  # FA3 schedules every call itself
             return
         if not all(hasattr(self, a) for a in _ATTRS):
             # A vLLM that sizes the schedule elsewhere: schedule each call.
