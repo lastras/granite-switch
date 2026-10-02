@@ -737,6 +737,13 @@ class ExpertPolicy:
         return keyword_route(instruction)
 
 
+def _vllm_at_least(major: int, minor: int) -> bool:
+    import vllm
+
+    got = tuple(int(x) for x in re.findall(r"\d+", vllm.__version__)[:2])
+    return got >= (major, minor)
+
+
 def engine_kwargs(
     model: str,
     *,
@@ -755,6 +762,12 @@ def engine_kwargs(
     real-time engine (``AsyncLLM``, :mod:`engine`). See VLLMPolicy for each."""
     if attention is None and is_dual_stream(model):
         attention = {"flash_attn_version": 2}
+    if cudagraph_mode == "FULL" and _vllm_at_least(0, 26):
+        # vLLM 0.26's full-graph attention gives wrong outputs for batches of
+        # prefix-cached Granite Switch requests (a token outside the allowed
+        # set, other adapters' distributions); piecewise graphs are correct,
+        # ~5 ms slower per decision. To debug: scratch/doom/cluster/vllm26_probe.py.
+        cudagraph_mode = "FULL_AND_PIECEWISE"
     kw = dict(
         model=model,
         dtype="bfloat16",
@@ -1166,7 +1179,7 @@ def main() -> None:
         if not obs.dead and obs.tick % 5 == 0:
             games.append((hist.text, state_text(obs)))
         if not obs.dead and obs.tick % 70 == 0 and obs.tick:  # a remark every 2 s
-            state = game_state(state_text(obs), tracker.facts(), log.events)
+            state = game_state(state_text(obs), tracker.facts(), log.events, "fighter")
             talks.append((obs.tick, state, moment_events(log.since(last, obs.tick))))
             last = obs.tick
         hist.observe(obs, a)

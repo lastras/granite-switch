@@ -223,7 +223,7 @@ def main() -> None:
                 if hasattr(pol, "narrate") and (player or cue):
                     facts = tracker.facts()
                     b = brief(hist.entries, state_text(obs), facts)
-                    gs = game_state(state_text(obs), facts, log.events)
+                    gs = game_state(state_text(obs), facts, log.events, adapter)
                     t_talk = time.perf_counter()
                     line = pol.narrate([(conv, gs, player)])[0]
                     # Shown as running for as many tics as writing the line took.

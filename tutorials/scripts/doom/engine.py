@@ -214,7 +214,7 @@ class AsyncPolicy:
     ``base_talk``: the base model writes the spoken lines, on the narrator's
     prompt, even if the checkpoint has the narrator adapter.
     ``max_model_len``: room for the narrator's conversation (30 exchanges
-    are about 3-4k tokens)."""
+    reach ~4.5k tokens when the partner talks a lot)."""
 
     def __init__(
         self,
@@ -225,7 +225,7 @@ class AsyncPolicy:
         temperature: float,
         layout: str = "log",
         base_talk: bool = False,
-        max_model_len: int = 4096,
+        max_model_len: int = 8192,
     ):
         from transformers import AutoTokenizer
         from vllm import AsyncEngineArgs, SamplingParams
@@ -513,9 +513,15 @@ class Game:
         if self.clock is not None:
             self.clock.said(tick)
         t0 = time.perf_counter()
-        gs = game_state(state, self.facts, self.log.events)
+        gs = game_state(state, self.facts, self.log.events, self.style)
         moment = moment_events(self.log.since(self.last_ex, tick))
-        line, heard = await self.pol.talk(self.conv, gs, player)
+        try:
+            line, heard = await self.pol.talk(self.conv, gs, player)
+        except Exception as e:  # one failed line must not silence the match
+            print(
+                f"game {self.gid}: a line failed ({type(e).__name__}: {e})", flush=True
+            )
+            line, heard = "", player if isinstance(player, str) else None
         ms = int((time.perf_counter() - t0) * 1000)
         if line and not (self.hushed and player is None):  # a remark talked over
             self.conv.add(Exchange(tick, moment, heard, line))

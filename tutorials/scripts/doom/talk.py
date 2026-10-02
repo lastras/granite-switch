@@ -45,7 +45,7 @@ import re
 from collections import deque
 
 from conversation import clock
-from doom_env import TIC_HZ, WEAPON_NAMES
+from doom_env import PLAYER_NAME, TIC_HZ, WEAPON_NAMES
 
 # ── Match facts ────────────────────────────────────────────────────────────────
 NEWS_S = 4.0  # an event stays under "Just now" this long
@@ -99,6 +99,9 @@ class Tracker:
         self.frag_ticks: list[int] = []
         self.killed_by: dict[str, int] = {}
         self.last_death: dict | None = None
+        self.last_frag: dict | None = None
+        self.bot_deaths: dict[str, int] = {}  # from the obituaries
+        self._my_obit: tuple[int, dict] | None = None  # his last obituary: tick, it
         self._n = 0  # events fired so far
         self._boards: deque[dict[str, int]] = deque(maxlen=KILLER_TICS + 1)
         self._death: dict | None = None  # waiting for the killer's frag count
@@ -120,17 +123,39 @@ class Tracker:
             fired.append({"tick": tick, "kind": kind, "i": self._n, **kw})
             self._n += 1
 
-        for _ in range(ev.count("frag")):
+        obits = getattr(obs, "obits", ())
+        mine = [
+            o
+            for o in obits
+            if o["killer"] == PLAYER_NAME and o["victim"] != PLAYER_NAME
+        ]
+        for k in range(ev.count("frag")):
             gap = (tick - self._last_frag) / TIC_HZ
             self._last_frag = tick
             self.frag_ticks.append(tick)
             drought = {"first_in_s": round(gap)} if gap >= DROUGHT_S else {}
-            fire("frag", weapon=SAY[obs.weapon], **drought)
+            o = mine[k] if k < len(mine) else None  # the obituary names the victim
+            weapon = (o and o["weapon"]) or SAY[obs.weapon]
+            victim = o["victim"] if o else None
+            self.last_frag = {"tick": tick, "victim": victim, "weapon": weapon}
+            fire("frag", weapon=weapon, victim=victim, **drought)
             if gap >= DROUGHT_S:
                 fire("drought_ended", gap=round(gap))
             n = self._streak()
             if n >= STREAK_N:
                 fire("streak", n=n)
+        for o in obits:
+            if o["victim"] == PLAYER_NAME:
+                self._my_obit = (tick, o)
+            else:
+                self.bot_deaths[o["victim"]] = self.bot_deaths.get(o["victim"], 0) + 1
+                if o["killer"] not in (None, PLAYER_NAME):  # bots killing bots
+                    fire(
+                        "kill",
+                        killer=o["killer"],
+                        victim=o["victim"],
+                        weapon=o["weapon"],
+                    )
         if "died" in ev:
             self._death = {
                 "tick": tick,
@@ -143,12 +168,19 @@ class Tracker:
             d = self._death
             risen = {n: f - d["before"].get(n, 0) for n, f in bots.items()}
             risen = {n: r for n, r in risen.items() if r > 0}
-            if d["suicide"] or risen or tick - d["tick"] >= KILLER_TICS:
-                by = (
-                    "yourself"
-                    if d["suicide"]
-                    else (max(risen, key=risen.get) if risen else None)
-                )
+            # His own obituary, on the tic he died (or a tic either side).
+            mo = self._my_obit
+            obit = mo[1] if mo and abs(mo[0] - d["tick"]) <= 2 else None
+            if obit or d["suicide"] or risen or tick - d["tick"] >= KILLER_TICS:
+                if obit:
+                    by = obit["killer"] or "yourself"
+                else:
+                    by = (
+                        "yourself"
+                        if d["suicide"]
+                        else (max(risen, key=risen.get) if risen else None)
+                    )
+                killer_weapon = obit["weapon"] if obit and obit["killer"] else None
                 again = 1
                 if by and self.last_death and self.last_death["by"] == by:
                     again = self.last_death["again"] + 1
@@ -158,10 +190,18 @@ class Tracker:
                     "tick": tick,
                     "by": by,
                     "weapon": d["weapon"],
+                    "killer_weapon": killer_weapon,
                     "again": again,
                 }
-                fire("died", by=by, weapon=d["weapon"], again=again)
+                fire(
+                    "died",
+                    by=by,
+                    weapon=d["weapon"],
+                    killer_weapon=killer_weapon,
+                    again=again,
+                )
                 self._death = None
+                self._my_obit = None
         if "respawn" in ev:
             fire("respawn")
         if "got weapon" in ev:
@@ -252,7 +292,9 @@ class Tracker:
             "streak": self._streak(),
             "since_frag": round((self.tick - self._last_frag) / TIC_HZ),
             "last_death": dict(self.last_death) if self.last_death else None,
+            "last_frag": dict(self.last_frag) if self.last_frag else None,
             "killed_by": dict(self.killed_by),
+            "bot_deaths": dict(self.bot_deaths),
             "news": [dict(e) for e in self.news],
         }
 
@@ -280,14 +322,11 @@ class EventLog:
 
 # ── The game state (the get_game_state tool's output) ──────────────────────────
 LOG_S = 90  # recent_events: this far back
-KEEP_FRAGS = KEEP_SUPPLIES = 5  # ... but only the latest frags and supply pickups
+KEEP_THINNED = 5  # ... but only the latest frags, bots' kills and supply pickups
 MOMENT_EVENTS = 8  # a past moment keeps at most this many events
 # Ammo below which a weapon is nearly empty (the BFG spends 40 cells a shot).
 LOW_AMMO = {2: 20, 3: 4, 4: 20, 5: 3, 6: 20, 7: 40}
-STATE_NOTES = (
-    "your_weapon is your own weapon at the time; a bot's weapon and whom you "
-    "fragged are never reported; times are match time"
-)
+STATE_NOTES = "the bots in view are never identified; times are match time"
 
 _ARMS = re.compile(r"\barms ((?:\d:\d+ ?)+)")
 _HELD = re.compile(r"\| (\w+) (\d+) \| arms")
@@ -327,18 +366,26 @@ def event_json(e: dict) -> dict | None:
     """A tracker event as the tool reports it (None: not reported)."""
     k = e["kind"]
     if k == "died":
-        d = {
-            "type": "death",
-            "killer": e["by"] or "unknown",
-            "your_weapon": e["weapon"],
-        }
+        d = {"type": "death", "killer": e["by"] or "unknown"}
+        if e.get("killer_weapon"):
+            d["killer_weapon"] = e["killer_weapon"]
+        d["your_weapon"] = e["weapon"]
         if e["again"] >= 2:
             d["in_a_row"] = e["again"]
         return d
     if k == "frag":
-        d = {"type": "frag", "your_weapon": e["weapon"]}
+        d = {
+            "type": "frag",
+            "victim": e.get("victim") or "unknown",
+            "your_weapon": e["weapon"],
+        }
         if "first_in_s" in e:
             d["first_in_s"] = e["first_in_s"]
+        return d
+    if k == "kill":  # bots killing bots
+        d = {"type": "kill", "killer": e["killer"], "victim": e["victim"]}
+        if e.get("weapon"):
+            d["weapon"] = e["weapon"]
         return d
     if k == "weapon":
         return {"type": "pickup", "item": e["name"]}
@@ -361,47 +408,74 @@ def event_json(e: dict) -> dict | None:
     return None
 
 
-def _thin(events: list[dict], keep_frags: int, keep_supplies: int) -> list[dict]:
-    """Every reported event, but only the latest frags and supply pickups
-    (health, armor, ammo), oldest first."""
-    rep = [(e, j) for e in events if (j := event_json(e)) is not None]
-    frags = [e["i"] for e, j in rep if j["type"] == "frag"][-keep_frags:]
-    supply = [e["i"] for e, _ in rep if e["kind"] == "pickup"][-keep_supplies:]
-    keep = set(frags) | set(supply)
-    return [
-        e
-        for e, j in rep
-        if e["i"] in keep or (j["type"] != "frag" and e["kind"] != "pickup")
-    ]
+# What thins first: supply pickups, bots' kills, then his frags.
+_THINNED = ("pickup", "kill", "frag")
+
+
+def _thin(events: list[dict], keep: int) -> list[dict]:
+    """Every reported event, but only the latest ``keep`` of each thinned
+    kind (:data:`_THINNED`), oldest first."""
+    rep = [e for e in events if event_json(e) is not None]
+    kept = set()
+    for kind in _THINNED:
+        kept |= {e["i"] for e in [x for x in rep if x["kind"] == kind][-keep:]}
+    return [e for e in rep if e["kind"] not in _THINNED or e["i"] in kept]
 
 
 def moment_events(events: list[dict]) -> list[dict]:
     """What a past moment keeps (the events since the line before it): what
     happened, which stays true afterwards, and none of the readings of how
     things stood. At most MOMENT_EVENTS, oldest first."""
-    kept = _thin(events, MOMENT_EVENTS, MOMENT_EVENTS)
-    if len(kept) > MOMENT_EVENTS:  # the supplies go first, then the frags
-        for kind in ("pickup", "frag"):
-            while len(kept) > MOMENT_EVENTS and any(e["kind"] == kind for e in kept):
-                kept.remove(next(e for e in kept if e["kind"] == kind))
+    kept = _thin(events, MOMENT_EVENTS)
+    for kind in _THINNED:  # the supplies go first, then the bots' kills, then frags
+        while len(kept) > MOMENT_EVENTS and any(e["kind"] == kind for e in kept):
+            kept.remove(next(e for e in kept if e["kind"] == kind))
     return [event_json(e) for e in kept]
 
 
-def game_state(state: str, facts: dict, events: list[dict]) -> dict:
+_LAST = re.compile(r"\| last (\w+) (\w+)\s*$")
+MAP_NAME = "cig.wad MAP02, the ViZDoom deathmatch arena"
+
+
+def standings(
+    board: list, me: int, deaths: dict[str, int], my_deaths: int
+) -> list[dict]:
+    """The scoreboard, best first, him as "you" (before bots he ties): each
+    player's place (a tie shares it), frags and deaths."""
+    at = next((i for i, (_, f) in enumerate(board) if f <= me), len(board))
+    rows = [*board[:at], ("you", me), *board[at:]]
+    frags = [f for _, f in rows]
+    return [
+        {
+            "place": 1 + sum(x > f for x in frags),
+            "name": n,
+            "frags": f,
+            "deaths": my_deaths if n == "you" else deaths.get(n, 0),
+        }
+        for n, f in rows
+    ]
+
+
+def game_state(
+    state: str, facts: dict, events: list[dict], style: str | None = None
+) -> dict:
     """What ``get_game_state`` returns at a moment: ``state`` (the state line,
-    :func:`policy.state_text`), ``facts`` (:meth:`Tracker.facts`) and the
-    match's events so far (:class:`EventLog`; later ones are ignored)."""
+    :func:`policy.state_text`), ``facts`` (:meth:`Tracker.facts`), the match's
+    events so far (:class:`EventLog`; later ones are ignored) and ``style``,
+    the game adapter playing (fighter, cautious, collector)."""
     now = round(facts["t"] * TIC_HZ)
     me = facts["frags"]
     board = facts["board"]
     nums = {k: int(m.group(1)) for k, r in _NUM.items() if (m := r.search(state))}
     held = _HELD.search(state)
     owned = _owned(state)
+    best_other = max((f for _, f in board), default=me)
     you: dict = {
         "frags": me,
         "deaths": facts["deaths"],
         "rank": 1 + sum(n > me for _, n in board),
         "players": len(board) + 1,
+        "lead": me - best_other,  # frags ahead of the best other (negative: behind)
         "health": nums.get("hp"),
         "armor": nums.get("armor"),
     }
@@ -413,27 +487,43 @@ def game_state(state: str, facts: dict, events: list[dict]) -> dict:
     you["weapons"] = {SAY[WEAPON_NAMES[s]]: a for s, a in sorted(owned.items())}
     you["best_loaded_weapon"] = _best_loaded(owned)
     you["frags_last_10s"] = facts["streak"]
-    at = next((i for i, (_, f) in enumerate(board) if f <= me), len(board))
-    scores = dict([*board[:at], ("you", me), *board[at:]])  # best first
     foes = _FOES.findall(state.split("| see", 1)[1]) if "| see" in state else []
     out = {
         "time": clock(now),
         "time_left": None if facts["left"] is None else clock(facts["left"] * TIC_HZ),
+        "map": MAP_NAME,
         "you": you,
-        "scoreboard": scores,
+        "scoreboard": standings(
+            board, me, facts.get("bot_deaths", {}), facts["deaths"]
+        ),
         "bots_in_view": [
-            {"side": _side(int(b)), "distance_m": int(d)} for b, d in foes
+            {"who": "unknown", "side": _side(int(b)), "distance_m": int(d)}
+            for b, d in foes
         ],
     }
+    if style:
+        last = _LAST.search(state)
+        out["playing"] = {
+            "style": style,
+            "last_moves": list(last.groups()) if last else [],
+        }
     d = facts["last_death"]
     if d:
-        out["last_death"] = {
-            "killer": d["by"] or "unknown",
-            "your_weapon": d["weapon"],
-            "seconds_ago": _ago(now, d["tick"]),
-        }
+        out["last_death"] = {"killer": d["by"] or "unknown"}
+        if d.get("killer_weapon"):
+            out["last_death"]["killer_weapon"] = d["killer_weapon"]
+        out["last_death"].update(
+            your_weapon=d["weapon"], seconds_ago=_ago(now, d["tick"])
+        )
         if d["again"] >= 2:
             out["last_death"]["in_a_row"] = d["again"]
+    f = facts.get("last_frag")
+    if f:
+        out["last_frag"] = {
+            "victim": f["victim"] or "unknown",
+            "your_weapon": f["weapon"],
+            "seconds_ago": _ago(now, f["tick"]),
+        }
     out["killed_by"] = dict(sorted(facts["killed_by"].items(), key=lambda kv: -kv[1]))
     recent = [e for e in events if now - LOG_S * TIC_HZ < e["tick"] <= now]
     picks = [e for e in recent if e["kind"] in ("weapon", "pickup")]
@@ -444,8 +534,7 @@ def game_state(state: str, facts: dict, events: list[dict]) -> dict:
         }
         del out["last_pickup"]["type"]
     out["recent_events"] = [
-        {"time": clock(e["tick"]), **event_json(e)}
-        for e in _thin(recent, KEEP_FRAGS, KEEP_SUPPLIES)
+        {"time": clock(e["tick"]), **event_json(e)} for e in _thin(recent, KEEP_THINNED)
     ]
     out["notes"] = STATE_NOTES
     return out
@@ -790,7 +879,11 @@ def pick_runs(moments: list[dict], n: int, runs: int) -> list[dict]:
 
 
 def match_moments(
-    entries: list[str], rows: list[dict], idle_s: float = IDLE_S, limit: int = 0
+    entries: list[str],
+    rows: list[dict],
+    idle_s: float = IDLE_S,
+    limit: int = 0,
+    style: str | None = None,
 ) -> list[dict]:
     """The moments a live game speaks at on its own, in order (the
     :class:`TalkClock` over the match's rows; ``limit``: the first so many, 0
@@ -814,7 +907,7 @@ def match_moments(
                 "hist_n": n,
                 "state": r["state"],
                 **cue,
-                "tool": game_state(r["state"], r["facts"], log.events),
+                "tool": game_state(r["state"], r["facts"], log.events, style),
                 "moment": moment_events(log.since(last, r["t"])),
                 "facts": r["facts"],
                 "brief": brief(entries[:n], r["state"], r["facts"]),
@@ -845,7 +938,7 @@ def check_tracker() -> None:
         "arms": {1: 0, 2: 50},
     }
 
-    def obs(tick, events=(), **kw):
+    def obs(tick, events=(), obits=(), **kw):
         state.update(kw)
         sb = [("AI", state["frags"]), *sorted(board.items(), key=lambda kv: -kv[1])]
         return SimpleNamespace(
@@ -859,6 +952,7 @@ def check_tracker() -> None:
             frags=state["frags"],
             deaths=state["deaths"],
             priv=SimpleNamespace(scoreboard=sb),
+            obits=tuple(obits),
         )
 
     tr, seen = Tracker(match_s=600), []
@@ -873,6 +967,11 @@ def check_tracker() -> None:
         2550: lambda: (["got ammo"], {"arms": {1: 0, 2: 60, 5: 10}}),  # a clip
         2560: lambda: (["got armor"], {"armor": 100}),
     }
+    obit = {  # tick -> its obituaries (some ticks have none: the scoreboard tells)
+        2100: [{"victim": "Leone", "killer": "AI", "weapon": "pistol"}],
+        2600: [{"victim": "Leone", "killer": "Rambo", "weapon": "shotgun"}],
+        3000: [{"victim": "AI", "killer": "Rambo", "weapon": "rocket launcher"}],
+    }
     for tick in range(0, 3300):
         events, kw = script.get(tick, lambda: ([], {}))()
         if tick in (2600, 2700, 2800):  # Rambo frags someone: 1, 2, then 3
@@ -880,6 +979,7 @@ def check_tracker() -> None:
         if tick == 3000:  # Rambo kills the player: 4 to 3, Rambo leads
             board["Rambo"] += 1
             events, kw = ["died"], {"deaths": 1, "dead": True, "hp": 0}
+        kw["obits"] = obit.get(tick, ())
         if tick == 3035:
             events, kw = ["respawn"], {"dead": False, "hp": 100, "arms": {1: 0, 2: 50}}
         if tick == 3200:
@@ -899,6 +999,7 @@ def check_tracker() -> None:
         (2500, "pickup"),
         (2550, "pickup"),
         (2560, "pickup"),
+        (2600, "kill"),
         (2800, "lost_lead"),
         (3000, "died"),
         (3035, "respawn"),
@@ -929,8 +1030,40 @@ def check_tracker() -> None:
         {"weapon": "pistol", "ammo": 50},
     ), you
     assert you["weapons"] == {"pistol": 50} and you["best_loaded_weapon"] == "pistol"
-    assert list(js["scoreboard"].items()) == [("Rambo", 5), ("you", 3), ("Leone", 0)]
-    assert js["bots_in_view"] == [{"side": "left", "distance_m": 7}], js
+    assert js["scoreboard"] == [
+        {"place": 1, "name": "Rambo", "frags": 5, "deaths": 0},
+        {"place": 2, "name": "you", "frags": 3, "deaths": 2},
+        {"place": 3, "name": "Leone", "frags": 0, "deaths": 2},
+    ], js["scoreboard"]
+    assert you["lead"] == -2, you
+    assert js["bots_in_view"] == [{"who": "unknown", "side": "left", "distance_m": 7}]
+    assert js["last_frag"] == {
+        "victim": "unknown",
+        "your_weapon": "pistol",
+        "seconds_ago": 31,
+    }
+    victim = {
+        "time": "1:00",
+        "type": "frag",
+        "victim": "Leone",
+        "your_weapon": "pistol",
+    }
+    kill = {
+        "time": "1:14",
+        "type": "kill",
+        "killer": "Rambo",
+        "victim": "Leone",
+        "weapon": "shotgun",
+    }
+    death = {
+        "time": "1:25",
+        "type": "death",
+        "killer": "Rambo",
+        "killer_weapon": "rocket launcher",
+        "your_weapon": "pistol",
+    }
+    for e in (victim, kill, death):
+        assert e in js["recent_events"], (e, js["recent_events"])
     assert js["last_death"] == {
         "killer": "Rambo",
         "your_weapon": "pistol",
@@ -944,6 +1077,7 @@ def check_tracker() -> None:
     assert js["recent_events"][0] == {
         "time": "0:57",
         "type": "frag",
+        "victim": "unknown",
         "your_weapon": "pistol",
         "first_in_s": 57,
     }, js["recent_events"][0]
@@ -952,7 +1086,12 @@ def check_tracker() -> None:
     # A past moment: what happened since the line before (here, the deaths).
     past = moment_events(log.since(2900, 3299))
     assert past == [
-        {"type": "death", "killer": "Rambo", "your_weapon": "pistol"},
+        {
+            "type": "death",
+            "killer": "Rambo",
+            "killer_weapon": "rocket launcher",
+            "your_weapon": "pistol",
+        },
         {"type": "death", "killer": "Rambo", "your_weapon": "pistol", "in_a_row": 2},
     ], past
     many = [
@@ -1010,7 +1149,7 @@ def check_parity(seconds: float = 40.0, seed: int = 5) -> None:
     }
     res = json.loads(json.dumps(collect._teacher_episode(task)))
     rows, entries = res["rows"], res["history"]["entries"]
-    data = match_moments(entries, rows)
+    data = match_moments(entries, rows, style="fighter")
     plan = {r["t"]: (r["act"], r["weapon"]) for r in rows}
 
     ctx = mp.get_context("spawn")
@@ -1039,7 +1178,9 @@ def check_parity(seconds: float = 40.0, seed: int = 5) -> None:
         conn.send(("act", tick, act, None if slot is None else int(slot)))
         got[tick] = (state, json.loads(json.dumps(facts)))
         if len(hist) >= 5 and (cue := talk.due(tick)) is not None:
-            tool = json.loads(json.dumps(game_state(state, facts, log.events)))
+            tool = json.loads(
+                json.dumps(game_state(state, facts, log.events, "fighter"))
+            )
             past = moment_events(log.since(last, tick))
             live.append((tick, cue["cue"], brief(hist, state, facts), tool, past))
             talk.said(tick)
@@ -1165,7 +1306,7 @@ def main() -> None:
         n, cues = 0, {}
         with open(path, "w") as f:
             for d, ep, entries, rows in matches[at : at + size]:
-                ms = match_moments(entries, rows, idle_s=args.idle_s)
+                ms = match_moments(entries, rows, idle_s=args.idle_s, style=args.style)
                 if args.per_match:
                     ms = pick_runs(ms, args.per_match, args.runs)
                 for m in ms:

@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import random
 import re
+from collections import Counter
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -95,7 +96,8 @@ _TENS = {
 _ONE_BEFORE = set(
     "kill kills frag frags death deaths bot bots time times minute minutes second "
     "seconds point points rockets shells cells bullets "
-    "rocket rocket's shell cell bullet health armor hp left in to of more down guy".split()
+    "rocket rocket's shell cell bullet health armor hp left in to of more down guy "
+    "behind ahead up".split()
 )
 _ONE_AFTER = {"just", "only", "exactly", "to", "at", "with", "minus", "negative", "is"}
 _ONE_AFTER |= {"got", "has", "had", "on", "sits", "sitting", "at", "stuck"}
@@ -353,7 +355,9 @@ _LEAD_WORDS = (
 # He says he leads: in a line on its own ("still ahead", "I'm in the lead")...
 _SELF_LEAD = re.compile(
     r"(?:\b(?:i'?m|i am|we'?re|we are|i|we)\b(?:\s+\w+){0,3}?\s+" + _LEAD_WORDS + r"\b"
-    r"|^\W*(?:still\s+)?" + _LEAD_WORDS + r"\b"
+    r"|^\W*(?:still\s+)?"
+    + _LEAD_WORDS
+    + r"\b(?!\s+(?:bot|bots|of|enemy|guy|one|is|was)\b)"  # not "Ahead bot..."
     r"|\b(?:i'?m|i am|we'?re|we are)\s+(?:still\s+|now\s+)?first\b(?!\s+(?:time|kill|frag|to))"
     r"|\bmy lead\b|\bi lead\b)"
 )
@@ -732,6 +736,80 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         "which direction is he",
         "where is the enemy",
     ),
+    "killer_weapon": (
+        "what did he get you with",
+        "what did they kill you with",
+        "what weapon killed you",
+        "what hit you",
+        "what was he using",
+        "what did that bot use on you",
+        "what gun did he get you with",
+    ),
+    "who_killed_bot": (
+        "who killed {name}",
+        "who got {name}",
+        "who just took out {name}",
+        "who fragged {name}",
+    ),
+    "top_n": (
+        "who are the top three",
+        "who is in the top three",
+        "top three players",
+        "give me the top three",
+        "who is on the podium",
+    ),
+    "nth": (
+        "who is in {nth}",
+        "who is {nth}",
+        "who is in {nth} place",
+        "who is sitting in {nth}",
+    ),
+    "place_of": (
+        "what place is {name}",
+        "where is {name} on the scoreboard",
+        "what rank is {name}",
+        "where does {name} stand",
+    ),
+    "frags_of": (
+        "how many kills does {name} have",
+        "how many frags does {name} have",
+        "what is {name} at",
+        "how many has {name} got",
+    ),
+    "deaths_of": (
+        "how many times has {name} died",
+        "how many deaths does {name} have",
+        "how often has {name} died",
+    ),
+    "gap": (
+        "how far ahead are you",
+        "what is your lead",
+        "how big is your lead",
+        "how far behind are you",
+        "what is the gap",
+        "by how much",
+        "how many kills ahead are you",
+    ),
+    "who_in_view": (
+        "who is that",
+        "who is that guy",
+        "who is in front of you",
+        "who is that on the screen",
+        "do you know who that is",
+        "is that {name}",
+    ),
+    "map": (
+        "what map is this",
+        "where are we",
+        "what level is this",
+        "which map are you on",
+    ),
+    "style": (
+        "what is your play style",
+        "how are you playing",
+        "what is your strategy right now",
+        "are you playing it safe",
+    ),
     "challenge": (),  # CHALLENGES, by field
 }
 CHALLENGES: dict[str, tuple[str, ...]] = {
@@ -779,6 +857,12 @@ CHALLENGES: dict[str, tuple[str, ...]] = {
 # A reply may hold numbers (others may not): the answer is a number, or a
 # number goes naturally with it ("Rambo, thirteen to my twelve").
 NUMERIC = {
+    "frags_of",
+    "deaths_of",
+    "gap",
+    "place_of",
+    "nth",
+    "top_n",
     "rank",
     "leader",
     "second",
@@ -817,10 +901,8 @@ def phrasings(ptype: str, field: str | None = None, split: str = "train") -> lis
     narrator never trained on)."""
     base = CHALLENGES[field] if ptype == "challenge" else PHRASINGS[ptype]
     extra = []
-    if _EXTRA.exists():
-        extra = json.loads(_EXTRA.read_text()).get(
-            field if ptype == "challenge" else ptype, []
-        )
+    if _EXTRA.exists() and ptype != "challenge":  # the generated ones are questions
+        extra = json.loads(_EXTRA.read_text()).get(ptype, [])
         extra = [x for x in extra if not _META.search(x)][split == "test" :: 2]
     out = []
     for p in (*base, *extra):
@@ -831,22 +913,42 @@ def phrasings(ptype: str, field: str | None = None, split: str = "train") -> lis
     return out
 
 
+def board(state: dict) -> dict[str, int]:
+    """Name -> frags, best first ("you" is him): the scoreboard of either form
+    (a list of places, or the name -> frags map of the first round's states)."""
+    sb = state["scoreboard"]
+    return {r["name"]: r["frags"] for r in sb} if isinstance(sb, list) else dict(sb)
+
+
+def places(state: dict) -> dict[str, int]:
+    """Name -> place (1 is first; a tie shares the place)."""
+    sb = state["scoreboard"]
+    if isinstance(sb, list):
+        return {r["name"]: r["place"] for r in sb}
+    return {n: 1 + sum(x > f for x in sb.values()) for n, f in sb.items()}
+
+
+def bot_deaths(state: dict) -> dict[str, int]:
+    sb = state["scoreboard"]
+    return {r["name"]: r.get("deaths", 0) for r in sb} if isinstance(sb, list) else {}
+
+
 def _ago(state: dict, clock: str) -> int:
     return _secs(state["time"]) - _secs(clock)
 
 
 def _leaders(state: dict) -> list[str]:
-    board = state["scoreboard"]
-    top = max(board.values())
-    return [n for n, f in board.items() if f == top]
+    bd = board(state)
+    top = max(bd.values())
+    return [n for n, f in bd.items() if f == top]
 
 
 def _second(state: dict) -> list[str]:
     """Who holds the second-best score (ties share it)."""
-    scores = sorted(set(state["scoreboard"].values()), reverse=True)
+    scores = sorted(set(board(state).values()), reverse=True)
     if len(scores) < 2:
         return []
-    return [n for n, f in state["scoreboard"].items() if f == scores[1]]
+    return [n for n, f in board(state).items() if f == scores[1]]
 
 
 def _nemesis(state: dict) -> str | None:
@@ -866,9 +968,9 @@ def challenge_fields(state: dict) -> list[str]:
     if (you.get("holding") or {}).get("ammo") is not None:
         out.append("ammo")
     d = state.get("last_death")
-    if d and d["seconds_ago"] <= KILLER_NOW_S and d["killer"] in state["scoreboard"]:
+    if d and d["seconds_ago"] <= KILLER_NOW_S and d["killer"] in board(state):
         out.append("killer")
-    if len(state["scoreboard"]) >= 3:
+    if len(board(state)) >= 3:
         out.append("leader")
     return out
 
@@ -881,14 +983,11 @@ def allowed(state: dict) -> list[str]:
         "killer_before": bool(d) and KILLER_NOW_S < d["seconds_ago"] <= KILLER_BEFORE_S,
         "nemesis": _nemesis(state) is not None,
         "deaths": True,
-        "victim": any(
-            e["type"] == "frag" and _ago(state, e["time"]) <= VICTIM_S
-            for e in state.get("recent_events", ())
-        ),
+        "victim": _victim_ok(state),
         "frags": True,
-        "score": len(state["scoreboard"]) >= 2,
-        "leader": len(state["scoreboard"]) >= 2,
-        "second": len(set(state["scoreboard"].values())) >= 2,
+        "score": len(board(state)) >= 2,
+        "leader": len(board(state)) >= 2,
+        "second": len(set(board(state).values())) >= 2,
         "rank": True,
         "streak": (you.get("frags_last_10s") or 0) >= 3,
         "health": you.get("health") is not None,
@@ -903,9 +1002,48 @@ def allowed(state: dict) -> list[str]:
         "time_left": state.get("time_left") is not None,
         "bots_in_view": True,
         "side": bool(state.get("bots_in_view")),
+        "killer_weapon": bool(d) and d["seconds_ago"] <= KILLER_BEFORE_S,
+        "who_killed_bot": bool(_bot_kills(state)),
+        "top_n": len(board(state)) >= 4,
+        "nth": len(board(state)) >= 5 and bool(_nth_options(state)),
+        "place_of": len(board(state)) >= 3,
+        "frags_of": len(board(state)) >= 2,
+        "deaths_of": isinstance(state["scoreboard"], list) and len(board(state)) >= 2,
+        "gap": len(board(state)) >= 2,
+        "who_in_view": bool(state.get("bots_in_view")),
+        "map": "map" in state,
+        "style": "playing" in state,
         "challenge": True,
     }
     return [t for t in TYPES if ok[t]]
+
+
+def _victim_ok(state: dict) -> bool:
+    f = state.get("last_frag")
+    if f is not None:
+        return f["seconds_ago"] <= VICTIM_S
+    return any(  # the first round's states: victims never reported
+        e["type"] == "frag" and _ago(state, e["time"]) <= VICTIM_S
+        for e in state.get("recent_events", ())
+    )
+
+
+def _bot_kills(state: dict) -> list[dict]:
+    """The bots' kills of the last 30 s, latest last."""
+    return [
+        e
+        for e in state.get("recent_events", ())
+        if e["type"] == "kill" and _ago(state, e["time"]) <= 30
+    ]
+
+
+_NTH = {3: "third", 4: "fourth", 5: "fifth"}
+
+
+def _nth_options(state: dict) -> list[int]:
+    """The places 3-5 someone holds (a tie can skip a place)."""
+    held = set(places(state).values())
+    return [n for n in _NTH if n in held]
 
 
 _SAY_GUN = {"BFG": "bfg"}  # how the partner says it (ASR: lower case)
@@ -928,7 +1066,7 @@ def make(ptype: str, state: dict, rng: random.Random, split: str = "train") -> d
         truth = rng.random() < 0.5
         gold = challenge_gold(field, state)
         if field in ("killer", "leader"):
-            others = [n for n in state["scoreboard"] if n not in ("you", gold)]
+            others = [n for n in board(state) if n not in ("you", gold)]
             if field == "leader" and gold != "you" and rng.random() < 0.3:
                 others = ["you"]
             claimed = gold if truth or not others else rng.choice(others)
@@ -947,7 +1085,17 @@ def make(ptype: str, state: dict, rng: random.Random, split: str = "train") -> d
             pool = [p.replace("{name} is", "you are") for p in pool if "{name} is" in p]
     else:
         pool = phrasings(ptype, None, split)
-    probe["text"] = rng.choice(pool).format(**fill)
+    text = rng.choice(pool)
+    if "{name}" in text and "name" not in fill:  # a bot it asks about
+        if ptype == "who_killed_bot":
+            name = _bot_kills(state)[-1]["victim"]
+        else:
+            name = rng.choice([n for n in board(state) if n != "you"])
+        probe["name"], fill["name"] = name, name.lower()
+    if "{nth}" in text:
+        probe["n"] = rng.choice(_nth_options(state))
+        fill["nth"] = _NTH[probe["n"]]
+    probe["text"] = text.format(**fill)
     return probe
 
 
@@ -977,10 +1125,44 @@ def gold(probe: dict, state: dict):
     if t in ("deaths", "frags", "health", "armor"):
         return you[t]
     if t == "victim":
+        f = state.get("last_frag")
+        return f["victim"] if f else "unknown"
+    if t == "killer_weapon":
+        d = state["last_death"]
+        if d["killer"] == "yourself":
+            return d["your_weapon"]  # his own
+        return d.get("killer_weapon") or "unknown"
+    if t == "who_killed_bot":
+        return next(
+            e["killer"]
+            for e in reversed(_bot_kills(state))
+            if e["victim"] == probe["name"]
+        )
+    if t == "top_n":
+        return [n for n, p in places(state).items() if p <= 3]
+    if t == "nth":
+        return [n for n, p in places(state).items() if p == probe["n"]]
+    if t == "place_of":
+        return places(state)[probe["name"]]
+    if t == "frags_of":
+        return board(state)[probe["name"]]
+    if t == "deaths_of":
+        return bot_deaths(state).get(probe["name"], 0)
+    if t == "gap":
+        return (
+            you["lead"]
+            if "lead" in you
+            else you["frags"] - max(f for n, f in board(state).items() if n != "you")
+        )
+    if t == "who_in_view":
         return "unknown"
+    if t == "map":
+        return state["map"]
+    if t == "style":
+        return state["playing"]["style"]
     if t == "score":
-        board = [(n, f) for n, f in state["scoreboard"].items() if n != "you"]
-        return {"you": you["frags"], "other": board[0][0], "other_frags": board[0][1]}
+        others = [(n, f) for n, f in board(state).items() if n != "you"]
+        return {"you": you["frags"], "other": others[0][0], "other_frags": others[0][1]}
     if t == "leader":
         return _leaders(state)
     if t == "second":
@@ -1031,7 +1213,40 @@ def answer_text(probe: dict, state: dict) -> str:
     if t == "nemesis":
         return f"{g} has killed me the most: {state['killed_by'][g]} times."
     if t == "victim":
-        return "The game never says whom I fragged: I don't know who it was."
+        if g == "unknown":
+            return "The game does not say whom I fragged: I don't know who it was."
+        return f"I fragged {g}."
+    if t == "killer_weapon":
+        d = state["last_death"]
+        if d["killer"] == "yourself":
+            return f"I killed myself, with my own {g}."
+        if g == "unknown":
+            return f"{d['killer']} killed me; the game does not say with what."
+        return f"{d['killer']} killed me with the {g}."
+    if t == "who_killed_bot":
+        return f"{g} killed {probe['name']}."
+    if t == "top_n":
+        return f"The top three: {_them(['me' if n == 'you' else n for n in g])}."
+    if t == "nth":
+        return (
+            f"In place {probe['n']}: {_them(['me' if n == 'you' else n for n in g])}."
+        )
+    if t == "place_of":
+        return f"{probe['name']} is {_ORDINAL_WORD[g]}."
+    if t == "frags_of":
+        return f"{probe['name']} has {g} frags."
+    if t == "deaths_of":
+        return f"{probe['name']} has died {g} times."
+    if t == "gap":
+        if g > 0:
+            return f"I lead by {g}."
+        return "I am tied for first." if g == 0 else f"I am {-g} behind the leader."
+    if t == "who_in_view":
+        return "The game never says which bot is in view: I can't tell who it is."
+    if t == "map":
+        return f"The map is {g}."
+    if t == "style":
+        return f"I am playing {g}."
     if t in ("deaths", "frags"):
         return f"I have {g} {'deaths' if t == 'deaths' else 'frags'}."
     if t == "score":
@@ -1183,9 +1398,98 @@ def verify(probe: dict, reply: str, state: dict) -> tuple[str, str]:
     low = reply.lower()
     if t in ("killer_now", "killer_before", "nemesis"):
         return _killer(reply, g, state)
+    if t == "victim" and g != "unknown":
+        return _killer(reply, g, state)  # a name, checked as a killer's is
+    if t == "killer_weapon":
+        said = weapons_said(reply)
+        if g == "unknown":
+            d = state["last_death"]
+            theirs = [w for w in said if w != d.get("your_weapon")]
+            if theirs:
+                return (
+                    WRONG,
+                    "The game does not say what killed you; name no weapon of his.",
+                )
+            return (
+                (CORRECT, "")
+                if _ABSTAIN.search(low)
+                else (ABSTAINED, "Say the game does not say.")
+            )
+        if g in said:
+            return CORRECT, ""
+        return (WRONG if said else ABSTAINED), f"It was the {g}."
+    if t == "who_killed_bot":
+        return _killer(reply, g, state)
+    if t in ("top_n", "nth"):
+        want = set(g)
+        said_me = bool(_SELF_ANSWER.search(low) or re.search(r"\b(?:me|myself)\b", low))
+        named = set(_named(reply, [n for n in board(state) if n != "you"]))
+        got = named | ({"you"} if said_me else set())
+        if t == "top_n":
+            wrong = named - want
+            if wrong:
+                return (
+                    WRONG,
+                    f"The top three is {_them(['me' if n == 'you' else n for n in g])}.",
+                )
+            if len(got & want) >= min(3, len(want)):
+                return CORRECT, ""
+            return (
+                WRONG if got else ABSTAINED
+            ), f"The top three is {_them(['me' if n == 'you' else n for n in g])}."
+        if got & want:
+            return CORRECT, ""
+        return (WRONG if got else ABSTAINED), answer_text(probe, state)
+    if t == "place_of":
+        r = rank_said(reply, state["you"]["players"])
+        if r == g:
+            return CORRECT, ""
+        return (WRONG if r else ABSTAINED), answer_text(probe, state)
+    if t in ("frags_of", "deaths_of"):
+        return _number(reply, g, "frags" if t == "frags_of" else "deaths")
+    if t == "gap":
+        nums = [n for n, _, _ in number_spans(reply)]
+        if g == 0 and _TIE.search(low):
+            return CORRECT, ""
+        if (
+            abs(g) in nums
+            and not (g > 0 and re.search(r"\bbehind\b", low))
+            and not (g < 0 and re.search(r"\b(?:ahead|lead by|up by)\b", low))
+        ):
+            return CORRECT, ""
+        return (WRONG if nums else ABSTAINED), answer_text(probe, state)
+    if t == "who_in_view":
+        ok, why = claims(reply, state)
+        if not ok and "in view is never known" in why:
+            return WRONG, "Which bot is in view is never known; name none."
+        if probe.get("name") and re.search(
+            rf"\b(?:yes|yeah|yep|that'?s (?:him|{probe['name'].lower()}))\b", low
+        ):
+            return WRONG, "Which bot is in view is never known; do not confirm it."
+        if _ABSTAIN.search(low) or re.search(
+            r"\b(?:can.?t tell|could be anyone|all look (?:the )?same|look alike)\b",
+            low,
+        ):
+            return CORRECT, ""
+        return ABSTAINED, "Say you can't tell who it is."
+    if t == "map":
+        if re.search(r"\bmap ?0?2\b|\bmap two\b|\bcig\b", low):
+            return CORRECT, ""
+        return ABSTAINED, answer_text(probe, state)
+    if t == "style":
+        words_ = {
+            "fighter": r"\bfight|aggress|attack|hunt",
+            "cautious": r"\bcautio|careful|safe|defens",
+            "collector": r"\bcollect|pick|item|loot|grab|scaveng",
+        }
+        if re.search(words_.get(g, g), low):
+            return CORRECT, ""
+        if any(re.search(rx, low) for k, rx in words_.items() if k != g):
+            return WRONG, answer_text(probe, state)
+        return ABSTAINED, answer_text(probe, state)
     if t == "victim":
         named = bot_names(reply) | bot_names(reply, ignore_case=True) & set(
-            state["scoreboard"]
+            board(state)
         )
         if named:
             return (
@@ -1343,13 +1647,13 @@ _PAST_OWN = re.compile(
 _CATS = {
     "frags": r"kills?|frags?|points?|score|bodies",
     "deaths": r"deaths?|died|dies|times|lives|respawns?",
-    "health": r"health|hp|hit|percent|life",
+    "health": r"health|hp|percent|life",
     "armor": r"armou?r",
     "ammo": r"ammo|ammunition|bullets?|shells?|rockets?|cells?|rounds?|shots?|clips?",
     "time": r"minutes?|seconds?|secs?|mins?",
     "rank": r"place|position|spot|rank",
     "view": r"bots?|guys?|enemies|players?|of them|in view|in sight",
-    "dist": r"meters?|metres?|yards?|feet",
+    "dist": r"meters?|metres?|yards?|feet|steps?|units?|paces?",
 }
 
 
@@ -1389,7 +1693,8 @@ def _allowed_numbers(state: dict) -> dict[str, set[int]]:
             time |= {s, s // 60, s // 60 + 1}
     d = state.get("last_death") or {}
     return {
-        "frags": set(state["scoreboard"].values())
+        "frags": {abs(gold({"type": "gap"}, state))}
+        | set(board(state).values())
         | {you["frags"], you.get("frags_last_10s")},
         "deaths": {
             you["deaths"],
@@ -1430,7 +1735,7 @@ def claims(
     named; a killer must be one the game named; who leads, and where he stands
     against a named bot; every number, by what it counts; the weapons he says
     he has, and the pickups he says he made; no bot the match does not have."""
-    you, board = state["you"], state["scoreboard"]
+    you, bd = state["you"], board(state)
     low = reply.lower()
     past_events = [e for evs in past for e in evs]
     events = list(state.get("recent_events", ())) + past_events
@@ -1438,7 +1743,34 @@ def claims(
     if state.get("last_death"):
         killers.add(state["last_death"]["killer"])
     killers |= {e["killer"] for e in events if e.get("type") == "death"}
-    in_match = [n for n in board if n != "you"]
+    in_match = [n for n in bd if n != "you"]
+    # What the game told him: his victims, which bot used which weapon, the
+    # bots' kills (the obituaries; none in the first round's states).
+    victims_cased = {e.get("victim") for e in events if e.get("type") == "frag"}
+    if state.get("last_frag"):
+        victims_cased.add(state["last_frag"]["victim"])
+    victims_cased -= {None, "unknown"}
+    victims = {v.lower() for v in victims_cased}
+    used = {
+        (e["killer"].lower(), e.get("killer_weapon"))
+        for e in events
+        if e.get("type") == "death" and e.get("killer_weapon")
+    }
+    used |= {
+        (e["killer"].lower(), e.get("weapon"))
+        for e in events
+        if e.get("type") == "kill" and e.get("weapon")
+    }
+    d0 = state.get("last_death") or {}
+    if d0.get("killer_weapon"):
+        used.add((d0["killer"].lower(), d0["killer_weapon"]))
+    recent_kills = Counter(
+        e["killer"].lower()
+        for e in state.get("recent_events", ())
+        if e.get("type") in ("kill", "death")
+        and e.get("killer")
+        and _ago(state, e["time"]) <= 30
+    )
     names = bot_names(reply)
     names_rx = (
         "|".join(sorted(map(re.escape, in_match), key=len, reverse=True)) or "(?!x)x"
@@ -1490,11 +1822,15 @@ def claims(
     ):
         m = re.search(rx, reply, re.I)
         if m:
-            bad.append(
-                f"A bot's weapon is never known ({m.group(0)}); your_weapon is yours."
-            )
-            break
-    # No victim is ever named.
+            who = next(n for n in in_match if n.lower() == m.group(1).lower())
+            gun = (weapons_said(m.group(0)) or [None])[-1]
+            if (who.lower(), gun) not in used:
+                bad.append(
+                    f"The game never said {who} used the {gun} ({m.group(0)}); "
+                    "your_weapon is yours."
+                )
+                break
+    # A victim named must be one the game named.
     for s in _sentences(reply):
         v = re.search(
             rf"\b(?:i|i've|we|i just|i finally)\s+(?:\w+\s+)?{_KILL_VERBS}\s+({names_rx})\b"
@@ -1504,8 +1840,14 @@ def claims(
         )
         if v:
             who = next(g for g in v.groups() if g)
-            bad.append(f"Nobody knows whom you fragged; do not name {who}.")
-            break
+            if who.lower() not in victims:
+                known = (
+                    "the game did not say whom you fragged"
+                    if not victims
+                    else ("you fragged " + _them(sorted(victims_cased)))
+                )
+                bad.append(f"You did not frag {who}: {known}.")
+                break
     # A killer must be one the game named.
     for m in re.finditer(
         rf"\b({names_rx})\b(?:'s| has| just| finally| again| really| even)*\s+{_KILL_VERBS}\s+(?:me|us)\b"
@@ -1553,7 +1895,7 @@ def claims(
         for m in re.finditer(
             rf"\b(?:ahead of|lead over|beating)\s+({names_rx})\b", s, re.I
         ):
-            if not you["frags"] > board[m.group(1)]:
+            if not you["frags"] > bd[m.group(1)]:
                 bad.append(f"You are not ahead of {m.group(1)}.")
         for m in re.finditer(
             rf"\bbehind\s+({names_rx})\b|\b({names_rx})(?:'s| is) ahead of me\b",
@@ -1561,7 +1903,7 @@ def claims(
             re.I,
         ):
             who = m.group(1) or m.group(2)
-            if not you["frags"] < board[who]:
+            if not you["frags"] < bd[who]:
                 bad.append(f"You are not behind {who}.")
         if (
             re.search(
@@ -1585,6 +1927,9 @@ def claims(
     spans, nlow = _tok_spans(reply)
     toks = [m.group(0) for m in spans]
     for n, a, b in number_spans(reply, ones=False):
+        if toks[a] in ("once", "twice"):
+            continue
+
         # What it counts: the words after it ("64 health", "twelve kills"),
         # else the word just before ("health 64", "rank 1"); never across a
         # comma or a full stop ("12 frags, 5 deaths, rank 2. Health 64").
@@ -1621,7 +1966,7 @@ def claims(
         ]
         ok = set().union(*(allowed[c] for c in cats)) if cats else set()
         for x in who:
-            ok |= {board[x], (state.get("killed_by") or {}).get(x)}
+            ok |= {bd[x], (state.get("killed_by") or {}).get(x)}
         if not cats and not who:
             ok = every
         if n not in ok:
@@ -1629,6 +1974,67 @@ def claims(
             bad.append(
                 f"{say_number(n).capitalize()} is not your {what}number: check the game state."
             )
+    # Which bot is in view is never known (every bot is the same "DoomPlayer"):
+    # a named bot is never ahead, nearby, watching or "that one".
+    seen_rx = (
+        r"(?:'s| is| was| keeps| stays)?\s+(?:still\s+|right\s+|just\s+)?"
+        r"(?:behind me|in front(?: of me)?|on my (?:left|right)|to my (?:left|right)|"
+        r"(?:on|to) the (?:left|right)|right there|over there|in view|in sight|on screen|"
+        r"nearby|close by|lurking|hiding|watching|camping|around the corner|"
+        r"standing there|in my sights|staring at me|right behind)\b"
+    )
+    for m in re.finditer(
+        rf"\b({names_rx})\b{seen_rx}|\b(?:that'?s|that is|it'?s|it is|there'?s|there is)\s+({names_rx})\b",
+        reply,
+        re.I,
+    ):
+        who = m.group(1) or m.group(2)
+        bad.append(f"Which bot is in view is never known; do not say it is {who}.")
+        break
+    # A bot's streak is never reported; a named bot's place must be its place;
+    # "again" in the lead needs a lead taken back.
+    for m in re.finditer(
+        rf"\b({names_rx})(?:'s| is| has been| has| went)\s+(?:on\s+)?(?:a\s+)?"
+        r"(?:streak|roll|tear|rampage|killing spree|hot streak)\b",
+        reply,
+        re.I,
+    ):
+        if recent_kills[m.group(1).lower()] < 2:
+            bad.append(f"{m.group(1)} has no streak: under two kills in the last 30 s.")
+    places_ = places(state)
+    for m in re.finditer(
+        rf"\b({names_rx})(?:'s| is)\s+(?:in\s+)?(?:the\s+)?"
+        r"(?i:(first|second|third|fourth|fifth|sixth|seventh|eighth|1st|2nd|3rd|4th|5th|6th|7th|8th))\b",
+        reply,
+    ):
+        who = next(n for n in bd if n.lower() == m.group(1).lower())
+        place = _ORDINALS[m.group(2).lower()]
+        if place != places_[who]:
+            bad.append(f"{who} is in place {places_[who]}, not {place}.")
+    if re.search(
+        r"\b(?:leading again|in the lead again|back in (?:the lead|front|first)|back on top|first again|retook|took back the lead)\b",
+        low,
+    ):
+        if not any(
+            e.get("type") == "lead" and e.get("leader") == "you"
+            for e in state.get("recent_events", ())
+        ):
+            bad.append(
+                "You did not take the lead back: no lead change in the recent events."
+            )
+    if (
+        (you.get("armor") or 0) == 0
+        and re.search(
+            r"\b(?:my|this|the|with)\s+armou?r\b(?!\s+(?:is gone|gone|left))|\barmou?r(?:'s| is| holds| keeps| soaks| took)\b",
+            low,
+        )
+        and not re.search(
+            r"\b(?:no|without|zero|lost|need|needs|grab|get|picked up)\s+(?:\w+\s+)?armou?r\b"
+            r"|\barmou?r(?:'s| is| at)?\s+(?:\w+\s+)?(?:zero|0|none|nothing|empty|gone)\b",
+            low,
+        )
+    ):
+        bad.append("You have no armor.")
     # Zero claims.
     zero = {
         "deaths": r"\b(?:no deaths|haven'?t died|have not died|never died|not died once|nobody'?s killed me|undefeated)\b",
@@ -1655,9 +2061,17 @@ def claims(
     owned = set(you.get("weapons", {})) | {"fist"}
     known = owned | {held.get("weapon"), you.get("best_loaded_weapon"), "pistol"}
     for e in events:
-        known |= {e.get("your_weapon"), e.get("item")}
+        known |= {
+            e.get("your_weapon"),
+            e.get("item"),
+            e.get("weapon"),
+            e.get("killer_weapon"),
+        }
     if state.get("last_death"):
-        known.add(state["last_death"]["your_weapon"])
+        known |= {
+            state["last_death"]["your_weapon"],
+            state["last_death"].get("killer_weapon"),
+        }
     if state.get("last_pickup"):
         known.add(state["last_pickup"]["item"])
     known |= set(weapons_said(said))  # the partner named it
@@ -1709,7 +2123,42 @@ def right_reply(probe: dict, state: dict, rng: random.Random) -> str:
             return "No idea. He didn't leave a card."
         return f"{g}. I'm keeping a list."
     if t == "victim":
+        if g != "unknown":
+            return f"{g}. He won't be back for a while."
         return "Didn't catch a name. He didn't stay long."
+    if t == "killer_weapon":
+        if g == "unknown":
+            return "No idea what he used. The game doesn't say."
+        if state["last_death"]["killer"] == "yourself":
+            return f"My own {g}. Don't ask."
+        return f"The {g}. Rude."
+    if t == "who_killed_bot":
+        return f"{g}. Good riddance."
+    if t in ("top_n", "nth"):
+        names = ["me" if n == "you" else n for n in g]
+        return (_them(names) + ".")[0].upper() + (_them(names) + ".")[1:]
+    if t == "place_of":
+        return f"{_ORDINAL_WORD[g].capitalize()}. For now."
+    if t in ("frags_of", "deaths_of"):
+        return f"{num(g)}. Not that I'm counting."
+    if t == "gap":
+        if g == 0:
+            return "Dead even. Tied."
+        return (
+            f"Up by {say_number(g)}."
+            if g > 0
+            else f"{say_number(-g).capitalize()} behind. For now."
+        )
+    if t == "who_in_view":
+        return "Can't tell. They all look the same from here."
+    if t == "map":
+        return "MAP02. The usual office."
+    if t == "style":
+        return {
+            "fighter": "Fighting. It's what I do.",
+            "cautious": "Carefully. Safe and slow.",
+            "collector": "Collecting. Somebody has to.",
+        }.get(g, f"{g}.")
     if t in ("deaths", "frags", "health", "armor", "streak", "ammo"):
         return f"{num(g)}. Don't make it a thing."
     if t == "score":
@@ -1767,12 +2216,41 @@ def right_reply(probe: dict, state: dict, rng: random.Random) -> str:
 def wrong_reply(probe: dict, state: dict, rng: random.Random) -> str | None:
     """A reply that answers ``probe`` wrong (None where none is natural)."""
     t, g, you = probe["type"], gold(probe, state), state["you"]
-    bots = [n for n in state["scoreboard"] if n != "you"]
+    bots = [n for n in board(state) if n != "you"]
     if t in ("killer_now", "killer_before", "nemesis"):
         others = [n for n in bots if n != g]
         return f"{rng.choice(others)}. Again." if others else None
     if t == "victim":
-        return f"{rng.choice(bots)}. He had it coming."
+        others = [n for n in bots if n != g]
+        return f"{rng.choice(others)}. He had it coming." if others else None
+    if t == "killer_weapon":
+        mine = state["last_death"].get("your_weapon")
+        others = [w for w in WEAPONS[2:] if w not in (g, mine)]
+        return f"The {rng.choice(others)}." if others else None
+    if t == "who_killed_bot":
+        others = [n for n in bots if n not in (g, probe["name"])]
+        return f"{rng.choice(others)}. Good riddance." if others else None
+    if t in ("top_n", "nth"):
+        others = [n for n in bots if n not in g]
+        return f"{others[0]}." if others else None
+    if t == "place_of":
+        return f"{_ORDINAL_WORD[g % 8 + 1].capitalize()}. For now."
+    if t in ("frags_of", "deaths_of"):
+        return f"{say_number(g + 3).capitalize()}."
+    if t == "gap":
+        return (
+            f"Up by {say_number(abs(g) + 3)}."
+            if g >= 0
+            else f"{say_number(-g + 3).capitalize()} behind."
+        )
+    if t == "who_in_view":
+        return f"That's {rng.choice(bots)}."
+    if t == "map":
+        return None
+    if t == "style":
+        return {"fighter": "Carefully. Safe and slow."}.get(
+            g, "Fighting. It's what I do."
+        )
     if t in ("deaths", "frags", "health", "armor", "streak", "ammo"):
         return f"{say_number(g + rng.choice((1, 2, 3, 7))).capitalize()}. Don't make it a thing."
     if t == "score":
@@ -1962,6 +2440,21 @@ def check(moments: Path | None = None) -> None:
         ("MacGyver, your BFG will be the last thing you see.", False),
         ("I'm first, ten frags. Keep up.", False),
         ("MacGyver got me while I held the BFG.", True),
+        ("Anderson's on a streak, I'm just keeping the left bot honest.", False),
+        ("Even with this armor, I'm still the one they watch.", False),
+        ("Leone's third. Rambo's on top.", True),
+        ("Leone's second.", False),
+        ("Leading again, bots still think invisibility works.", False),
+        ("My armor is zero. No extra layers.", True),
+        ("Sixty-four. Still better than a rookie's first kill.", True),
+        ("He got a hit once. I'm still second.", True),
+        ("Ahead bot still hasn't learned to dodge rockets.", True),
+        ("Rambo's still watching, but my pistol's quiet enough.", False),
+        ("That's Leone, I'd know that walk anywhere.", False),
+        ("Leone's on my left.", False),
+        ("Someone on my left. Could be anyone.", True),
+        ("Rambo again. I keep a list.", True),
+        ("Still ahead, partner.", False),
         ("MacGyver got me. I had the BFG and everything.", True),
         ("Rambo got me again.", True),
         ("Leone got me.", False),
@@ -1991,13 +2484,26 @@ def check(moments: Path | None = None) -> None:
         ("Nobody knows his name.", True),
         ("Quiet in here.", True),
     ]
-    for reply, want in claim_cases:
-        got, why = claims(reply, st)
+    told = _state()  # the game named his victim and his killer's weapon
+    told["last_frag"] = {"victim": "Leone", "your_weapon": "shotgun", "seconds_ago": 8}
+    told["last_death"] = {**told["last_death"], "killer_weapon": "plasma rifle"}
+    claim_cases += [
+        ("I got Leone. Nice and clean.", True, told),
+        ("I got Rambo. Nice and clean.", False, told),
+        ("MacGyver got me with the plasma rifle.", True, told),
+        ("MacGyver got me with the chaingun.", False, told),
+    ]
+    for reply, want, *on in claim_cases:
+        got, why = claims(reply, on[0] if on else st)
         if got != want:
             bad.append(f"claims {reply!r}: {got} ({why}), want {want}")
     for t in ("killer_now", "challenge", "ammo_of"):
         p = make(t, st, random.Random(1))
         assert p["text"] == heard(p["text"]) and "{" not in p["text"], p
+    for seed in range(200):  # a challenge always says the value it asserts
+        p = make("challenge", st, random.Random(seed))
+        said = str(p["claimed"]).lower() if p["claimed"] != "you" else "you are"
+        assert said in p["text"], p
     assert said_numbers("ninety-five and a hundred and twelve") == [95, 112]
     assert claims("Fifteen hundred rounds, 2000 kills.", st)[0] is False  # no crash
     assert said_numbers("One ninety. Two fifty, then twelve to nine.") == [

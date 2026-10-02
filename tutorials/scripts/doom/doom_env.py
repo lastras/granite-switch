@@ -39,8 +39,10 @@ Distances are metres at 32 map units per metre.
 
 from __future__ import annotations
 
+import contextlib
 import math
 import os
+import re
 import tempfile
 from collections import deque
 from dataclasses import dataclass, field
@@ -352,6 +354,59 @@ _PLAYER_HEIGHT = 56.0
 WALL_CAP_M = 9
 
 
+# ZDoom's obituary for every kill ("Rambo was ventilated by Machete's minigun."),
+# read from the console log: the words for each weapon in cig.wad -> its name here.
+_OBIT_WEAPONS = (
+    ("double-barreled shotgun", "shotgun"),
+    ("super shotgun", "shotgun"),
+    ("polaric energy weapon", "plasma rifle"),
+    ("plasma", "plasma rifle"),
+    ("rocket", "rocket launcher"),
+    ("minigun", "chaingun"),
+    ("chaingun", "chaingun"),
+    ("shotgun", "shotgun"),
+    ("boomstick", "shotgun"),
+    ("handgun", "pistol"),
+    ("pistol", "pistol"),
+    ("pea shooter", "pistol"),
+    ("bfg", "BFG"),
+    ("chainsaw", "chainsaw"),
+    ("fist", "fist"),
+)
+_OBIT_SELF = re.compile(
+    r"\b(?:killed (?:him|her|it)self|blew (?:him|her|it)self up|melted|died|fell|"
+    r"was squished|mutated|suicide|couldn.t swim|stepped|can.t swim)\b"
+)
+_NOT_OBIT = re.compile(
+    r"\b(?:joined|left the game|entered|is now known as|connected)\b"
+)
+
+
+def parse_obituary(line: str, names) -> dict | None:
+    """``{"victim", "killer", "weapon"}`` from one console line (None if it is
+    not an obituary). ``killer`` is None for a death of one's own doing or of
+    the world's; ``weapon`` is None when the obituary does not say it."""
+    line = line.strip().rstrip(".")
+    first, _, rest = line.partition(" ")
+    if first not in names or not rest or _NOT_OBIT.search(rest):
+        return None
+    killer = next(
+        (n for n in names if n != first and re.search(rf"\b{re.escape(n)}\b", rest)),
+        None,
+    )
+    if killer is None and not _OBIT_SELF.search(rest):
+        return None
+    weapon = None
+    if "teleport" in rest:
+        weapon = "telefrag"
+    elif "beaten up by" in rest or "punched" in rest:
+        weapon = "fist"
+    else:
+        low = rest.lower()
+        weapon = next((w for k, w in _OBIT_WEAPONS if k in low), None)
+    return {"victim": first, "killer": killer, "weapon": weapon}
+
+
 def isolate_workdir() -> None:
     """Give this process its own working directory.
 
@@ -424,6 +479,7 @@ class Observation:
     counters: dict[str, float]  # raw game counters, for reward shaping
     priv: Privileged
     done: bool = False
+    obits: tuple[dict, ...] = ()  # this tic's kills, anyone's (parse_obituary)
 
 
 @dataclass
@@ -582,6 +638,11 @@ class DoomEnv:
             g.set_audio_buffer_size(1)  # one tic: each step's own sound
         self._audio: np.ndarray | None = None
         g.set_episode_timeout(timeout_tics)
+        # The console, where the obituaries are, to a file of this env's own.
+        fd, self._log_path = tempfile.mkstemp(prefix="vizdoom_console_", suffix=".log")
+        os.close(fd)
+        g.add_game_args(f"+logfile {self._log_path}")
+        self._log_pos = 0
         if seed is not None:
             g.set_seed(seed)
         g.init()
@@ -631,6 +692,7 @@ class DoomEnv:
             if not g.is_player_dead():
                 break
             g.make_action(_DEAD_BUTTONS, 1)
+        self._obituaries()  # the joins and the warm-up: not part of the match
         gv = g.get_state().game_variables
         self._base = {k: gv[_V[v]] for k, v in _COUNTERS.items()}
         self._frag0 = [gv[i] for i in _PF]
@@ -690,6 +752,23 @@ class DoomEnv:
 
     def close(self) -> None:
         self.game.close()
+        with contextlib.suppress(OSError):
+            os.remove(self._log_path)
+
+    def _obituaries(self) -> tuple[dict, ...]:
+        """The obituaries written since the last call (the console log is
+        flushed line by line: a kill's is there on its own tic)."""
+        try:
+            with open(self._log_path, "rb") as f:
+                f.seek(self._log_pos)
+                new = f.read()
+        except OSError:
+            return ()
+        end = new.rfind(b"\n") + 1  # a line still being written waits
+        self._log_pos += end
+        names = {PLAYER_NAME, *getattr(self, "_names", ())} - {""}
+        lines = new[:end].decode("utf-8", errors="replace").splitlines()
+        return tuple(o for o in (parse_obituary(x, names) for x in lines) if o)
 
     # ── Internals ────────────────────────────────────────────────────────────
     def _arms(self, gv) -> dict[int, int]:
@@ -972,6 +1051,7 @@ class DoomEnv:
             events=tuple(events),
             counters=counters,
             priv=priv,
+            obits=self._obituaries(),
         )
 
 
