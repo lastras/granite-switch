@@ -857,6 +857,7 @@ CHALLENGES: dict[str, tuple[str, ...]] = {
 # A reply may hold numbers (others may not): the answer is a number, or a
 # number goes naturally with it ("Rambo, thirteen to my twelve").
 NUMERIC = {
+    "map",  # MAP02
     "frags_of",
     "deaths_of",
     "gap",
@@ -1004,7 +1005,8 @@ def allowed(state: dict) -> list[str]:
         "side": bool(state.get("bots_in_view")),
         "killer_weapon": bool(d) and d["seconds_ago"] <= KILLER_BEFORE_S,
         "who_killed_bot": bool(_bot_kills(state)),
-        "top_n": len(board(state)) >= 4,
+        "top_n": len(board(state)) >= 4
+        and sum(p <= 3 for p in places(state).values()) <= 4,
         "nth": len(board(state)) >= 5 and bool(_nth_options(state)),
         "place_of": len(board(state)) >= 3,
         "frags_of": len(board(state)) >= 2,
@@ -1041,9 +1043,9 @@ _NTH = {3: "third", 4: "fourth", 5: "fifth"}
 
 
 def _nth_options(state: dict) -> list[int]:
-    """The places 3-5 someone holds (a tie can skip a place)."""
-    held = set(places(state).values())
-    return [n for n in _NTH if n in held]
+    """The places 3-5 one to three players hold (a tie can skip a place)."""
+    held = Counter(places(state).values())
+    return [n for n in _NTH if 1 <= held[n] <= 3]
 
 
 _SAY_GUN = {"BFG": "bfg"}  # how the partner says it (ASR: lower case)
@@ -1422,7 +1424,15 @@ def verify(probe: dict, reply: str, state: dict) -> tuple[str, str]:
         return _killer(reply, g, state)
     if t in ("top_n", "nth"):
         want = set(g)
-        said_me = bool(_SELF_ANSWER.search(low) or re.search(r"\b(?:me|myself)\b", low))
+        # He is in the list as "I"/"me" (an item of it), or says his top place.
+        said_me = bool(
+            _SELF_ANSWER.search(low)
+            or re.search(r"(?:^|[,;:]\s*|\band\s+)(?:i|me|myself)\b(?=\s*[,;.]|\s+and\b|\s*$)", low)
+            or re.search(
+                r"\bi(?:'m| am)\s+(?:\w+\s+)?(?:leading|first|in first|on top|ahead|second|third|in second|in third)\b",
+                low,
+            )
+        )
         named = set(_named(reply, [n for n in board(state) if n != "you"]))
         got = named | ({"you"} if said_me else set())
         if t == "top_n":

@@ -6,13 +6,14 @@ composed checkpoint, the narrator's live prompt and sampling), with a partner in
 each that talks to him as people do, by category:
 
 * ``fact``: the battery's questions about the game state (:mod:`probes`), some
-  on triggers: "who killed you" right after a death, "what did you just pick
-  up" after a pickup, "who did you just kill" after a frag;
+  on triggers: "who killed you" or "what did he get you with" right after a
+  death, "what did you just pick up" after a pickup, "who did you just kill"
+  after a frag;
 * ``claim``: a value asserted, true or false ("you have 30 kills right");
 * ``weak``: questions the state answers only with work (the top three, who is
-  fourth, a bot's place or kills, the gap, two questions in one);
-* ``unknowable``: what the game never tells him (who is in view, a bot's
-  weapon, the map, why he is staring at a wall);
+  fourth, a bot's place, kills or deaths, the gap, two questions in one);
+* ``unknowable``: what the game never tells him (who is in view, the gun a bot
+  is holding, why he is staring at a wall);
 * ``request``: asking him to play differently (his words do not steer the game);
 * ``persona``: small talk, trying to break character;
 * ``recall``: back-references ("who was that again", two lines after a death).
@@ -62,23 +63,16 @@ WEIGHTS = {
     "persona": 12,
     "recall": 6,
 }
+# The battery's types asked as ``weak`` and ``unknowable`` questions (the rest
+# are ``fact``), and the questions here with no battery type.
+WEAK_TYPES = ("top_n", "nth", "place_of", "frags_of", "deaths_of", "gap")
+UNKNOWABLE_TYPES = ("who_in_view",)
 UNKNOWABLE = (
-    ("who_in_view", "who is that guy"),
-    ("who_in_view", "who is in front of you"),
-    ("who_in_view", "is that {name}"),
     ("bot_weapon", "what weapon is {name} using"),
-    ("map", "what map is this"),
+    ("bot_weapon", "what gun does {name} have"),
     ("why_wall", "why are you staring at the wall"),
 )
-WEAK = (
-    ("top3", "who are the top three"),
-    ("nth4", "who is in fourth"),
-    ("place_of", "what place is {name}"),
-    ("frags_of", "how many kills does {name} have"),
-    ("gap", "how far ahead are you"),
-    ("gap", "what is the gap between you and the next guy"),
-    ("double", "what is your health and how much ammo do you have"),
-)
+DOUBLE = "what is your health and how much ammo do you have"
 REQUESTS = (
     "play it safe for a while",
     "go get some armor",
@@ -111,7 +105,11 @@ class TestPartner:
         self.recall_after: int | None = None  # ask "who was that" after this many lines
 
     def bots(self, state: dict) -> list[str]:
-        return [n for n in state["scoreboard"] if n != "you"]
+        return [n for n in probes.board(state) if n != "you"]
+
+    def probe(self, cat: str, ptype: str, state: dict) -> dict:
+        p = probes.make(ptype, state, self.rng, "test")
+        return {"cat": cat, "type": ptype, "text": p["text"], "probe": p}
 
     def item(self, cat: str, kind: str, text: str, state: dict, **kw) -> dict:
         name = self.rng.choice(self.bots(state)) if "{name}" in text else None
@@ -127,19 +125,15 @@ class TestPartner:
             k: e for k, e in self.fresh.items() if now - e["tick"] <= TRIGGER_S * hz
         }
         lines = len(self.g.lines)
+        ok = probes.allowed(state)
         if "died" in fresh and self.rng.random() < 0.8:
-            e = self.fresh.pop("died")
+            self.fresh.pop("died")
             self.recall_after = lines + 2
             kind = self.rng.choice(
-                ("killer_now", "killer_now", "challenge", "bot_weapon")
+                ("killer_now", "killer_now", "challenge", "killer_weapon")
             )
-            if kind == "bot_weapon" and e.get("by") not in (None, "yourself"):
-                return self.item(
-                    "unknowable",
-                    "bot_weapon",
-                    f"what did {e['by'].lower()} get you with",
-                    state,
-                )
+            if kind == "killer_weapon" and kind in ok:
+                return self.probe("fact", kind, state)
             if kind == "challenge" and "killer" in probes.challenge_fields(state):
                 p = probes.make("challenge", state, self.rng, "test")
                 if p["field"] == "killer":
@@ -149,45 +143,36 @@ class TestPartner:
                         "text": p["text"],
                         "probe": p,
                     }
-            p = (
-                probes.make("killer_now", state, self.rng, "test")
-                if "killer_now" in probes.allowed(state)
-                else None
-            )
-            if p:
-                return {
-                    "cat": "fact",
-                    "type": "killer_now",
-                    "text": p["text"],
-                    "probe": p,
-                }
+            if "killer_now" in ok:
+                return self.probe("fact", "killer_now", state)
         if self.recall_after is not None and lines >= self.recall_after:
             self.recall_after = None
             return self.item("recall", "who_was_that", "who was that again", state)
         for trig, ptype in (("pickup", "pickup"), ("frag", "victim")):
-            if (
-                trig in fresh
-                and ptype in probes.allowed(state)
-                and self.rng.random() < 0.6
-            ):
+            if trig in fresh and ptype in ok and self.rng.random() < 0.6:
                 self.fresh.pop(trig)
-                p = probes.make(ptype, state, self.rng, "test")
-                return {"cat": "fact", "type": ptype, "text": p["text"], "probe": p}
+                return self.probe("fact", ptype, state)
         cat = self.rng.choices(list(WEIGHTS), list(WEIGHTS.values()))[0]
         if cat == "fact":
-            types = [x for x in probes.allowed(state) if x != "challenge"]
+            skip = ("challenge", *WEAK_TYPES, *UNKNOWABLE_TYPES)
+            types = [x for x in ok if x not in skip]
             ptype = min(types, key=lambda x: (self.asked[x], self.rng.random()))
             self.asked[ptype] += 1
-            p = probes.make(ptype, state, self.rng, "test")
-            return {"cat": "fact", "type": ptype, "text": p["text"], "probe": p}
+            return self.probe("fact", ptype, state)
         if cat == "claim":
-            p = probes.make("challenge", state, self.rng, "test")
-            return {"cat": "claim", "type": "challenge", "text": p["text"], "probe": p}
+            return self.probe("claim", "challenge", state)
         if cat == "weak":
-            kind, text = self.rng.choice(WEAK)
-            return self.item("weak", kind, text, state)
+            kind = self.rng.choice([t for t in WEAK_TYPES if t in ok] + ["double"])
+            if kind == "double":
+                return self.item("weak", "double", DOUBLE, state)
+            return self.probe("weak", kind, state)
         if cat == "unknowable":
-            kind, text = self.rng.choice(UNKNOWABLE)
+            kinds = [(t, None) for t in UNKNOWABLE_TYPES if t in ok] * 3 + list(
+                UNKNOWABLE
+            )
+            kind, text = self.rng.choice(kinds)
+            if text is None:
+                return self.probe("unknowable", kind, state)
             return self.item("unknowable", kind, text, state)
         if cat == "request":
             return self.item("request", "request", self.rng.choice(REQUESTS), state)
@@ -315,106 +300,38 @@ JUDGE = {
 }
 
 
-def places(board: dict) -> dict[str, int]:
-    return {n: 1 + sum(f > board[n] for f in board.values()) for n in board}
-
-
 def check(item: dict, line: str, state: dict, prev_rows: list) -> tuple[str, str]:
     """``(correct | wrong | abstained | judge, why)`` for one question's reply."""
     kind = item["type"]
     low = line.lower()
     if item.get("probe"):
         return probes.verify(item["probe"], line, state)
-    board = state["scoreboard"]
-    named = probes.bot_names(line) | {
-        n for n in board if n != "you" and re.search(rf"\b{n}\b", line, re.I)
-    }
-    abstain = bool(probes._ABSTAIN.search(low)) or bool(
-        re.search(
-            r"\b(?:can.?t tell|no way to tell|could be anyone|all look (?:the )?same|look alike|faceless|whoever)\b",
-            low,
-        )
-    )
-    if kind == "who_in_view":
-        if (
-            not probes.claims(line, state)[0]
-            and "in view is never known" in probes.claims(line, state)[1]
-        ):
-            return "wrong", "named the bot in view"
-        if item.get("name") and re.search(
-            rf"\b(?:yes|yeah|yep|that'?s (?:him|{item['name']}))\b", low
-        ):
-            return "wrong", "confirmed who is in view"
-        return (
-            ("correct", "") if abstain else ("abstained", "did not say he can't tell")
-        )
     if kind == "bot_weapon":
+        # The gun a bot holds is never in the state; only a kill shows one he used.
         ok, why = probes.claims(line, state)
-        if not ok and "weapon is never known" in why:
+        if not ok and "never said" in why:
             return "wrong", why
-        return (
-            ("correct", "") if abstain else ("abstained", "did not say he doesn't know")
-        )
-    if kind == "map":
-        if re.search(r"\bmap ?\d+|\be\d ?m\d\b|\b(?:called|named)\b", low):
-            return "wrong", "named a map"
-        return ("correct", "") if abstain else ("judge", "")
-    if kind == "top3":
-        top = [n for n, p in places(board).items() if p <= 3]
-        said_me = bool(re.search(r"\b(?:me|i|i'?m|myself)\b", low))
-        got = {
-            n
-            for n in top
-            if (n == "you" and said_me)
-            or (n != "you" and re.search(rf"\b{n}\b", line, re.I))
+        who = item["name"].lower()
+        used = {
+            e.get("killer_weapon") or e.get("weapon")
+            for e in state.get("recent_events", ())
+            if e["type"] in ("death", "kill") and (e.get("killer") or "").lower() == who
         }
-        extra = named - set(top)
-        if extra:
-            return "wrong", f"named {sorted(extra)} outside the top three {top}"
-        return (
-            ("correct", "")
-            if len(got) >= min(3, len(top))
-            else ("wrong", f"top three is {top}; named {sorted(got)}")
-        )
-    if kind == "nth4":
-        want = [n for n, p in places(board).items() if p == 4]
-        if not want:
-            return "judge", ""
-        if named & set(want):
-            return "correct", ""
-        return (
-            ("wrong", f"fourth: {want}") if named else ("abstained", f"fourth: {want}")
-        )
-    if kind == "place_of":
-        p = places(board)[item["name"]]
-        r = probes.rank_said(line, len(board))
-        return (
-            ("correct", "")
-            if r == p
-            else (("wrong" if r else "abstained"), f"{item['name']} is in place {p}")
-        )
-    if kind == "frags_of":
-        n = probes.first_number(line)
-        f = board[item["name"]]
-        return (
-            ("correct", "")
-            if n == f
-            else (
-                ("wrong" if n is not None else "abstained"),
-                f"{item['name']} has {f}",
+        d = state.get("last_death") or {}
+        if (d.get("killer") or "").lower() == who:
+            used.add(d.get("killer_weapon"))
+        guns = set(probes.weapons_said(line)) - set(state["you"].get("weapons") or ())
+        if guns - used:
+            return (
+                "wrong",
+                f"named {sorted(guns - used)}; {item['name']} was seen using {sorted(used - {None})}",
             )
+        abstain = bool(probes._ABSTAIN.search(low)) or bool(
+            re.search(r"\b(?:can.?t tell|no way to tell|no idea)\b", low)
         )
-    if kind == "gap":
-        me = board["you"]
-        others = [f for n, f in board.items() if n != "you"]
-        gap = abs(me - max(others)) if others else 0
-        n = probes.first_number(line)
-        nums = [x for x, _, _ in probes.number_spans(line)]
-        return (
-            ("correct", "")
-            if gap in nums
-            else (("wrong" if nums else "abstained"), f"the gap is {gap}")
-        )
+        if abstain or guns:
+            return "correct", ""
+        return "abstained", "did not say he doesn't know"
     if kind == "double":
         nums = [x for x, _, _ in probes.number_spans(line)]
         hp, ammo = (

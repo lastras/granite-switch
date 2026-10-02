@@ -67,7 +67,7 @@ import re
 import threading
 import time
 import zlib
-from collections import Counter
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -194,10 +194,83 @@ PROBE_FAMILY = {
     **dict.fromkeys(("weapon", "weapons", "best_gun", "pickup"), "weapon"),
     "victim": "victim",
     "time_left": "number",
+    **dict.fromkeys(
+        ("top_n", "nth", "place_of", "frags_of", "deaths_of", "gap"), "standings"
+    ),
+    "killer_weapon": "killer_weapon",
+    "who_killed_bot": "who_killed_bot",
+    "who_in_view": "who_in_view",
+    "map": "map",
+    "style": "style",
     "side": "side",
     "challenge": "challenge",
 }
 PROBE_EXAMPLES = {
+    "victim_known": (
+        (
+            "he just fragged Rambo",
+            "who did you just kill",
+            "Rambo. He'll be back, they always are.",
+        ),
+        (
+            "he fragged Leone with the shotgun",
+            "who was that you got",
+            "Leone. The shotgun made the introductions.",
+        ),
+    ),
+    "killer_weapon": (
+        (
+            "Rambo killed him with a rocket",
+            "what did he get you with",
+            "A rocket. Rambo doesn't do subtle.",
+        ),
+        (
+            "Machete killed him; the game does not say with what",
+            "what hit you",
+            "No idea. Machete didn't leave a receipt.",
+        ),
+    ),
+    "who_killed_bot": (
+        (
+            "Machete just killed Leone",
+            "who killed leone",
+            "Machete. Professional courtesy.",
+        ),
+    ),
+    "standings": (
+        ("he leads by six", "how far ahead are you", "Six. Leone's doing the math."),
+        (
+            "the top three are him, Leone and Rambo",
+            "who are the top three",
+            "Me, Leone, Rambo. In that order, for now.",
+        ),
+        ("Leone is in fourth place", "who is in fourth", "Leone. Fourth suits him."),
+        (
+            "Rambo has nine frags",
+            "how many kills does rambo have",
+            "Nine. He's been busy.",
+        ),
+    ),
+    "who_in_view": (
+        (
+            "a bot on his left, whose name the game never gives",
+            "who is that",
+            "Can't tell. They all wear the same face.",
+        ),
+        (
+            "a bot ahead; the partner guesses Rambo",
+            "is that rambo",
+            "Could be anyone. Rambo doesn't wear a name tag.",
+        ),
+    ),
+    "map": (("the map is cig.wad MAP02", "what map is this", "MAP02. The office."),),
+    "style": (
+        (
+            "he is playing as a fighter",
+            "how are you playing",
+            "Aggressively. It saves time.",
+        ),
+    ),
     "killer": (
         (
             "Rambo just killed him, the second time in a row",
@@ -780,6 +853,37 @@ def one_word_off(a: str, b: str) -> bool:
     return len(x) == len(y) and sum(p != q for p, q in zip(x, y)) == 1
 
 
+# Words too common to make a motif; "still", his habit, is a soft penalty instead
+# (HABITS).
+MOTIF_STOP = set(
+    "that this with have from they them what when your just like there their about "
+    "been were will would could should into than then over some only also here where "
+    "which while more most much very really right back down even ever it's i'm that's "
+    "don't can't won't you're he's let's still".split()
+)
+# His habits: a line with them loses to one without (rft.py's DPO pairs).
+HABITS = (
+    r"\bstill\b",
+    r"\bbots? still think",
+    r"\binvisib",
+    r"\bbreathing easy\b",
+    r"\bkeep(?:s|ing)? (?:them|the bots) guessing\b",
+)
+
+
+def motif_stems(line: str) -> set[str]:
+    """The stems (6 letters) of a line's content words, for the motif check."""
+    return {
+        w[:6]
+        for w in re.findall(r"[a-z']+", line.lower())
+        if len(w) >= 4 and w not in MOTIF_STOP
+    }
+
+
+def habits(line: str) -> int:
+    return sum(bool(re.search(rx, line, re.I)) for rx in HABITS)
+
+
 def claims_fn(state: dict, past: list[list[dict]], said: str | None):
     """Every fact a line states must agree with the game state
     (:func:`probes.claims`; ``past``: the past exchanges' events, ``said``: the
@@ -859,13 +963,47 @@ def code_fns(
             p for p in re.split(r"[,;\u2014\u2013]|\s-\s|[.?!]\s+", c) if p.strip()
         ]
         sizes = sorted(len(p.split()) for p in parts)
-        if probe is not None and probe["type"] == "weapons":
-            return True, ""  # the answer is a list of guns
+        if probe is not None and probe["type"] in ("weapons", "top_n", "nth"):
+            # The answer is a list of names (guns, players), not of their rows.
+            if probe["type"] != "weapons" and (
+                len(probes.number_spans(c, ones=False)) >= 2 or probes.weapons_said(c)
+            ):
+                return False, (
+                    "Name the players only, as he would say them: no frags or weapon "
+                    "for each, that reads the scoreboard aloud."
+                )
+            return True, ""
         listy = len(parts) >= 3 and sizes[len(sizes) // 2] <= 3
         many = probes.facts_said(c) >= (4 if probe is not None else 3)
         return not (listy or many), (
             "That reads as a status report. Say one thought, in a natural sentence, "
             "with at most two facts from the game state."
+        )
+
+    def no_unknown(x):
+        low = clean(x).lower()
+        asked_weapon = probe is not None and probe["type"] == "killer_weapon"
+        bad = re.search(r"\bunknown\b", low) or (
+            not asked_weapon
+            and re.search(
+                r"\b(?:don'?t|do not) know (?:his|her|their|the|its|what) weapons?\b"
+                r"|\bweapons? (?:not known|never (?:known|reported|said))\b",
+                low,
+            )
+        )
+        return not bad, (
+            'Say it as he would: never "unknown" (the game state\'s word), and no '
+            "disclaimer about what the game does not say unless asked."
+        )
+
+    def no_motif(x):
+        names = {n.lower() for n in probes.BOT_NAMES}
+        stems = {s for s in motif_stems(clean(x)) if s not in names}
+        recent = Counter(s for p in prev[-8:] for s in motif_stems(p))
+        rep_ = sorted(s for s in stems if recent[s] >= 3)
+        return not rep_, (
+            f"It repeats what he keeps saying ({', '.join(rep_)}, in 3 or more of his "
+            "last 8 lines). Say something new."
         )
 
     def first_person(x):
@@ -946,6 +1084,8 @@ def code_fns(
         ("Original, not a film quote", original),
         ("Not a repeat of recent lines", fresh),
         ("Not a status list", not_list),
+        ("No 'unknown', no disclaimers", no_unknown),
+        ("No recurring motif", no_motif),
         ("Speaks as himself (I, me)", first_person),
         ("Not a copy of the example", not_copy),
     ]
@@ -1248,6 +1388,160 @@ def probe_weights(moments: list[dict]) -> dict[str, float]:
     return {t: min(6.0, len(moments) / max(1, n[t])) for t in probes.TYPES}
 
 
+def probe_how(probe: dict, state: dict, rng) -> tuple[str, list[str], str]:
+    """A probe's instructions to the writer (the verified answer, first, then an
+    angle, with a model exchange), the angle, and the example line shown."""
+    fam = PROBE_FAMILY[probe["type"]]
+    if fam == "victim" and probes.gold(probe, state) != "unknown":
+        fam = "victim_known"
+    sit, ex_said, ex_line = rng.choice(PROBE_EXAMPLES[fam])
+    moves = [rng.choice(PROBE_ANGLES)]
+    words_ = " in words" if numeric(probe) else ""
+    how = (
+        f"The game state answers it: {probes.answer_text(probe, state)} Say "
+        f"that first, exactly (the name, the number{words_}, the weapon, or "
+        "that you don't know), in his own words (I, me: the game state's "
+        '"you" is him), then his angle on it in a few words: '
+        f"{moves[0]}. For example, when {sit} and the partner said "
+        f'"{ex_said}", he said: "{ex_line}" Write your own line; do not reuse '
+        "that one."
+    )
+    return how, moves, ex_line
+
+
+PROBE_JUDGED = ("true", "consistent", "coherent", "voice")
+# The question types the branch write asks (what the obituaries and the richer
+# state made answerable, and who is in view, which they did not).
+BRANCH_TYPES = (
+    "victim",
+    "killer_weapon",
+    "who_killed_bot",
+    "top_n",
+    "nth",
+    "place_of",
+    "frags_of",
+    "deaths_of",
+    "gap",
+    "who_in_view",
+    "map",
+    "style",
+)
+
+
+def branch_match(rows: list[dict], args, write, weights: dict) -> int:
+    """A written match's rows, re-asked: at about ``args.rate`` of its moments
+    the partner asks one of ``args.types`` instead, on the same conversation
+    and state, and the writer answers (checked as any probe's answer is). The
+    rows are branches: the conversation after them is the written one."""
+    from mellea import start_session
+    from mellea.backends import ModelOption
+    from mellea.stdlib.context import ChatContext
+    from mellea.stdlib.requirements import req, simple_validate
+    from mellea.stdlib.sampling import MultiTurnStrategy
+
+    key = (rows[0]["data"], rows[0]["ep"])
+    rng = random.Random(zlib.crc32(repr((*key, args.seed, "branch")).encode()))
+    h = zlib.crc32(repr(key).encode())
+    wurls, jurls = args.base_url.split(","), args.judge_url.split(",")
+    writer = start_session(
+        "openai",
+        model_id=args.model,
+        ctx=ChatContext(),
+        model_options={
+            ModelOption.THINKING: args.effort,
+            ModelOption.TEMPERATURE: args.temperature,
+            ModelOption.MAX_NEW_TOKENS: args.max_tokens,
+        },
+        base_url=wurls[h % len(wurls)],
+        api_key="none",
+    )
+    judge = start_session(
+        "openai",
+        model_id=args.judge_model,
+        base_url=jurls[h % len(jurls)],
+        api_key="none",
+    )
+    types = args.types.split(",")
+    for r in rows:
+        state = r["tool"]
+        can = [t for t in probes.allowed(state) if t in types]
+        if not can or rng.random() >= args.rate:
+            continue
+        ptype = rng.choices(can, [weights[t] for t in can])[0]
+        probe = probes.make(ptype, state, rng)
+        player = probe["text"]
+        conv = Conversation.from_json(r["conv"]) if r["conv"] else Conversation()
+        past = [ex.events for ex in conv]
+        context = context_text(conv, state)
+        how, moves, ex_line = probe_how(probe, state, rng)
+        task = REPLY_TASK.format(
+            persona=PERSONA, context=context, player=player, how=how, lo=1
+        )
+        questions = {**{q: JUDGE_ALL[q] for q in PROBE_JUDGED}, **JUDGE_REPLY}
+        jctx = f'{context}\nHis partner just said: "{player}"'
+        prev = list(r.get("prev") or [])
+        reqs = [
+            req(
+                "Answers right, by the game state",
+                validation_fn=simple_validate(probe_fn(probe, state)),
+            ),
+            *(
+                req(d, validation_fn=simple_validate(f))
+                for d, f in code_fns("reply", prev, player, (ex_line,), probe)
+            ),
+            req(
+                "Every fact in the game state",
+                validation_fn=simple_validate(claims_fn(state, past, player)),
+            ),
+            req(
+                "Judged: " + ", ".join(questions),
+                validation_fn=simple_validate(judge_fn(judge, jctx, questions, args)),
+            ),
+        ]
+        t0 = time.time()
+        writer.reset()
+        res = writer.instruct(
+            task,
+            requirements=reqs,
+            strategy=MultiTurnStrategy(loop_budget=args.loop_budget),
+            return_sampling_results=True,
+        )
+        line = clean(res.result.value if hasattr(res.result, "value") else res.result)
+        fails = [
+            (q.description, str(v.reason or ""))
+            for q, v in (res.result_validations or [])
+            if not v.as_bool()
+        ]
+        write(
+            {
+                **{
+                    k: r[k]
+                    for k in ("data", "style", "ep", "t", "hist_n", "cue", "events")
+                },
+                "kind": "reply",
+                "utype": "probe",
+                "probe": probe,
+                "player": player,
+                "said": None,
+                "others": [],
+                "moves": moves,
+                "line": line,
+                "ok": bool(getattr(res, "success", not fails)),
+                "verdict": probes.verify(probe, line, state)[0],
+                "claims_ok": probes.claims(line, state, past, player)[0],
+                "attempts": len(getattr(res, "sample_generations", None) or []) or 1,
+                "fails": fails,
+                "conv": r["conv"],
+                "tool": state,
+                "moment": r.get("moment"),
+                "prev": prev[-5:],
+                "branch": True,  # not followed: the conversation goes on as written
+                "s": round(time.time() - t0, 1),
+            }
+        )
+    return len(rows)
+
+
 def run_match(match: dict, args, write, pool: list[dict], weights: dict) -> int:
     from mellea import start_session
     from mellea.backends import ModelOption
@@ -1341,19 +1635,7 @@ def run_match(match: dict, args, write, pool: list[dict], weights: dict) -> int:
         grounded = kind == "remark" or utype not in (*SOCIAL, "probe")
         jctx = f'{context}\nHis partner just said: "{player}"'
         if probe is not None:
-            fam = PROBE_FAMILY[probe["type"]]
-            sit, ex_said, ex_line = rng.choice(PROBE_EXAMPLES[fam])
-            moves = [rng.choice(PROBE_ANGLES)]
-            words_ = " in words" if numeric(probe) else ""
-            how = (
-                f"The game state answers it: {probes.answer_text(probe, state)} Say "
-                f"that first, exactly (the name, the number{words_}, the weapon, or "
-                "that you don't know), in his own words (I, me: the game state's "
-                '"you" is him), then his angle on it in a few words: '
-                f"{moves[0]}. For example, when {sit} and the partner said "
-                f'"{ex_said}", he said: "{ex_line}" Write your own line; do not reuse '
-                "that one."
-            )
+            how, moves, ex_line = probe_how(probe, state, rng)
             task = REPLY_TASK.format(
                 persona=PERSONA, context=context, player=player, how=how, lo=1
             )
@@ -1713,7 +1995,63 @@ def judge_file(args) -> None:
         print(f"-> {args.out}")
 
 
+def branch_file(args) -> None:
+    """``write --branch``: ``--moments`` is a file of written (re-grounded)
+    rows; each match's rows are re-asked (:func:`branch_match`)."""
+    rows = [json.loads(x) for x in open(args.moments)]
+    by: dict = defaultdict(list)
+    for r in rows:
+        by[(r["data"], r["ep"])].append(r)
+    keys = sorted(by)
+    if args.matches:
+        keys = keys[: args.matches]
+    types = args.types.split(",")
+    n = Counter(
+        t for k in keys for r in by[k] for t in probes.allowed(r["tool"]) if t in types
+    )
+    total = sum(len(by[k]) for k in keys)
+    weights = {t: min(6.0, total / max(1, n[t])) for t in types}
+    k, m = map(int, args.shard.split("/"))
+    keys = keys[k::m]
+    done = set()
+    if args.out.exists():  # a match's branches are written in one go: resume by match
+        done = {(json.loads(x)["data"], json.loads(x)["ep"]) for x in open(args.out)}
+    todo = [key for key in keys if key not in done]
+    lock, n_ok, n_all = threading.Lock(), [0], [0]
+    t0 = time.time()
+    f = open(args.out, "a")
+    buffers: dict = defaultdict(list)
+
+    def one(key):
+        def write(row):
+            buffers[key].append(row)
+
+        try:
+            branch_match(sorted(by[key], key=lambda r: r["t"]), args, write, weights)
+        except Exception as e:  # a server went away: this match is written again
+            print(f"match {key[1]} failed: {type(e).__name__}: {e}", flush=True)
+            return
+        with lock:
+            for row in buffers.pop(key):
+                f.write(json.dumps(row) + "\n")
+                n_all[0] += 1
+                n_ok[0] += row["ok"]
+            f.flush()
+            print(
+                f"{n_all[0]} branch lines, {100 * n_ok[0] / max(1, n_all[0]):.0f}% pass, "
+                f"{n_all[0] / (time.time() - t0):.2f}/s",
+                flush=True,
+            )
+
+    with ThreadPoolExecutor(args.concurrency) as ex:
+        list(ex.map(one, todo))
+    f.close()
+    print(f"done: {n_all[0]} branch lines, {n_ok[0]} pass every check -> {args.out}")
+
+
 def write_file(args) -> None:
+    if args.branch:
+        return branch_file(args)
     matches = [json.loads(x) for x in open(args.moments)]
     pool = [
         {**mm, "data": mt["data"], "ep": mt["ep"]}
@@ -1827,6 +2165,16 @@ def main() -> None:
     )
     w.add_argument("--matches", type=int, default=0, help="0: all")
     w.add_argument("--per-match", type=int, default=0, help="0: all moments")
+    w.add_argument(
+        "--branch",
+        action="store_true",
+        help="--moments is a file of written rows: re-ask some of their moments "
+        "(--types, at --rate) as branches the conversation does not follow",
+    )
+    w.add_argument(
+        "--types", default=",".join(BRANCH_TYPES), help="--branch: the types"
+    )
+    w.add_argument("--rate", type=float, default=0.2, help="--branch: moments re-asked")
     w.add_argument(
         "--probe-rate",
         type=float,

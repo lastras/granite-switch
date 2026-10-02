@@ -383,6 +383,40 @@ def line_logits(model, input_ids, mask, pos, k: int):
     return out.logits[:, :-1, :].float()
 
 
+def seq_logps(model, prompts, targets, pad_id, device):
+    """Each target's summed log-probability given its prompt (gradients flow)."""
+    import torch
+
+    ids, m, p, lab = collate_lines(prompts, targets, pad_id, device)
+    logits = line_logits(model, ids, m, p, lab.shape[1])
+    logp = torch.log_softmax(logits, -1)
+    keep = lab != -100
+    tok = logp.gather(-1, lab.clamp(min=0).unsqueeze(-1)).squeeze(-1)
+    return (tok * keep).sum(-1)
+
+
+def load_pairs(paths: list[Path], tok, conv_n: int = CONV_EXCHANGES) -> list[tuple]:
+    """DPO pairs (rft.py --pairs) as (prompt ids, chosen ids, rejected ids, why):
+    the narrator's base-form prompt, each line and the end of the turn."""
+    eot = tok.encode(_EOT, add_special_tokens=False)
+
+    def enc(line: str) -> list[int]:
+        return tok.encode(" ".join(line.split()), add_special_tokens=False) + eot
+
+    out = []
+    for p in paths:
+        for x in open(p):
+            r = json.loads(x)
+            conv = (
+                Conversation.from_json(r["conv"][-conv_n:])
+                if r["conv"]
+                else Conversation()
+            )
+            ids = narrator_ids(tok, conv, r["tool"], r.get("player"))
+            out.append((ids, enc(r["chosen"]), enc(r["rejected"]), r.get("why")))
+    return out
+
+
 def generate_lines(
     model, tok, prompts, pad_id, device, *, adapter=True, temperature=0.8, batch=8
 ) -> list[str]:
@@ -499,6 +533,23 @@ def main() -> None:
         "(e.g. the previous narrator), as column NAME",
     )
     ap.add_argument(
+        "--ckpt-every",
+        type=int,
+        default=200,
+        help="Save a resumable checkpoint every so many steps (0: never); a run "
+        "started again with the same arguments resumes from it (a preempted job)",
+    )
+    ap.add_argument(
+        "--pairs",
+        type=Path,
+        nargs="*",
+        default=[],
+        help="Narrator: DPO pairs (rft.py --pairs), trained alongside the lines",
+    )
+    ap.add_argument("--beta", type=float, default=0.1, help="DPO: the reference's pull")
+    ap.add_argument("--dpo-weight", type=float, default=1.0, help="DPO loss weight")
+    ap.add_argument("--pair-batch", type=int, default=8, help="DPO pairs per step")
+    ap.add_argument(
         "--extra-rows",
         type=Path,
         nargs="*",
@@ -551,6 +602,7 @@ def main() -> None:
     ap.add_argument("--max-heldout", type=int, default=4000)
     ap.add_argument("--val-frac", type=float, default=0.08)
     ap.add_argument("--eval-every", type=int, default=500)
+    ap.add_argument("--log-every", type=int, default=50, help="Steps per loss line")
     ap.add_argument(
         "--eval-n", type=int, default=1000, help="Held-out rows per mid-run evaluation"
     )
@@ -591,6 +643,11 @@ def main() -> None:
     import torch
     from peft import LoraConfig, get_peft_model
     from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    # PyTorch 2.11's SDPA picks cuDNN attention for some left-padded batches, and
+    # its backward gives NaN gradients where a query row is fully masked (a pad):
+    # the memory-efficient kernel instead.
+    torch.backends.cuda.enable_cudnn_sdp(False)
 
     torch.manual_seed(args.seed)
     # One process per GPU under torchrun; each takes a slice of every batch.
@@ -880,6 +937,97 @@ def main() -> None:
     step, t0, run_loss, history = 0, time.time(), 0.0, []
     train_curve: list[dict] = []  # training loss, every 50 steps
     best = {"soft_ce": math.inf, "step": None}
+    epoch, skip = 0, 0
+    # DPO pairs, and the reference: the adapter as training starts (after
+    # --init), its log-probabilities computed once and kept with the run, so a
+    # resumed run keeps the same reference.
+    pairs = (
+        load_pairs(args.pairs, tok, args.conv_exchanges) if lines and args.pairs else []
+    )
+    ref = None
+    if pairs:
+        args.out.mkdir(parents=True, exist_ok=True)
+        ref_path = args.out / "dpo_ref.pt"
+        if ref_path.exists():
+            ref = torch.load(ref_path)
+        else:
+            ref = torch.zeros(len(pairs), 2)
+            raw.eval()
+            with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+                for i in range(0, len(pairs), args.micro):
+                    chunk = pairs[i : i + args.micro]
+                    for j, side in enumerate((1, 2)):
+                        ref[i : i + len(chunk), j] = (
+                            seq_logps(
+                                raw,
+                                [c[0] for c in chunk],
+                                [c[side] for c in chunk],
+                                pad_id,
+                                device,
+                            )
+                            .float()
+                            .cpu()
+                        )
+            raw.train()
+            if main_rank:
+                torch.save(ref, ref_path)
+        if main_rank:
+            print(
+                f"DPO: {len(pairs)} pairs ({dict(Counter(c[3] for c in pairs))}), beta {args.beta}",
+                flush=True,
+            )
+    pair_hits, pair_n = 0, 0
+    # Resuming a run (a preempted job started again with the same arguments).
+    ckpt = args.out / "ckpt"
+    if (
+        args.ckpt_every
+        and not (ckpt / "state.pt").exists()
+        and (args.out / "ckpt.old" / "state.pt").exists()
+    ):
+        ckpt = args.out / "ckpt.old"
+    if args.ckpt_every and (ckpt / "state.pt").exists():
+        from peft import set_peft_model_state_dict
+        from safetensors.torch import load_file
+
+        st = torch.load(ckpt / "state.pt", map_location="cpu", weights_only=False)
+        set_peft_model_state_dict(
+            raw, load_file(str(ckpt / "adapter_model.safetensors"))
+        )
+        opt.load_state_dict(st["opt"])
+        sched.load_state_dict(st["sched"])
+        step, epoch, skip = st["step"], st["epoch"], st["in_epoch"]
+        history, train_curve, best = st["history"], st["train_curve"], st["best"]
+        if main_rank:
+            print(
+                f"resumed from {ckpt} at step {step} (epoch {epoch}, batch {skip})",
+                flush=True,
+            )
+
+    def save_ckpt(in_epoch: int) -> None:
+        """A resumable checkpoint, written aside and swapped in (a preemption
+        mid-write leaves the last one whole)."""
+        import shutil
+
+        tmp, cur, old = args.out / "ckpt.tmp", args.out / "ckpt", args.out / "ckpt.old"
+        shutil.rmtree(tmp, ignore_errors=True)
+        raw.save_pretrained(str(tmp))
+        state = {
+            "opt": opt.state_dict(),
+            "sched": sched.state_dict(),
+            "step": step,
+            "epoch": epoch,
+            "in_epoch": in_epoch,
+            "history": history,
+            "train_curve": train_curve,
+            "best": best,
+        }
+        torch.save(state, tmp / "state.pt")
+        shutil.rmtree(old, ignore_errors=True)
+        if cur.exists():
+            cur.rename(old)
+        tmp.rename(cur)
+        shutil.rmtree(old, ignore_errors=True)
+
     lengths = [
         len(r[2])
         if lines
@@ -887,12 +1035,49 @@ def main() -> None:
         for r in train_rows
     ]
     model.train()
-    epoch = 0
     while step < total:
+        in_epoch = 0
         for b in batches(train_rows, args.batch, True, args.seed + epoch, lengths):
-            share = b[rank::world]  # this rank's slice of the global batch
             if len(b) < world:
                 continue  # a last short batch cannot feed every rank
+            if skip:  # resuming: trained on before the checkpoint
+                skip -= 1
+                in_epoch += 1
+                continue
+            share = b[rank::world]  # this rank's slice of the global batch
+            if pairs:
+                # DPO on this step's pairs (in order, cycling), before the lines:
+                # their gradients join the step's sync on its last micro-batch.
+                idx = [
+                    (step * args.pair_batch + j) % len(pairs)
+                    for j in range(args.pair_batch)
+                ]
+                mine = idx[rank::world]
+                for k in range(0, len(mine), max(1, args.micro // 2)):
+                    sub = mine[k : k + max(1, args.micro // 2)]
+                    with (
+                        model.no_sync() if ddp else contextlib.nullcontext(),
+                        torch.autocast("cuda", dtype=torch.bfloat16),
+                    ):
+                        prompts = [pairs[i][0] for i in sub] * 2
+                        targets = [pairs[i][1] for i in sub] + [
+                            pairs[i][2] for i in sub
+                        ]
+                        lp = seq_logps(model, prompts, targets, pad_id, device).float()
+                        lc, lr = lp[: len(sub)], lp[len(sub) :]
+                        r = ref[sub].to(device)
+                        margin = (lc - r[:, 0]) - (lr - r[:, 1])
+                        dpo = -torch.nn.functional.logsigmoid(
+                            args.beta * margin
+                        ).sum() / len(mine)
+                        (args.dpo_weight * dpo).backward()
+                    if not math.isfinite(dpo.item()):
+                        raise SystemExit(
+                            f"non-finite DPO loss at step {step}: pairs {sub}, "
+                            f"logps {lc.tolist()} / {lr.tolist()}, ref {r.tolist()}"
+                        )
+                    pair_hits += int((margin > 0).sum())
+                    pair_n += len(sub)
             micros = [
                 share[k : k + args.micro] for k in range(0, len(share), args.micro)
             ]
@@ -921,6 +1106,11 @@ def main() -> None:
                             / share_tokens
                         )
                         loss.backward()
+                    if not math.isfinite(loss.item()):
+                        raise SystemExit(
+                            f"non-finite loss at step {step}: prompt lengths "
+                            f"{[len(prompt(r)) for r in mb]}, lines {[r[5]['line'] for r in mb]}"
+                        )
                     run_loss += loss.item()
                     continue
                 ids, m, p, tgt = collate(
@@ -932,18 +1122,51 @@ def main() -> None:
                     loss = -(tgt * logp).sum(-1).mean() * len(mb) / len(share)
                     loss.backward()
                 run_loss += loss.item()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            gnorm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            if not torch.isfinite(gnorm):
+                if lines:  # which micro-batch: each one's gradients alone
+                    for k, mb in enumerate(micros):
+                        opt.zero_grad(set_to_none=True)
+                        ids, m, p, lab = collate_lines(
+                            [prompt(r) for r in mb], [r[3] for r in mb], pad_id, device
+                        )
+                        with (
+                            model.no_sync() if ddp else contextlib.nullcontext(),
+                            torch.autocast("cuda", dtype=torch.bfloat16),
+                        ):
+                            logits = line_logits(model, ids, m, p, lab.shape[1])
+                            loss = torch.nn.functional.cross_entropy(
+                                logits.transpose(1, 2), lab, ignore_index=-100
+                            )
+                            loss.backward()
+                        bad = any(
+                            q.grad is not None and not torch.isfinite(q.grad).all()
+                            for q in raw.parameters()
+                        )
+                        print(
+                            f"  micro-batch {k}: loss {loss.item():.4f}, non-finite grads {bad}, "
+                            f"prompts {[len(prompt(r)) for r in mb]}, targets {[len(r[3]) for r in mb]}, "
+                            f"lines {[r[5]['line'] for r in mb]}",
+                            flush=True,
+                        )
+                raise SystemExit(f"non-finite gradient norm at step {step}")
             opt.step()
             sched.step()
             opt.zero_grad(set_to_none=True)
             step += 1
-            if step % 50 == 0 and main_rank:
+            in_epoch += 1
+            if args.ckpt_every and step % args.ckpt_every == 0 and main_rank:
+                save_ckpt(in_epoch)
+            if step % args.log_every == 0 and main_rank:
+                k = args.log_every
+                dpo_acc = f" dpo-acc {pair_hits / pair_n:.2f}" if pair_n else ""
                 print(
-                    f"step {step}/{total} loss {run_loss / 50:.4f} "
-                    f"lr {sched.get_last_lr()[0]:.2e} {time.time() - t0:.0f}s",
+                    f"step {step}/{total} loss {run_loss / k:.4f}{dpo_acc} "
+                    f"grad {float(gnorm):.3f} lr {sched.get_last_lr()[0]:.2e} {time.time() - t0:.0f}s",
                     flush=True,
                 )
-                train_curve.append({"step": step, "loss": round(run_loss / 50, 5)})
+                pair_hits = pair_n = 0
+                train_curve.append({"step": step, "loss": round(run_loss / k, 5)})
                 run_loss = 0.0
             if step % args.eval_every == 0 and val_rows and main_rank:
                 ev, _ = evaluate(val_rows[: args.eval_n])

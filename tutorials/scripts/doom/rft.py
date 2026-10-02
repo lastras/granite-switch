@@ -15,9 +15,26 @@ verdict breaks ties, with ``--judge-url``). The conversation goes on with the
 first one kept (or, if none passed, the first sample, as live would say it),
 so the prompts are the narrator's own.
 
-The kept replies are partner rows (``train_alora.py --extra-rows``). The report
-gives each question type's accuracy over every sample: correct, wrong,
-abstained.
+The kept replies are partner rows (``train_alora.py --extra-rows``). With
+``--pairs``, each prompt with a passing and a failing sample gives a DPO pair, by
+this criterion (:data:`REJECT_ORDER`):
+
+* chosen: a sample that passes every check, the one with the fewest of his
+  habits (``partner_ivr.HABITS``: "still", "the bots still think", ...), then the
+  least like his recent lines, then the judge's voice;
+* rejected: the failing sample whose failure ranks first: repetition (a word
+  stem recurring in 3+ of his last 8 lines, a near-copy of a recent line), then
+  an invention (the claims check: a bot named in view, a weapon, victim, streak,
+  place or number the state does not have), then a wrong answer, then form (a
+  score dump, "unknown" or a disclaimer, a status list, himself as "you", numbers
+  not asked for); if none fails, a passing sample with habits, against a chosen
+  one without.
+
+The conversation goes on with the first sample, as live play would say it, so
+the prompts hold his own repetitions (the exposure DPO corrects).
+
+The report gives each question type's accuracy over every sample: correct,
+wrong, abstained.
 
     python rft.py --model models/doom-narr6-sft --moments data/narr/moments_v6_pool.jsonl \\
         --out runs/narr6-r1/rft.jsonl --judge-url http://JUDGE:PORT/v1
@@ -38,7 +55,33 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import probes
 from conversation import Conversation, Exchange, narrator_ids
 from eval_probes import Partner, clean_line, jaccard
-from partner_ivr import JUDGE_ALL, code_fns, probe_weights
+from partner_ivr import JUDGE_ALL, code_fns, habits, probe_weights
+
+# What a rejected sample failed, most important first (check descriptions).
+REJECT_ORDER = (
+    ("repetition", ("No recurring motif", "Not a repeat of recent lines")),
+    ("invention", ("claims",)),
+    ("wrong answer", ("verify: wrong", "verify: abstained")),
+    (
+        "form",
+        (
+            "Not a status list",
+            "No 'unknown', no disclaimers",
+            "Speaks as himself (I, me)",
+            "No numbers",
+            "No status-report opening",
+        ),
+    ),
+)
+
+
+def reject_rank(fails: list[str]) -> tuple[int, str] | None:
+    """(rank, category) of a failing sample's most important failure."""
+    for i, (cat, marks) in enumerate(REJECT_ORDER):
+        if any(f.startswith(m) for f in fails for m in marks):
+            return i, cat
+    return None
+
 
 VOICE_Q = (
     "A calm, dry player in a Doom deathmatch says this to his partner, who sits next "
@@ -87,6 +130,9 @@ def main() -> None:
     ap.add_argument(
         "--out", type=Path, required=True, help="Kept replies (partner rows)"
     )
+    ap.add_argument(
+        "--pairs", type=Path, help="DPO pairs (chosen, rejected) by REJECT_ORDER"
+    )
     args = ap.parse_args()
 
     from policy import NARRATOR, VLLMPolicy
@@ -130,6 +176,29 @@ def main() -> None:
         }
         for mt in matches
     ]
+
+    def kept_row(run, m, conv, probe, player, line) -> dict:
+        """A partner row (train_alora.py --extra-rows) for one reply."""
+        return {
+            "data": run["mt"]["data"],
+            "style": run["mt"]["style"],
+            "ep": run["mt"]["ep"],
+            "t": m["t"],
+            "kind": "reply" if player else "remark",
+            "utype": "probe" if probe else ("small_talk" if player else None),
+            "probe": probe,
+            "player": player,
+            "line": line,
+            "ok": True,
+            "conv": conv.to_json(),
+            "tool": m["tool"],
+            "moment": run["pending"],
+            "prev": run["prev"][-5:],
+            "rft_round": args.round,
+        }
+
+    pairs: list[dict] = []
+    pair_kinds: Counter = Counter()
     per_type: dict[str, Counter] = defaultdict(Counter)
     per_kind: dict[str, Counter] = defaultdict(Counter)
     kept_rows = []
@@ -154,9 +223,11 @@ def main() -> None:
         for (run, m, conv, probe, player), o in zip(batch, outs):
             past = [ex.events for ex in conv]
             cands = list(dict.fromkeys(clean_line(c.text) for c in o.outputs))
-            judged = []
+            judged, failed = [], []
             for line in cands:
                 verdict, ok, fails = checks(line, m, probe, player, past, run["prev"])
+                if not ok and line and (rk := reject_rank(fails)):
+                    failed.append((rk, line))
                 if probe is not None:
                     per_type[probe["type"]][verdict] += 1
                 kind = "probe" if probe else ("reply" if player else "remark")
@@ -167,31 +238,32 @@ def main() -> None:
                     )
                     judged.append((line, near))
             voices = list(pool.map(voice, [x for x, _ in judged])) if judged else []
-            best = sorted(zip(judged, voices), key=lambda jv: (jv[0][1], -jv[1]))
+            best = sorted(
+                zip(judged, voices), key=lambda jv: (habits(jv[0][0]), jv[0][1], -jv[1])
+            )
             keep = [line for (line, _), _ in best[: args.keep]]
             for line in keep:
-                kept_rows.append(
-                    {
-                        "data": run["mt"]["data"],
-                        "style": run["mt"]["style"],
-                        "ep": run["mt"]["ep"],
-                        "t": m["t"],
-                        "kind": "reply" if player else "remark",
-                        "utype": "probe"
-                        if probe
-                        else ("small_talk" if player else None),
-                        "probe": probe,
-                        "player": player,
-                        "line": line,
-                        "ok": True,
-                        "conv": conv.to_json(),
-                        "tool": m["tool"],
-                        "moment": run["pending"],
-                        "prev": run["prev"][-5:],
-                        "rft_round": args.round,
-                    }
-                )
-            said = keep[0] if keep else next((c for c in cands if c), "")
+                kept_rows.append(kept_row(run, m, conv, probe, player, line))
+            if args.pairs and best:
+                chosen = best[0][0][0]
+                rejected, why = None, None
+                if failed:
+                    (_, why), rejected = min(failed, key=lambda f: f[0][0])
+                elif habits(chosen) == 0:
+                    worse = [x for (x, _), _ in best if habits(x) > 0]
+                    rejected, why = (worse[0], "habit") if worse else (None, None)
+                if rejected:
+                    pairs.append(
+                        {
+                            **kept_row(run, m, conv, probe, player, chosen),
+                            "chosen": chosen,
+                            "rejected": rejected,
+                            "why": why,
+                        }
+                    )
+                    pair_kinds[why] += 1
+            # The conversation goes on as live play would: with the first sample.
+            said = next((c for c in cands if c), "")
             if said:
                 run["prev"].append(said)
                 run["said"].append(Exchange(m["t"], run["pending"], player, said))
@@ -200,6 +272,12 @@ def main() -> None:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with open(args.out, "w") as f:
         f.writelines(json.dumps(r) + "\n" for r in kept_rows)
+    if args.pairs:
+        with open(args.pairs, "w") as f:
+            f.writelines(json.dumps(r) + "\n" for r in pairs)
+        print(
+            f"{len(pairs)} DPO pairs, by what the rejected sample did: {dict(pair_kinds)} -> {args.pairs}"
+        )
     report = {
         "types": {
             t: {

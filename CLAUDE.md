@@ -184,6 +184,14 @@ python -m granite_switch.composer.compose_granite_switch \
   --adapters ibm-granite/granitelib-rag-r1.0 --output ./my-custom-model
 ```
 
+### Cluster: Never Run Work on a Login Node
+
+**Never run anything on a cluster login node.** Every computation, however small or short
+(Python scripts, data processing, dataset writers, collection, tests, servers), goes into a
+SLURM job (`sbatch`, submitted from login2), CPU or GPU. Login nodes are shared by everyone:
+many processes there slow the node for all users and can make it unreachable. A login node is
+only for submitting and monitoring jobs, the tmux sessions that hold them, and reading files.
+
 ### Testing
 
 **Always use `-v -s --tb=short`** when running tests. `-v` (verbose) prints each test name as
