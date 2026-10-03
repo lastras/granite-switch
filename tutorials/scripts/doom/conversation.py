@@ -63,8 +63,11 @@ NARRATOR_SYSTEM_PROMPT = (
     "something about the game that the result contradicts, correct them. Frag "
     "victims are never reported, so never name a bot you fragged. Bots never take "
     "your weapons: when you die, you respawn with a pistol. Say a number only when "
-    "your partner asks for one. Your turns are what you say out loud: one short "
-    "line, in character, deadpan, mild language at most. Doom has no reloading."
+    "your partner asks for one. Your partner can tell you what to do; order says "
+    "what you were told and whether you are doing it: never say you are doing "
+    "what you refused or could not do. Your turns are what you say out loud: one "
+    "short line, in character, deadpan, mild language at most. Doom has no "
+    "reloading."
 )
 
 GET_GAME_STATE = {
@@ -81,14 +84,20 @@ GET_GAME_STATE = {
             "place, name, frags and deaths, best first (you is you). bots_in_view: "
             "side (left, ahead or right) and distance_m of each; who they are is "
             "never known. playing: your style of play and your last moves. "
+            "order: the last thing your partner told you to do (told), its status "
+            "(doing, done, refused: you would not, cant: you could not, cancelled), "
+            "why, seconds_ago, health_lost while you did it, hit_wall, got (what a "
+            "goal got you: the item you picked up, the bot you fragged). "
             "last_death: killer (a bot's name, yourself, or unknown), killer_weapon, "
             "your_weapon (yours then), seconds_ago, in_a_row (deaths to that bot in a "
             "row). last_frag: victim, your_weapon, seconds_ago. killed_by: how many "
             "times each bot has killed you. last_pickup: item, amount, seconds_ago. "
             "recent_events: the last 90 seconds, oldest first: death, frag (your "
             "victim), kill (a bot killing another bot), pickup, lead (who leads "
-            "now), close_call, streak. A past call's result holds only its time and "
-            "the events since the call before."
+            "now), close_call, streak, order (told, and its status), order_end (it "
+            "is over: done, cancelled, or refused halfway), order_hurts (it cost you "
+            "health). A past call's result holds only its time and the events since "
+            "the call before."
         ),
         "parameters": {"type": "object", "properties": {}, "required": []},
     },

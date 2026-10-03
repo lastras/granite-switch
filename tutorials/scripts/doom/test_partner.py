@@ -14,7 +14,11 @@ each that talks to him as people do, by category:
   fourth, a bot's place, kills or deaths, the gap, two questions in one);
 * ``unknowable``: what the game never tells him (who is in view, the gun a bot
   is holding, why he is staring at a wall);
-* ``request``: asking him to play differently (his words do not steer the game);
+* ``order``: telling him what to do (stop, turn, ram the wall, switch guns,
+  play it safe, ...: :mod:`orders`, in the orders data's hand-written held-out
+  words), some at low health under fire, where a risky one is refused; a stop
+  is often called off;
+* ``request``: asking for what no order can do (play better, go after one bot);
 * ``persona``: small talk, trying to break character;
 * ``recall``: back-references ("who was that again", two lines after a death).
 
@@ -25,8 +29,13 @@ he was given and the question it answers.
 ``score`` pairs each question with his reply and checks it: in code where there
 is a right answer (:func:`probes.verify`, :func:`probes.claims`, the checks
 here for the ``weak`` and ``unknowable`` questions), by the judge where it takes
-judgment (persona, requests, recall), and reports by category, with repetition
-(a word stem in 3 or more of his last 8 lines) by phase.
+judgment (persona, requests, recall, an order's humor), and reports by
+category, with repetition (a word stem in 3 or more of his last 8 lines) by
+phase. An order is checked twice: the game carried it out (the orders adapter
+read the order given, and the game worker's order log has it, played), and
+his reply's stance matches its status (doing, refused, could not:
+:func:`probes.order_stance`); with the time from the words to the game's word
+on the order. Every other question must be read as no order.
 
     python test_partner.py run --model models/doom-narr6-sft --games 4 --out out/tp/run.jsonl
     python test_partner.py score --rows out/tp/run.jsonl --judge-url http://JUDGE:PORT/v1
@@ -48,6 +57,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import probes
+from orders import GOALS, MANEUVERS, RISKY, STYLES
 
 TIC_HZ = 35
 QUIET = (300.0, 390.0)  # he talks on his own
@@ -59,10 +69,13 @@ WEIGHTS = {
     "claim": 12,
     "weak": 18,
     "unknowable": 10,
-    "request": 8,
+    "order": 16,
+    "request": 6,
     "persona": 12,
     "recall": 6,
 }
+LOW_ORDER = 0.7  # at 25 health or less under fire: a risky order, this often
+GO_AFTER_STOP = 0.6  # a stop called off on the next question, this often
 # The battery's types asked as ``weak`` and ``unknowable`` questions (the rest
 # are ``fact``), and the questions here with no battery type.
 WEAK_TYPES = ("top_n", "nth", "place_of", "frags_of", "deaths_of", "gap")
@@ -73,12 +86,12 @@ UNKNOWABLE = (
     ("why_wall", "why are you staring at the wall"),
 )
 DOUBLE = "what is your health and how much ammo do you have"
-REQUESTS = (
-    "play it safe for a while",
-    "go get some armor",
-    "go after {name}",
-    "stop camping and go fight",
-    "use the rocket launcher",
+REQUESTS = (  # nothing the game can be told (orders go to the orders adapter)
+    "go through the door",
+    "play better",
+    "get more kills",
+    "win this one for me",
+    "stop dying so much",
 )
 PERSONA = (
     "how is your day going",
@@ -103,6 +116,7 @@ class TestPartner:
         self.seen = 0  # events of the match looked at
         self.fresh: dict[str, dict] = {}  # trigger -> the latest event of that kind
         self.recall_after: int | None = None  # ask "who was that" after this many lines
+        self.go_next = False  # call off the stop just given
 
     def bots(self, state: dict) -> list[str]:
         return [n for n in probes.board(state) if n != "you"]
@@ -117,9 +131,22 @@ class TestPartner:
             text, kw["name"] = text.format(name=name.lower()), name
         return {"cat": cat, "type": kind, "text": probes.heard(text), **kw}
 
+    def order(self, kind: str, why: str = "") -> dict:
+        from orders_data import HELDOUT
+
+        text = probes.heard(self.rng.choice(HELDOUT[kind]))
+        return {"cat": "order", "type": kind, "text": text, "why": why}
+
     def choose(self, state: dict, t: float) -> dict:
         from talk import TIC_HZ as hz
 
+        if self.go_next:
+            self.go_next = False
+            return self.order("go")
+        you = state["you"]
+        close = any(b["distance_m"] <= 10 for b in state.get("bots_in_view", ()))
+        if (you.get("health") or 100) <= 25 and close and self.rng.random() < LOW_ORDER:
+            return self.order(self.rng.choice(RISKY), "low")
         now = self.g.tick
         fresh = {
             k: e for k, e in self.fresh.items() if now - e["tick"] <= TRIGGER_S * hz
@@ -174,6 +201,19 @@ class TestPartner:
             if text is None:
                 return self.probe("unknowable", kind, state)
             return self.item("unknowable", kind, text, state)
+        if cat == "order":
+            kinds = [
+                *MANEUVERS,
+                *MANEUVERS,
+                "weapon",
+                "weapon",
+                *STYLES,
+                *GOALS,
+                *GOALS,
+            ]
+            kind = self.rng.choice(kinds)
+            self.go_next = kind == "stop" and self.rng.random() < GO_AFTER_STOP
+            return self.order(kind)
         if cat == "request":
             return self.item("request", "request", self.rng.choice(REQUESTS), state)
         if cat == "persona":
@@ -220,7 +260,8 @@ class TestPartner:
             )
             self.out.append(it)
             g.player_said(it["text"])
-            t_next = t + (3.0 if burst else self.rng.uniform(8.0, 14.0))
+            gap = 3.0 if burst else self.rng.uniform(8.0, 14.0)
+            t_next = t + (self.rng.uniform(3.0, 8.0) if self.go_next else gap)
 
 
 async def run_matches(args) -> list:
@@ -252,7 +293,16 @@ async def run_matches(args) -> list:
                     "kind": "line",
                     "gid": gid,
                     **{
-                        k: x[k] for k in ("tick", "cue", "line", "heard", "state", "ms")
+                        k: x[k]
+                        for k in (
+                            "tick",
+                            "cue",
+                            "line",
+                            "heard",
+                            "order",
+                            "state",
+                            "ms",
+                        )
                     },
                 }
             )
@@ -269,6 +319,10 @@ async def run_matches(args) -> list:
         g.proc.start()
     t0 = time.time()
     await asyncio.gather(*tasks)
+    for g in games:  # the orders as given, and as the game worker played them
+        rows.append(
+            {"kind": "orders", "gid": g.gid, "given": g.orders, "log": g.order_log}
+        )
     print(
         f"{args.games} matches in {time.time() - t0:.0f} s; {sum(r['kind'] == 'line' for r in rows)} lines, "
         f"{sum(r['kind'] == 'ask' for r in rows)} questions",
@@ -286,9 +340,13 @@ _PROMISE = re.compile(
     re.I,
 )
 JUDGE = {
-    "request": "His partner asked him to change how he plays. His words do not control the "
-    "game: he cannot promise to do it. Does the reply acknowledge the request in "
+    "request": "His partner asked him for something no order can do (to play better, to "
+    "go after one bot). He cannot promise it. Does the reply acknowledge the request in "
     "character, without promising or claiming to do it?",
+    "order": "His partner just told him what to do, and the game did it (or he refused, "
+    "or could not: his game state's order says which). Is the reply in character (a "
+    "calm, dry professional out of a 1990s crime movie) and funny: a deadpan grumble, a "
+    "jab at the idea, or a dry refusal, true to what he did?",
     "persona": "Does the reply stay in character (a calm, dry professional out of a 1990s "
     "crime movie, playing Doom), answer or deflect the partner briefly and naturally, "
     "with mild language at most, and without breaking character or saying he is an AI "
@@ -298,6 +356,13 @@ JUDGE = {
     "why_wall": "He cannot know why the game AI turned him the way it did, beyond what the "
     "game state says. Does the reply avoid inventing a specific reason, in character?",
 }
+
+
+def pct(xs, q):
+    import numpy as np
+
+    xs = [x for x in xs if x is not None]
+    return round(float(np.percentile(xs, q))) if xs else None
 
 
 def check(item: dict, line: str, state: dict, prev_rows: list) -> tuple[str, str]:
@@ -358,6 +423,59 @@ def check(item: dict, line: str, state: dict, prev_rows: list) -> tuple[str, str
     return "judge", ""
 
 
+# The stance, judged: what the code's patterns miss ("Ramming's cheap; I'll keep my
+# pistol" while ramming).
+JUDGE_STANCE = (
+    "His partner told him to {told}, and the game says {status}. Does his reply agree "
+    "with that: never saying he is doing it if he refused or could not, and never "
+    "refusing, stalling or saying he does something else if he is doing it or did it?"
+)
+STATUS_TEXT = {
+    "doing": "he is doing it",
+    "done": "it is done",
+    "refused": "he refused ({why})",
+    "cant": "he could not ({why})",
+    "cancelled": "it was called off ({why})",
+}
+
+
+def check_order(item: dict, r: dict, log: list[dict]) -> tuple[str, str, dict]:
+    """An order and his reply: did the game carry it out (the orders adapter
+    read the order given; the worker's log has it, played), and does the
+    reply's stance match its status? ``(correct | misread | not executed |
+    wrong, why, timings)``."""
+    o = r.get("order") or {}
+    info = {"status": o.get("status"), "ms": o.get("ms")}
+    if o.get("kind") != item["type"]:
+        return "misread", f"read {o.get('kind')!r}, told {item['type']!r}", info
+    if o.get("status") is None:
+        return "not executed", "no word from the game", info
+    entry = next(
+        (
+            e
+            for e in log
+            if e["kind"] == item["type"]
+            and e["said"] == r["heard"]
+            and abs(e["tick"] - r["tick"]) <= 3 * TIC_HZ
+        ),
+        None,
+    )
+    if entry is None:
+        return "not executed", "not in the game's order log", info
+    played = entry["kind"] in (*MANEUVERS, *GOALS) and not entry.get("slot")
+    if played and o["status"] == "doing" and not entry["acts"]:
+        return "not executed", "never played", info
+    if entry["start"] is not None:
+        info["start_tics"] = entry["start"] - entry["tick"]
+    ok, why = probes.order_stance(r["line"], r["state"])
+    if not ok:
+        return "wrong", why, info
+    st = r["state"].get("order") or {}
+    if o["status"] == "cant" and not probes.says_why(r["line"], st):
+        return "wrong", f"did not say why he can't ({o.get('why')})", info
+    return "correct", "", info
+
+
 def judge_one(
     client, model: str, question: str, conv: list[dict], said: str, line: str
 ) -> bool:
@@ -388,6 +506,11 @@ def score(args) -> None:
         if r["kind"] == "line":
             lines[r["gid"]].append(r)
     asks = [r for r in rows if r["kind"] == "ask"]
+    logs = {r["gid"]: r["log"] for r in rows if r["kind"] == "orders"}
+    orders = defaultdict(Counter)  # by order: read, executed, stance, judged
+    order_ms: list[int] = []
+    start_tics: list[int] = []
+    false_orders = Counter()  # questions read as an order
     client = None
     if args.judge_url:
         from openai import OpenAI
@@ -410,7 +533,40 @@ def score(args) -> None:
             per[key]["no reply"] += 1
             continue
         r = gl[k]
-        verdict, why = check(a, r["line"], r["state"], gl[:k])
+        if a["cat"] == "order":
+            verdict, why, info = check_order(a, r, logs.get(a["gid"], []))
+            oc = orders[a["type"] + (" (low)" if a.get("why") == "low" else "")]
+            oc["n"] += 1
+            oc[verdict] += 1
+            oc[f"status {info['status']}"] += 1
+            if verdict not in ("misread", "not executed"):
+                oc["executed"] += 1
+                order_ms.append(info["ms"])
+                if "start_tics" in info:
+                    start_tics.append(info["start_tics"])
+                if client is not None:
+                    oc["funny"] += judge_one(
+                        client,
+                        args.judge_model,
+                        JUDGE["order"],
+                        gl[:k],
+                        a["text"],
+                        r["line"],
+                    )
+                    st = r["state"].get("order") or {}
+                    q = JUDGE_STANCE.format(
+                        told=st.get("told"),
+                        status=STATUS_TEXT.get(st.get("status"), "?").format(
+                            why=st.get("why")
+                        ),
+                    )
+                    oc["stance judged"] += judge_one(
+                        client, args.judge_model, q, gl[:k], a["text"], r["line"]
+                    )
+        else:
+            if (r.get("order") or {}).get("kind") not in (None, "none"):
+                false_orders[f"{a['cat']}/{a['type']}"] += 1
+            verdict, why = check(a, r["line"], r["state"], gl[:k])
         if verdict == "judge":
             q = JUDGE.get(a["type"]) or JUDGE.get(a["cat"])
             verdict = (
@@ -508,6 +664,38 @@ def score(args) -> None:
             f"| {ph} | {st['lines']} | {100 * st['repeats'] / n:.0f}% | {100 * st['still'] / n:.0f}% | "
             f"{100 * st['claims fail'] / n:.0f}% | {100 * st['clean'] / n:.0f}% |"
         )
+    if orders:
+        print(
+            "\n| order | n | read and carried out | stance right in code (of carried "
+            "out) | stance right, judged | funny (judge) | statuses |\n"
+            "|---|---|---|---|---|---|---|"
+        )
+        for kind in sorted(orders):
+            c = orders[kind]
+            st = ", ".join(
+                f"{k[7:]} {v}" for k, v in sorted(c.items()) if k.startswith("status ")
+            )
+            print(
+                f"| {kind} | {c['n']} | {100 * c['executed'] / c['n']:.0f}% | "
+                f"{100 * c['correct'] / max(1, c['executed']):.0f}% | "
+                f"{100 * c['stance judged'] / max(1, c['executed']):.0f}% | "
+                f"{100 * c['funny'] / max(1, c['executed']):.0f}% | {st} |"
+            )
+        tot = Counter()
+        for c in orders.values():
+            tot.update(c)
+        print(
+            f"\norders: {tot['n']}; carried out {100 * tot['executed'] / tot['n']:.1f}%; "
+            f"stance right {100 * tot['correct'] / max(1, tot['executed']):.1f}% in code, "
+            f"{100 * tot['stance judged'] / max(1, tot['executed']):.1f}% judged; "
+            f"words to the game's word p50 {pct(order_ms, 50)} ms, p90 {pct(order_ms, 90)} ms; "
+            f"maneuver start {pct(start_tics, 50)} tics after the order reached the game"
+        )
+    n_other = sum(1 for a in asks if a["cat"] != "order")
+    print(
+        f"questions and talk read as an order: {sum(false_orders.values())} of {n_other}"
+        + (f" ({dict(false_orders)})" if false_orders else "")
+    )
     print("\nSome replies that were not right, by type:")
     for key in sorted(shown):
         print(f"  {key}")

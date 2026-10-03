@@ -333,16 +333,17 @@ class GameLoop(threading.Thread):
                 g.adapter = BEHAVIORS[g.index % len(BEHAVIORS)]
         elif kind == "instruction" and msg.get("text", "").strip():
             text = msg["text"].strip()[:300]
-            r = self.policy.route(text)
-            for g in self.games:
-                g.adapter = r.adapter
+            r = self.policy.order(text)
+            if r.kind in BEHAVIORS:  # a style order (this demo plays no maneuvers)
+                for g in self.games:
+                    g.adapter = r.kind
             self.route_info = {
                 "text": text,
-                "adapter": r.adapter,
+                "adapter": r.kind,
                 "prob": round(r.prob, 3),
                 "probs": {k: round(v, 3) for k, v in r.probs.items()},
                 "ms": round(r.ms, 2),
-                "by": "router adapter"
+                "by": "orders adapter"
                 if self.policy_kind == "vllm"
                 else "keywords (no model loaded)",
             }

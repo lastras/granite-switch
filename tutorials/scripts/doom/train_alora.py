@@ -16,7 +16,8 @@ Adapters and their labels (rows from ``collect.py``):
 * ``critic``: ``low`` / ``mid`` / ``high``, the outcome of the next second.
 * ``probe``: where the last enemy in the history was (history-only question;
   used for the aLoRA-vs-LoRA comparison, not composed into the demo).
-* ``router``: rows from ``router_data.py`` (instruction, label); no history.
+* ``orders``: rows from ``orders_data.py`` (the partner's words as speech
+  recognition writes them, the order); no history.
 * ``narrator``: a whole spoken line, the one generating adapter. Rows are the
   lines ``partner_ivr.py`` wrote that passed every check (and, with
   ``--extra-rows``, the verified samples of ``rft.py``), each on the narrator's
@@ -40,8 +41,8 @@ linear layer (for SR, every linear layer but K and V).
 
     python train_alora.py --adapter fighter --data data/d0 data/d1 \
         --base /path/granite-4.1-3b --out runs/d1/fighter
-    python train_alora.py --adapter router --data data/router/train.jsonl \
-        --eval-data data/router/heldout.jsonl --epochs 4 --out runs/router/router
+    python train_alora.py --adapter orders --data data/orders/train.jsonl \
+        --eval-data data/orders/heldout.jsonl --epochs 4 --out runs/orders/orders
 
 Writes the PEFT adapter to ``--out``, ``metrics.json`` and
 ``heldout_preds.jsonl`` (history ids, state and the PEFT argmax per held-out
@@ -77,13 +78,13 @@ from policy import (
     DANGER_LEVELS,
     LAYOUTS,
     NARRATOR,
+    ORDERS,
+    ORDERS_SYSTEM_PROMPT,
     OUTPUTS,
-    ROUTER,
-    ROUTER_SYSTEM_PROMPT,
     PromptBuilder,
     alora_invocation_ids,
+    order_token_ids,
     output_token_ids,
-    route_token_ids,
     spoken_entry,
     system_prompt,
 )
@@ -225,7 +226,7 @@ def load_game_rows(
     return out
 
 
-def load_router_rows(paths: list[Path]):
+def load_order_rows(paths: list[Path]):
     out = []
     for p in paths:
         for line in open(p):
@@ -515,7 +516,7 @@ def main() -> None:
         type=Path,
         nargs="+",
         required=True,
-        help="collect.py dirs (router: jsonl; narrator: partner_ivr.py jsonl)",
+        help="collect.py dirs (orders: jsonl; narrator: partner_ivr.py jsonl)",
     )
     ap.add_argument(
         "--gen-n",
@@ -623,7 +624,7 @@ def main() -> None:
     ap.add_argument(
         "--talk-user-lines",
         type=Path,
-        help="Instructions (JSON rows with 'text', e.g. the router data) for "
+        help="Instructions (JSON rows with 'text', e.g. the orders data) for "
         "'user:' entries",
     )
     ap.add_argument(
@@ -665,11 +666,11 @@ def main() -> None:
     tok = AutoTokenizer.from_pretrained(args.base)
     a = args.adapter
     lines = a == NARRATOR
-    if a == ROUTER:
-        label_ids = route_token_ids(tok)
-        pb = PromptBuilder(tok, ROUTER_SYSTEM_PROMPT, align=False)
-        rows = load_router_rows(args.data)
-        val_rows = load_router_rows(args.eval_data) if args.eval_data else None
+    if a == ORDERS:
+        label_ids = order_token_ids(tok)
+        pb = PromptBuilder(tok, ORDERS_SYSTEM_PROMPT, align=False)
+        rows = load_order_rows(args.data)
+        val_rows = load_order_rows(args.eval_data) if args.eval_data else None
     elif lines:
         label_ids = {}
         pb = None  # the narrator's prompts are rendered by the chat template

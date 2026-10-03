@@ -9,7 +9,16 @@ salient event, or after a silence, each with the output of his
 happened since the moment before (``moment``). Whole matches are written in
 order, so the conversations reach the full window, as they do live.
 
-At about 55% of moments the partner asks about the game state (:mod:`probes`:
+At a moment the partner gave an order (``talk.py moments`` over ``collect.py
+--orders`` matches: stop, turn, ram the wall, switch guns, play it safe, ...),
+the partner's words are the order's, and his reply must match what the game
+did with it (the state's ``order``: doing it, refused, could not): no "on it"
+for one he refused (:func:`probes.claims`), no refusal of one he is doing, and
+why, for one he could not do; judged for the humor in it. When an order hurt
+him or ended (the cues ``order_hurts``, ``order_done``) his remark is about
+what it did to him.
+
+At about 55% of the other moments the partner asks about the game state (:mod:`probes`:
 who killed you, the score, your health, what you just picked up, ... or a value
 asserted, true or false: "i see 12"); its answer is checked in code. At about
 15% the partner says something else: lines written for that moment by a model,
@@ -121,10 +130,127 @@ UTTERANCES = {
     "smalltalk": (1, "Bring up something from outside the game.", None),
     "request": (
         2,
-        "Ask him to change how he plays for a while: play safer, collect stuff, "
-        "be more aggressive, stop hiding.",
+        "Ask him for something nobody can just order: to play better, to win this "
+        "one, to go after one bot in particular, to stop dying so much, to get more "
+        "kills.",
         None,
     ),
+}
+# The partner's orders (collect.py --orders: the moment he was told, with the
+# order's status). His reply, by status: what to say, and model exchanges (a
+# situation, what the partner said, the reply).
+ORDER_HOW = {
+    "doing": "He is doing it right now ({told}) because his partner said so. Take it "
+    "in character: deadpan, grudging or dry, humoring his partner, with a jab at the "
+    "idea, at his partner or at his own dignity. Never refuse it, and never say he is "
+    "doing something else.",
+    "done": "It is done ({told}). Take it in character: deadpan, dry, a jab at the "
+    "idea or at his partner.",
+    "refused": "He refuses: {why}. Say no, in character, with the reason in his own "
+    "words (doing it would get him killed). Never say he is doing it.",
+    "cant": "He cannot do it: {why}. Say so, and why, in his own words. Never say he "
+    "is doing it.",
+}
+# What every order reply is told: the joke is in how he takes the order.
+ORDER_FORM = (
+    " The line is about the order and how he takes it: no inventory (do not list his "
+    "guns, health, armor, the bots or the lead); at most one fact from the game "
+    "state, and only if it is the point (the health that makes him refuse). Never "
+    "the game state's own words for it (doing, done, cancelled, status, order): say "
+    "it as he would."
+)
+ORDER_EXAMPLES = {
+    "doing": (
+        (
+            "told to stop with bots around",
+            "stop right there",
+            "Stopping. This better be good.",
+        ),
+        ("told to stop", "freeze", "Frozen. If this is about the coffee, it can wait."),
+        (
+            "told to ram the wall",
+            "ram the wall",
+            "Into the wall. For the record, your idea.",
+        ),
+        ("told to ram the wall", "hit the wall", "The wall's been warned."),
+        ("told to turn left", "turn left", "Left. Scenic."),
+        ("told to turn around", "behind you", "Turning. If nobody's there, we talk."),
+        (
+            "told to switch to the shotgun",
+            "use the shotgun",
+            "Shotgun. You could have said please.",
+        ),
+        ("told to back up", "back up", "Backing up. Into what, we'll find out."),
+        ("told to fire at nothing", "shoot", "Shooting the air. Very intimidating."),
+        ("sent to get a gun", "grab a gun", "Shopping for a gun. Hope they take cash."),
+        (
+            "sent for health",
+            "go get some health",
+            "Looking for a medikit. Keep the meter running.",
+        ),
+        (
+            "sent after Rambo, though no bot on screen is ever named",
+            "go after rambo",
+            "Rambo. They all look alike, so I'll ask each one.",
+        ),
+        (
+            "told to go look around",
+            "go look around",
+            "Sightseeing. In a war zone. Sure.",
+        ),
+    ),
+    "done": (
+        ("told to play it safe", "play it safe", "Safe it is. Boring, but breathing."),
+        (
+            "told to play it safe",
+            "be careful",
+            "Careful. I'll be the most careful man in the building.",
+        ),
+        ("a stop called off", "ok go", "Finally. My legs were falling asleep."),
+        ("told to go get them", "go get them", "Now you're talking my language."),
+        (
+            "told to grab the loot",
+            "grab the loot",
+            "Shopping. I'll bring you a receipt.",
+        ),
+    ),
+    "refused": (
+        (
+            "at 20 health, under fire, told to stop",
+            "stop",
+            "Not at twenty health. I'd like to see the end of this.",
+        ),
+        (
+            "hurt and shot at, told to ram the wall",
+            "ram the wall",
+            "With them shooting at me? Pass. Ask me later.",
+        ),
+    ),
+    "cant": (
+        (
+            "told to switch to the BFG he does not have",
+            "use the bfg",
+            "No BFG. I'll write to Santa.",
+        ),
+        ("told to turn while respawning", "turn left", "I'm dead. Give me a second."),
+        (
+            "told to use the chaingun, out of bullets",
+            "chaingun",
+            "Chaingun's dry. Nothing in it.",
+        ),
+    ),
+}
+JUDGE_ORDER = (
+    "His partner just told him to {told}. The game says: {status}. Does his reply fit "
+    "that, in character (going along with a deadpan grumble or a jab, refusing because "
+    "it would get him killed, or saying why he can't), without saying he does "
+    "something he does not?"
+)
+ORDER_STATUS = {
+    "doing": "he is doing it",
+    "done": "it is done",
+    "refused": "he refused ({why})",
+    "cant": "he cannot ({why})",
 }
 # Replies that need not be about the moment: the contrast check and the
 # judge's "specific" do not apply.
@@ -202,6 +328,7 @@ PROBE_FAMILY = {
     "who_in_view": "who_in_view",
     "map": "map",
     "style": "style",
+    "order": "order",
     "side": "side",
     "challenge": "challenge",
 }
@@ -264,6 +391,23 @@ PROBE_EXAMPLES = {
         ),
     ),
     "map": (("the map is cig.wad MAP02", "what map is this", "MAP02. The office."),),
+    "order": (
+        (
+            "his partner told him to stop, and he is standing still",
+            "why did you stop",
+            "You said stop. I'm a good listener. Ask the bots.",
+        ),
+        (
+            "told to ram the wall, he refused at 20 health",
+            "why did you not do it",
+            "Twenty health and company. The wall can wait.",
+        ),
+        (
+            "told to switch to the BFG he does not have",
+            "what are you doing",
+            "Not switching. No BFG to switch to.",
+        ),
+    ),
     "style": (
         (
             "he is playing as a fighter",
@@ -640,6 +784,13 @@ REMARKS = {
     "aside": (0, 2, "Make a dry aside to your partner about how the match is going."),
     "complain": (0, 0.3, "Complain about something, deadpan."),
     "tangent": (0, 0.3, "Drift to something ordinary while you play: {topic}."),
+    # Only after an order hurt him or ended (remark_form): what it did to him.
+    "order": (
+        0,
+        0,
+        "Tell your partner what their order ({told}) just did: {what}. Complain, needle "
+        "them or gloat, deadpan.",
+    ),
 }
 REMARK_EXAMPLES = {
     "react": (
@@ -721,6 +872,27 @@ REMARK_EXAMPLES = {
         ("a quiet stretch", "All this walking, and not one decent chair."),
     ),
     "tangent": (("a quiet stretch", "Reminds me, the car's due for an oil change."),),
+    "order": (
+        (
+            "told to stop, he lost 40 health standing still",
+            "Really? I'm getting clobbered here.",
+        ),
+        ("told to ram the wall, he hit it", "That was the wall. Happy?"),
+        (
+            "told to stop, twelve seconds of standing",
+            "Twelve seconds of nothing. Can I go now?",
+        ),
+        ("told to stop, he quit at 20 health", "Done standing. I'd like to live."),
+        ("sent for a gun, he picked up the shotgun", "Shotgun. Happy now?"),
+        (
+            "sent after Rambo, he fragged Leone",
+            "Got one. Leone, as it happens. Close enough.",
+        ),
+        (
+            "sent for health, he found none",
+            "No health anywhere. Somebody beat me to it.",
+        ),
+    ),
 }
 # The moment's events that are a bot's doing, for the "bots" form.
 BOT_EVENTS = ("death", "frag", "close_call")
@@ -922,14 +1094,18 @@ def code_fns(
     player: str | None = None,
     shown=(),
     probe: dict | None = None,
+    order: dict | None = None,
 ):
     """Requirements checked in code, as (description, fn -> (ok, reason)).
     ``player``: the partner's words (a reply may open by echoing one);
     ``shown``: the example lines the writer was shown, not to be copied;
     ``probe``: the question about the game state it answers (an answer may be
-    one word, may open with it, and may hold numbers if one is asked)."""
+    one word, may open with it, and may hold numbers if one is asked);
+    ``order``: the partner's order it answers (the state's ``order``: a reply
+    may be one word; a refusal may say his health; one he could not do says
+    why; the stance against its status is :func:`probes.claims`')."""
     lo, hi = (4, 16) if kind == "reply" else (4, 14)
-    if probe is not None:
+    if probe is not None or order is not None:
         lo = 1
     echo = set(words(player or ""))
 
@@ -973,8 +1149,10 @@ def code_fns(
                     "for each, that reads the scoreboard aloud."
                 )
             return True, ""
-        listy = len(parts) >= 3 and sizes[len(sizes) // 2] <= 3
-        many = probes.facts_said(c) >= (4 if probe is not None else 3)
+        # A refusal's reason comes in fragments ("Eleven health, under fire, no").
+        refusing = order is not None and order["status"] == "refused"
+        listy = len(parts) >= 3 and sizes[len(sizes) // 2] <= 3 and not refusing
+        many = probes.facts_said(c) >= (4 if probe is not None or refusing else 3)
         return not (listy or many), (
             "That reads as a status report. Say one thought, in a natural sentence, "
             "with at most two facts from the game state."
@@ -1028,6 +1206,11 @@ def code_fns(
             if w and q and len(w & q) / len(w | q) > 0.4:
                 return False, "Too close to the example; write your own line."
         return True, ""
+
+    def why_not(x):
+        return probes.says_why(clean(x), order), (
+            f"Say why you can't: {order['why']}, in your own words."
+        )
 
     def stock(x):
         hit = [s for s in STOCK if s in clean(x).lower()]
@@ -1089,10 +1272,12 @@ def code_fns(
         ("Speaks as himself (I, me)", first_person),
         ("Not a copy of the example", not_copy),
     ]
-    if probe is None:
+    if probe is None and order is None:
         fns.insert(1, ("No status-report opening", opening))
-    if not numeric(probe):
+    if not numeric(probe) and not (order and order["status"] == "refused"):
         fns.insert(1, ("No numbers", numbers))
+    if order is not None and order["status"] == "cant":
+        fns.insert(1, ("Says why he can't", why_not))
     if kind == "reply":
         fns.insert(1, ("At most three sentences", sentences))
     return fns
@@ -1373,8 +1558,45 @@ def allowed(m: dict) -> list[str]:
     return [k for k, (_, _, when) in UTTERANCES.items() if ok[when]]
 
 
+def order_what(state: dict, m: dict) -> dict:
+    """For an order remark: the order told, and what it just did to him."""
+    o = state.get("order")
+    if not o:
+        return {"told": "", "what": ""}
+    events = set(m.get("events") or ())
+    if o.get("got") and o["told"].startswith("hunt"):
+        sent = o["told"][len("hunt ") :]
+        what = f"you fragged {o['got']}" + (
+            f", though you were sent after {sent}"
+            if sent not in ("a bot", o["got"])
+            else ""
+        )
+    elif o.get("got"):
+        what = f"you got the {o['got']}"
+    elif o.get("why") in ("found none", "no frag"):
+        what = {"found none": "you looked and found none", "no frag": "no frag"}[
+            o["why"]
+        ] + f" in {o['seconds_ago']} seconds"
+    elif "order_hurts" in events and o["status"] == "doing":
+        what = f"you lost {o.get('health_lost', 0)} health obeying it, and still are"
+    elif o.get("hit_wall"):
+        what = "you ran into the wall, as told"
+    elif o["status"] == "refused":
+        what = f"you quit halfway: {o.get('why')}"
+    elif o["told"] == "stop" and o["status"] == "done":
+        what = f"you stood still {o['seconds_ago']} seconds and nobody called it off"
+    else:
+        what = f"it is {o['status']}" + (f" ({o['why']})" if o.get("why") else "")
+    return {"told": o["told"], "what": what}
+
+
 def remark_form(m: dict, rng) -> str:
-    """His own line's form, by the moment's cue."""
+    """His own line's form, by the moment's cue (after an order hurt him or
+    ended, what it did)."""
+    if {"order_hurts", "order_done"} & set(m.get("events") or ()) and m["tool"].get(
+        "order"
+    ):
+        return "order"
     col = 0 if m.get("cue", "event") == "event" else 1
     bots = any(e.get("type") in BOT_EVENTS for e in m.get("moment") or ())
     forms = [k for k in REMARKS if REMARKS[k][col] > 0 and (k != "bots" or bots)]
@@ -1591,9 +1813,19 @@ def run_match(match: dict, args, write, pool: list[dict], weights: dict) -> int:
         past = [ex.events for ex in conv]
         kind, utype, player, said, others, moves = "remark", None, None, None, [], []
         probe = None
+        order = state.get("order") if m.get("order") else None
         last = conv.exchanges[-1] if len(conv) else None
         roll = rng.random()
-        if roll < args.probe_rate:
+        # An order hurt him or ended: his own word on it, not a question.
+        order_cue = bool(
+            {"order_hurts", "order_done"} & set(m.get("events") or ())
+            and state.get("order")
+        )
+        if order is not None:  # the partner gave an order: these are its words
+            kind, utype, player = "reply", "order", heard(m["order"]["said"])
+        elif order_cue:
+            pass
+        elif roll < args.probe_rate:
             types = probes.allowed(state)
             ptype = rng.choices(types, [weights[t] for t in types])[0]
             probe = probes.make(ptype, state, rng)
@@ -1645,6 +1877,25 @@ def run_match(match: dict, args, write, pool: list[dict], weights: dict) -> int:
                 },
                 **JUDGE_REPLY,
             }
+        elif order is not None:
+            st = order["status"] if order["status"] in ORDER_HOW else "done"
+            sit, ex_said, ex_line = rng.choice(ORDER_EXAMPLES[st])
+            moves = [f"order_{st}"]
+            how = (
+                ORDER_HOW[st].format(told=order["told"], why=order.get("why"))
+                + ORDER_FORM
+                + f' For example, when {sit} and the partner said "{ex_said}", he '
+                f'said: "{ex_line}" Write your own line; do not reuse that one.'
+            )
+            task = REPLY_TASK.format(
+                persona=PERSONA, context=context, player=player, how=how, lo=1
+            )
+            status = ORDER_STATUS[st].format(why=order.get("why"))
+            questions = {
+                **JUDGE_ALL,  # "funny": the order is where the humor is
+                **JUDGE_REPLY,
+                "takes_order": JUDGE_ORDER.format(told=order["told"], status=status),
+            }
         elif kind == "reply":
             if not moves:
                 pool_moves = TYPE_MOVES.get(utype) or [
@@ -1673,7 +1924,9 @@ def run_match(match: dict, args, write, pool: list[dict], weights: dict) -> int:
         else:
             moves = [remark_form(m, rng)]
             sit, ex_line = rng.choice(REMARK_EXAMPLES[moves[0]])
-            desc = REMARKS[moves[0]][2].format(topic=rng.choice(TANGENTS))
+            desc = REMARKS[moves[0]][2].format(
+                topic=rng.choice(TANGENTS), **order_what(state, m)
+            )
             how = (
                 f'{desc} For example, when {sit}: "{ex_line}" Write your own line; do '
                 "not reuse that one."
@@ -1685,7 +1938,7 @@ def run_match(match: dict, args, write, pool: list[dict], weights: dict) -> int:
             questions.update(JUDGE_SPECIFIC)
         reqs = [
             req(d, validation_fn=simple_validate(f))
-            for d, f in code_fns(kind, prev, player, (ex_line,), probe)
+            for d, f in code_fns(kind, prev, player, (ex_line,), probe, order)
         ]
         if probe is not None:
             reqs.insert(
@@ -1707,7 +1960,7 @@ def run_match(match: dict, args, write, pool: list[dict], weights: dict) -> int:
                 validation_fn=simple_validate(judge_fn(judge, jctx, questions, args)),
             )
         )
-        if kind == "reply" and probe is None:
+        if kind == "reply" and probe is None and order is None:
             reqs.append(
                 req(
                     "Answers the partner's words (swap test)",
@@ -1753,6 +2006,7 @@ def run_match(match: dict, args, write, pool: list[dict], weights: dict) -> int:
                 "kind": kind,
                 "utype": utype,
                 "probe": probe,
+                "order": m.get("order"),  # the partner's order it answers
                 "player": player,
                 "said": said,
                 "others": others,

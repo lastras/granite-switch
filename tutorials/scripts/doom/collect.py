@@ -25,6 +25,16 @@ soft labels: its whole action distribution). A **driver** chooses the actions:
 ``--stats-only`` with 10-minute matches is the evaluation (``--timeout-s 600``,
 the default). Tics while the player is dead need no decision and produce no row.
 
+``--orders data/orders/train.jsonl`` (``--policy teacher``): a scripted partner
+gives the player orders (:mod:`orders`), one every 15-40 s, in words from the
+orders data (as speech recognition writes them), and the match's
+:class:`orders.Orders` carries them out as the live game worker does: the
+narrator's data then has the orders' real consequences (stopped under fire,
+the wall rammed, an order refused at low health; ``--orders-low`` holds some
+risky ones back until he is low and under fire). Rows then hold the executed
+action and the tracker's facts with the order; the labels follow the style
+he plays. Not game-adapter training data.
+
 The takeover test: ``--takeover-s 30`` hands the game from the student to the
 teacher after 30 s; ``--mark-s 30`` records frags, deaths and damage at 30 s in
 each stats row, so the teacher's play after a student prefix can be compared
@@ -72,9 +82,12 @@ from doom_env import (
 )
 from expert import BEHAVIORS, PLAN_EVERY_TICS, Expert
 from history import History, critic_labels, probe_label
+from orders import RISKY, Orders, order_arg, refusal
 from talk import Tracker
 
 RESOLUTION = "640X480"  # one setting everywhere: collection, bench and demo
+ORDER_GAP_S = (15.0, 40.0)  # --orders: seconds between the partner's orders
+LOW_WAIT_S = 20.0  # an order held for low health waits at most this long
 
 
 class _Noise:
@@ -176,7 +189,12 @@ class _Match:
         self.deaths: list[float] = []
         self.video = _writer(Path(task["video"])) if task["video"] else None
         self.obs = self.env.reset(seed=task["seed"])
-        self.tracker = Tracker(match_s=task["timeout"] / TIC_HZ)  # the brief's facts
+        # The partner's orders (--orders): [tick, kind, arg, words, when], in order.
+        self.sched = [list(x) for x in task.get("orders") or ()]
+        self.orders = Orders(self.style) if task.get("orders") is not None else None
+        self.tracker = Tracker(  # the brief's facts
+            match_s=task["timeout"] / TIC_HZ, orders=self.orders
+        )
         self.tracker.update(self.obs)
         self.teacher.reset()
         self.agree = self.decided = 0
@@ -186,7 +204,8 @@ class _Match:
     def labels(self):
         """Teacher labels for the current live tic, plus the row skeleton."""
         obs = self.obs
-        move, weapon = self.teacher.label(obs, self.style)
+        style = self.orders.style if self.orders is not None else self.style
+        move, weapon = self.teacher.label(obs, style)
         plan = obs.tick % PLAN_EVERY_TICS == 0
         row = {
             "b": self.style,
@@ -216,6 +235,29 @@ class _Match:
             }
         if self.video is not None and frame:
             self.video.append_data(self.env.frame())
+
+    def give_orders(self) -> None:
+        """The partner's orders due now (after this tic's facts were taken, as
+        the live server's arrive after the tic's state): ``when`` "at" on its
+        tick; "low" once he is low and under fire (where a risky order is
+        refused), at most LOW_WAIT_S later."""
+        t = self.obs.tick
+        while self.sched and t >= self.sched[0][0]:
+            tick, kind, arg, said, when = self.sched[0]
+            low = refusal(kind, self.obs) is not None
+            if when == "low" and not low and t < tick + LOW_WAIT_S * TIC_HZ:
+                return
+            self.sched.pop(0)
+            self.orders.give(kind, arg, said, self.obs)
+            for later in self.sched:  # the gaps after a held order stay as drawn
+                later[0] += t - tick
+
+    def play(self, action: str, slot: int | None) -> tuple[str, int | None]:
+        """The action and slot to play: the orders' override, if one runs."""
+        if self.orders is None:
+            return action, slot
+        self.give_orders()
+        return self.orders.act(self.obs, action, slot)
 
     def advance(self, action: str, weapon: int | None, row: dict | None) -> None:
         """Apply ``action`` for this tic; history and bookkeeping follow."""
@@ -262,7 +304,39 @@ class _Match:
                 "best_bot": s.best_bot[1] - self.mark["best_bot"],
             }
         history = {"b": self.style, "ep": self.task["ep"], "entries": self.hist_all}
-        return {"rows": self.rows, "history": history, "stats": stats}
+        out = {"rows": self.rows, "history": history, "stats": stats}
+        if self.orders is not None:
+            out["orders"] = self.orders.log
+            stats["orders"] = {
+                k: sum(o["status"] == k for o in self.orders.log)
+                for k in ("done", "doing", "refused", "cant", "cancelled")
+            }
+        return out
+
+
+def order_schedule(pool: list[dict], rng: random.Random, timeout: int, low: float):
+    """The partner's orders for one match (``--orders``): one every 15-40 s,
+    each kind as likely, in words from the orders data (``pool``: its rows,
+    as speech recognition writes them); a stop is often called off ("go") a
+    few seconds later; ``low``: the share of risky orders held back until he
+    is low and under fire. Rows ``[tick, kind, arg, words, when]``."""
+    by: dict[str, list[str]] = {}
+    for r in pool:
+        if r["label"] != "none":
+            by.setdefault(r["label"], []).append(r["text"])
+    kinds = sorted(k for k in by if k != "go")
+    out, t = [], rng.uniform(8.0, 25.0) * TIC_HZ
+    while t < timeout - 5 * TIC_HZ:
+        k = rng.choice(kinds)
+        said = rng.choice(by[k])
+        when = "low" if k in RISKY and rng.random() < low else "at"
+        out.append([int(t), k, order_arg(k, said), said, when])
+        if k == "stop" and "go" in by and rng.random() < 0.6:
+            t += rng.uniform(3.0, 10.0) * TIC_HZ
+            said = rng.choice(by["go"])
+            out.append([int(t), "go", None, said, "at"])
+        t += rng.uniform(*ORDER_GAP_S) * TIC_HZ
+    return out
 
 
 # ── Teacher-driven path: each worker plays whole matches on its own ─────────────
@@ -274,7 +348,7 @@ def _teacher_episode(task: dict) -> dict:
     while not m.obs.done:
         m.record()
         if m.obs.dead:
-            m.advance("wait", None, None)
+            m.advance(*m.play("wait", None), None)
             continue
         move, weapon, plan, row = m.labels()
         row["state"] = state_text(m.obs)
@@ -284,7 +358,7 @@ def _teacher_episode(task: dict) -> dict:
         else:
             act = m.noise(row["expert"])
             slot = int(row["weapon"]) if plan else None
-        m.advance(act, slot, row)
+        m.advance(*m.play(act, slot), row)
     return m.finish()
 
 
@@ -524,8 +598,22 @@ def main() -> None:
     ap.add_argument(
         "--stats-only", action="store_true", help="Do not write per-tic rows"
     )
+    ap.add_argument(
+        "--orders",
+        type=Path,
+        help="Orders data (orders_data.py rows): a scripted partner gives orders",
+    )
+    ap.add_argument(
+        "--orders-low",
+        type=float,
+        default=0.3,
+        help="--orders: share of risky orders held until he is low and under fire",
+    )
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
+    if args.orders and args.policy != "teacher":
+        raise SystemExit("--orders: with --policy teacher only")
+    pool = [json.loads(x) for x in open(args.orders)] if args.orders else None
 
     args.out = args.out.resolve()  # workers run in their own directories
     args.out.mkdir(parents=True, exist_ok=True)
@@ -571,6 +659,11 @@ def main() -> None:
                     "video": str(args.out / "videos" / f"{b}_ep{ep}.mp4")
                     if ep < args.record
                     else None,
+                    "orders": order_schedule(
+                        pool, rng, int(secs * TIC_HZ), args.orders_low
+                    )
+                    if pool
+                    else None,
                 }
             )
 
@@ -600,7 +693,8 @@ def main() -> None:
             f"frags {s['frags']:>3} deaths {s['deaths']:>3} margin {s['margin']:>+4} "
             f"rank {s['rank']} (best bot {s['best_bot'][0]} {s['best_bot'][1]}) "
             f"pickups {s['pickups']:>3}"
-            + (f" agree {100 * s['agreement']:.1f}%" if "agreement" in s else ""),
+            + (f" agree {100 * s['agreement']:.1f}%" if "agreement" in s else "")
+            + (f" orders {s['orders']}" if "orders" in s else ""),
             flush=True,
         )
 

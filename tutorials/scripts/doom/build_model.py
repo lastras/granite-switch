@@ -290,7 +290,7 @@ def verify_lines(pol, rows: list[dict]) -> dict:
 def verify(
     runs: Path,
     model: str,
-    router_runs: Path | None,
+    orders_runs: Path | None,
     limit: int,
     layout: str = "log",
     narrator: Path | None = None,
@@ -299,7 +299,7 @@ def verify(
     held-out rows each adapter's training run wrote (history ids + state); the
     narrator's lines (:func:`verify_lines`); then the live regime against cold
     batches (:func:`live_check`)."""
-    from policy import ROUTER, VLLMPolicy
+    from policy import ORDERS, VLLMPolicy
 
     # The demo's own engine settings: the FA3 schedule fault showed only with
     # the default max_num_seqs (16), not with 64.
@@ -310,12 +310,12 @@ def verify(
         rows = [json.loads(x) for x in open(narrator / "heldout_preds.jsonl")]
         report[NARRATOR] = verify_lines(pol, rows[:limit])
     for name in ADAPTERS:
-        root = router_runs if (name == ROUTER and router_runs) else runs
+        root = orders_runs if (name == ORDERS and orders_runs) else runs
         path = root / name / "heldout_preds.jsonl"
         rows = [json.loads(line) for line in open(path)][:limit]
-        if name == ROUTER:
-            routes = [pol.route(r["state"]) for r in rows]
-            got, dists = [x.adapter for x in routes], [x.probs for x in routes]
+        if name == ORDERS:
+            said = [pol.order(r["state"]) for r in rows]
+            got, dists = [x.kind for x in said], [x.probs for x in said]
         else:
             got, dists = [], []
             for i in range(0, len(rows), 64):
@@ -379,7 +379,7 @@ def main() -> None:
         "--runs", type=Path, required=True, help="Dir holding <name>/ adapters"
     )
     c.add_argument(
-        "--router-runs", type=Path, help="Where the router adapter lives if elsewhere"
+        "--orders-runs", type=Path, help="Where the orders adapter lives if elsewhere"
     )
     c.add_argument(
         "--asr-model",
@@ -403,7 +403,7 @@ def main() -> None:
         )
     v = sub.add_parser("verify", help="Composed checkpoint vs PEFT on held-out states")
     v.add_argument("--runs", type=Path, required=True)
-    v.add_argument("--router-runs", type=Path)
+    v.add_argument("--orders-runs", type=Path)
     v.add_argument("--model", required=True)
     v.add_argument("--limit", type=int, default=5000)
     v.add_argument("--layout", default="log", help="The adapters' prompt layout")
@@ -415,7 +415,7 @@ def main() -> None:
         rep = verify(
             args.runs,
             args.model,
-            args.router_runs,
+            args.orders_runs,
             args.limit,
             args.layout,
             args.narrator,
@@ -439,8 +439,8 @@ def main() -> None:
         adapters = {}
         for name in ADAPTERS:
             root = (
-                args.router_runs
-                if (name == "router" and args.router_runs)
+                args.orders_runs
+                if (name == "orders" and args.orders_runs)
                 else args.runs
             )
             adapters[name] = root / name

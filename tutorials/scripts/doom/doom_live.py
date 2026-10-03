@@ -6,10 +6,13 @@ the narrator, the ASR cascade) and the player's voice run on one GPU node; a
 laptop (``doom_pipecat.py``) connects over one websocket, carried by ``ssh -L``,
 and turns it into WebRTC for the browser. What you say arrives as one audio
 segment per utterance (the laptop's VAD cuts them); the model's ASR transcribes
-it inside the narrator's request (:meth:`engine.Game.player_said`), and the
-narrator answers, from his own conversation with you and the game state (the
-output of his ``get_game_state`` call, :func:`talk.game_state`). Without you he
-speaks soon after a salient event or after a silence (:class:`talk.TalkClock`).
+it inside the orders adapter's request (:meth:`engine.Game.player_said`): an
+order (stop, turn, ram the wall, switch guns, play it safe, ...: :mod:`orders`)
+goes to the game at once, and the panel shows it; then the narrator answers,
+from his own conversation with you and the game state (the output of his
+``get_game_state`` call, :func:`talk.game_state`, which says what you told him
+and whether he is doing it). Without you he speaks soon after a salient event,
+after a silence, or when an order hurts or ends (:class:`talk.TalkClock`).
 The run log (``--log-dir``) keeps that state with every line, so any answer can
 be checked afterwards (:mod:`probes`).
 
@@ -39,9 +42,10 @@ The websocket, at ``/ws`` (one client at a time; a new one replaces the old):
     python doom_live.py serve --model models/doom-h-alora-narr4-audio --port 8765 \\
         --tts turbo --tts-python tts-env/bin/python --voice-ref voices/him.wav
     # no laptop: a scripted check, with spoken questions (q_<name>.wav): some
-    # referring back ("who was that", two lines after a death or a frag), and
+    # referring back ("who was that", two lines after a death or a frag),
     # probes of the state (q_probe_<type>.wav), each answer checked against the
-    # state he was given
+    # state he was given, and spoken orders (q_order_<name>.wav), each checked
+    # in the game and against his reply
     python doom_live.py smoke --url ws://localhost:8765/ws --questions out/b0
 """
 
@@ -75,11 +79,12 @@ from conversation import CONV_EXCHANGES, Conversation
 from doom_env import BOT_SETS, TIC_HZ
 from engine import AUDIO_HZ, AsyncPolicy, Game, SharedFrame
 from expert import BEHAVIORS
-from policy import ARMS, CRITIC, NARRATOR, ROUTER, WARM_STATE
+from policy import ARMS, CRITIC, NARRATOR, ORDERS, WARM_STATE
 from talk import sound_tag
 
 TTS_AUTHKEY = b"granite-switch-doom-tts"  # voice_video.TTS_AUTHKEY
-MODELS = ["base", *BEHAVIORS, ARMS, CRITIC, ROUTER, NARRATOR]
+MODELS = ["base", *BEHAVIORS, ARMS, CRITIC, ORDERS, NARRATOR]
+ORDER_SHOWN_S = 4.0  # an order over stays on the panel this long
 _SENTENCE = re.compile(r"(?<=[.?!])\s+")
 
 
@@ -108,7 +113,7 @@ def render_loop(frames_name: str, inbox, out, opts: dict) -> None:
         "text": "",
         "gpu": opts["gpu"],
     }
-    last_tick, talk_until = -1, -1
+    last_tick, talk_until, read_at = -1, -1, set()
     period, due = 1.0 / opts["fps"], time.perf_counter()
     w, h = view.size
     size = (round(w * opts["scale"]) // 2 * 2, round(h * opts["scale"]) // 2 * 2)
@@ -129,20 +134,32 @@ def render_loop(frames_name: str, inbox, out, opts: dict) -> None:
             if msg[0] == "talk":
                 talk_until = msg[1]
                 continue
-            _, tick, d, ms, state, stats = msg  # a decision
-            style = info["adapter"]
+            if msg[0] == "read":  # the orders adapter read the watcher's words
+                read_at.add(msg[1])
+                continue
+            _, tick, d, ms, state, stats, style, order = msg  # a decision
+            info["adapter"] = style
             # One request per adapter asked (the base model only when it writes a
             # line itself, in a checkpoint without the narrator).
             talker = {opts["talker"]}
+
+            def ran(t: int, asked: set) -> set:
+                return (
+                    asked
+                    | (talker if t <= talk_until else set())
+                    | ({ORDERS} if t in read_at else set())
+                )
+
             for t in range(last_tick + 1, tick):  # tics with no decision (dead, busy)
                 view.heat.push({}, style, False, info["critic"])
-                view.act.push(talker if t <= talk_until else set())
+                view.act.push(ran(t, set()))
             last_tick = tick
+            read_at = {t for t in read_at if t > tick}
             probs = d[style][1]
             critic = d[CRITIC][1] if CRITIC in d else {}
             view.heat.push(probs, style, True, critic)
-            active = set(d) | (talker if tick <= talk_until else set())
-            view.act.push(active)
+            view.act.push(ran(tick, set(d)))
+            info["order"] = order
             lat.append(ms)
             last_second.append(ms)
             hud = re.match(
@@ -315,7 +332,7 @@ class Live:
         if old is not None:
             # Nothing of the old match is said any more: not a line it is still
             # writing, nor the queued lines his voice has not reached.
-            old.on_line = old.on_decision = None
+            old.on_line = old.on_decision = old.on_read = None
             self.cancelled.update(range(1, self.line_id + 1))
             self.said_at.clear()
             if not old.done:
@@ -330,7 +347,11 @@ class Live:
         }
         self.seed += 1
         g = Game(0, spec, self.pol, a.idle_s, autostart=start, conv_n=a.conv_exchanges)
-        g.on_decision, g.on_line = self.on_decision, self.on_line
+        g.on_decision, g.on_line, g.on_read = (
+            self.on_decision,
+            self.on_line,
+            self.on_read,
+        )
         self.game, self.last_death, self.frags = g, None, 0
         self.record(
             {
@@ -381,7 +402,8 @@ class Live:
 
     def on_decision(self, tick: int, d: dict, ms: float) -> None:
         self.ms.append(ms)
-        f = self.game.facts or {}
+        g = self.game
+        f = g.facts or {}
         board = f.get("board") or [["", 0]]
         me = f.get("frags", 0)
         stats = {
@@ -390,9 +412,15 @@ class Live:
             "rank": 1 + sum(n > me for _, n in board),
             "best_bot": board[0],
         }
-        if self.game.talking:
+        if g.talking:
             self.tell(("talk", tick + 1))
-        self.tell(("dec", tick, d, ms, self.game.state or "", stats))
+        o = f.get("order")
+        shown = o and (
+            o["status"] == "doing" or tick - o["end"] <= ORDER_SHOWN_S * TIC_HZ
+        )
+        order = {k: o[k] for k in ("told", "status", "why")} if shown else None
+        style = next(a for a in d if a in BEHAVIORS)  # the one this decision asked
+        self.tell(("dec", tick, d, ms, g.state or "", stats, style, order))
         death = f.get("last_death")
         if death and death != self.last_death:
             self.last_death = death
@@ -411,9 +439,15 @@ class Live:
             self.log.write(json.dumps(row) + "\n")
             self.log.flush()
 
+    def on_read(self, tick: int, order: dict) -> None:
+        """The orders adapter read what you said (an order or not)."""
+        self.tell(("read", tick))
+        if order["kind"] != "none":
+            print(f"  order {order['kind']!r} from {order['heard']!r}", flush=True)
+
     def on_line(self, x: dict) -> None:
-        keys = ("tick", "cue", "heard", "line", "ms", "state", "moment", "brief")
-        self.record({"type": "line", **{k: x[k] for k in keys}})
+        keys = ("tick", "cue", "heard", "order", "line", "ms", "state", "moment")
+        self.record({"type": "line", **{k: x[k] for k in (*keys, "brief")}})
         self.line_id += 1
         lid = self.line_id
         if x["heard"]:
@@ -430,14 +464,21 @@ class Live:
             {
                 "type": "line",
                 "id": lid,
-                **{k: x[k] for k in ("line", "heard", "cue", "ms", "state")},
+                **{k: x[k] for k in ("line", "heard", "cue", "ms", "state", "order")},
             }
         )
         if x["heard"]:
             await self.send({"type": "heard", "text": x["heard"]})
+        o = x.get("order") or {}
+        told = (
+            f" [order {o['kind']}: {o.get('status')}, {o.get('ms')} ms]"
+            if o.get("kind") not in (None, "none")
+            else ""
+        )
         print(
             f"t{x['tick'] / TIC_HZ:6.1f} {x['cue']:<7} {x['ms']:4d} ms"
             + (f" [you: {x['heard']}]" if x["heard"] else "")
+            + told
             + f" {x['line']}",
             flush=True,
         )
@@ -525,6 +566,8 @@ async def serve(args) -> None:
     # The ASR loads on its first clip: a second of quiet noise, now, not on yours.
     hum = np.random.default_rng(0).normal(0, 1e-3, AUDIO_HZ).astype(np.float32)
     await pol.talk(Conversation(), WARM_STATE, hum)
+    if pol.kit.orders:  # where your words go first
+        await pol.order(hum)
     voice = Voice(args) if args.tts_python else None
     gpu = torch.cuda.get_device_name(0).replace("NVIDIA ", "")
     live = Live(args, pol, voice, gpu)
@@ -562,6 +605,16 @@ SMOKE_PROBES = (
     "rank",
     "armor",
 )
+# Spoken orders for the smoke test: q_order_<name>.wav -> the order it gives.
+SMOKE_ORDERS = {
+    "stop": "stop",
+    "left": "left",
+    "ram": "ram",
+    "shotgun": "weapon",
+    "safe": "cautious",
+    "gun": "fetch",
+    "rambo": "hunt",
+}
 
 
 async def smoke(args) -> None:
@@ -571,12 +624,15 @@ async def smoke(args) -> None:
     after the first death (the reply should name the killer) and after a frag
     with no death since (the victim is not known: it should name nobody). "who
     killed you" right after the next death. Then the spoken probes
-    (q_probe_<type>.wav, :data:`SMOKE_PROBES`), one every 12 s. Every answer to
-    a question about the game is checked against the state he was given
-    (:func:`probes.verify`, the state the server sends with his line). Prints
-    each reply (the transcript, the line, the verdict) and the latency from
-    the end of the question to his first audio; saves his audio, a frame and
-    smoke.json."""
+    (q_probe_<type>.wav, :data:`SMOKE_PROBES`), one every 12 s, then the
+    spoken orders (q_order_<name>.wav, :data:`SMOKE_ORDERS`), one every 10 s.
+    Every answer to a question about the game is checked against the state he
+    was given (:func:`probes.verify`, the state the server sends with his
+    line); every order, that the orders adapter read it, the game took it
+    (its status in his state) and his reply's stance matches
+    (:func:`probes.order_stance`). Prints each reply (the transcript, the
+    line, the verdict) and the latency from the end of the question to his
+    first audio; saves his audio, a frame and smoke.json."""
     import wave
 
     import aiohttp
@@ -602,6 +658,12 @@ async def smoke(args) -> None:
     plan += [(75 + 12 * i, f"probe_{t}") for i, t in enumerate(spoken)]
     if not spoken:
         print("no q_probe_<type>.wav: no spoken probes", flush=True)
+    said = [k for k in SMOKE_ORDERS if (args.questions / f"q_order_{k}.wav").exists()]
+    t_orders = 75 + 12 * len(spoken) + 6
+    plan += [(t_orders + 10 * i, f"order_{k}") for i, k in enumerate(said)]
+    if not said:
+        print("no q_order_<name>.wav: no spoken orders", flush=True)
+    t_end = t_orders + 10 * len(said)
     # Back-references waiting to be asked: [what, the killer or None, lines to wait].
     recall: dict[str, list] = {}
     done: set[str] = set() if back else {"death", "frag"}
@@ -681,12 +743,7 @@ async def smoke(args) -> None:
             finished = not plan and not recall and not asked and deaths >= 1
             if el > args.seconds or (finished and done == {"death", "frag"}):
                 break
-            if (
-                not plan
-                and not asked
-                and el > 75 + 12 * len(spoken) + 20
-                and deaths >= 1
-            ):
+            if not plan and not asked and el > t_end + 14 and deaths >= 1:
                 break
     for lid, parts in audio.items():
         with wave.open(str(args.out / f"line_{lid}.wav"), "wb") as w:
@@ -701,7 +758,7 @@ async def smoke(args) -> None:
     # What each question asks about the game state, checked against the state
     # he was given for the line that answered it.
     as_probe = {"who_killed": "killer_now", "score": "score", "back_frag": "victim"}
-    verdicts, out = Counter(), []
+    verdicts, out, ordered = Counter(), [], Counter()
     for name, killer, t_ask, m in replies:
         first = m.get("first")
         said = sorted(n for n in bots if re.search(rf"\b{n}\b", m["line"]))
@@ -720,6 +777,19 @@ async def smoke(args) -> None:
                 verdicts[verdict] += 1
             else:
                 check += f"  [{ptype}: not askable in this state]"
+        if name.startswith("order_"):
+            want = SMOKE_ORDERS[name[len("order_") :]]
+            o = m.get("order") or {}
+            took = o.get("kind") == want and o.get("status") is not None
+            stance, why = probes.order_stance(m["line"], state or {})
+            if took and o.get("status") == "cant":
+                stance = stance and probes.says_why(m["line"], state["order"])
+            ordered["carried out" if took else "not carried out"] += 1
+            ordered["stance right" if took and stance else "stance wrong"] += took
+            check += (
+                f"  [order {want}: read {o.get('kind')}, {o.get('status')}, "
+                f"{o.get('ms')} ms to the game; stance {'ok' if stance else 'WRONG ' + why}]"
+            )
         ok_claims = probes.claims(m["line"], state)[0] if state else None
         if ok_claims is False:
             check += "  [CLAIMS: " + probes.claims(m["line"], state)[1] + "]"
@@ -742,8 +812,9 @@ async def smoke(args) -> None:
             )
         )
     print(f"SMOKE probes: {dict(verdicts)}", flush=True)
+    print(f"SMOKE orders: {dict(ordered)}", flush=True)
     (args.out / "smoke.json").write_text(
-        json.dumps({"verdicts": verdicts, "replies": out}, indent=1)
+        json.dumps({"verdicts": verdicts, "orders": ordered, "replies": out}, indent=1)
     )
 
 

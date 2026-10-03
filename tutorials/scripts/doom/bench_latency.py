@@ -22,7 +22,7 @@ token sits at position 0 so each adapter has its own KV. Scenarios:
   vLLM share the prefix inside one batch? (Per-request cached tokens.)
 * ``kv``: KV blocks one game needs with N adapters, and how many such games fit.
 * ``games``: N games deciding in the same engine step, each with its history.
-* ``router``: one-token instruction routing.
+* ``orders``: one-token reading of the partner's words (the orders adapter).
 * ``live``: turbo play with fighter + critic + planner, env in the loop.
 * ``talk`` / ``notalk``: N games in real time (a tic every 28.6 ms each), with
   and without each game's base model speaking a line every ``--talk-every`` s.
@@ -56,12 +56,12 @@ from expert import BEHAVIORS, PLAN_EVERY_TICS, Expert
 from history import History, said_entry
 from policy import ARMS, CRITIC, GAME_ADAPTERS, VLLMPolicy, state_text
 
-INSTRUCTIONS = [
-    "go kill everything",
-    "stop fighting and grab health",
-    "pick up all the ammo and armor you can find",
+SAID = [  # what the partner might say (orders, and not)
+    "stop right there",
+    "turn left",
+    "ram the wall",
     "play it safe for a while",
-    "hunt them down",
+    "what is the score",
 ]
 FIGHTER, CAUTIOUS = BEHAVIORS[0], BEHAVIORS[1]
 
@@ -427,9 +427,9 @@ def bench_talk(
     return out
 
 
-def bench_router(pol: VLLMPolicy, n: int) -> dict:
-    routes = [pol.route(INSTRUCTIONS[i % len(INSTRUCTIONS)]) for i in range(n)]
-    return {"route_ms": pct([r.ms for r in routes])}
+def bench_orders(pol: VLLMPolicy, n: int) -> dict:
+    orders = [pol.order(SAID[i % len(SAID)]) for i in range(n)]
+    return {"order_ms": pct([o.ms for o in orders])}
 
 
 def bench_live(pol: VLLMPolicy, seconds: float, seed: int) -> dict:
@@ -536,7 +536,7 @@ def main() -> None:
     ap.add_argument("--talk-tokens", type=int, default=20)
     ap.add_argument(
         "--scenarios",
-        default="reflex,multi,nadapters,switch,inbatch,kv,games,router,live",
+        default="reflex,multi,nadapters,switch,inbatch,kv,games,orders,live",
     )
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--json", type=Path)
@@ -601,7 +601,7 @@ def main() -> None:
         ("inbatch", lambda: bench_inbatch(pol, trace, 30)),
         ("kv", lambda: bench_kv(pol, trace)),
         ("games", lambda: bench_games(pol, trace, sizes, reps=300)),
-        ("router", lambda: bench_router(pol, 200)),
+        ("orders", lambda: bench_orders(pol, 200)),
         (
             "notalk",
             lambda: bench_talk(pol, trace, talk_sizes, args.talk_seconds, 0, 0),
@@ -621,7 +621,7 @@ def main() -> None:
     ]
     gct = GCTimer()
     for name, fn in runs:
-        if name not in scen or (args.plain_base and name in ("switch", "router")):
+        if name not in scen or (args.plain_base and name in ("switch", "orders")):
             continue
         print(f"\n== {name}", flush=True)
         # Scenarios replay the same trace: start each from an empty prefix cache.

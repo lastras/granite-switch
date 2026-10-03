@@ -2,8 +2,8 @@
 """Record the model playing, with a telemetry panel, as an MP4.
 
 A script of segments drives the video. Each segment is either an adapter name
-or a free-text instruction (routed by the router adapter), plus seconds of game
-time::
+or a free-text instruction (read by the orders adapter: a style order switches
+the style adapter; the video plays no maneuvers), plus seconds of game time::
 
     python record_video.py --model models/doom-round0 --out out/granite_doom.mp4 \
         --segment "fighter" 20 \
@@ -44,7 +44,7 @@ from doom_env import AUDIO_HZ, MATCH_TICS, TIC_HZ, TIC_MS, DoomEnv
 from expert import BEHAVIORS, PLAN_EVERY_TICS
 from history import History
 from overlay import KINDS, Overlay
-from policy import ARMS, CRITIC, NARRATOR, ROUTER, make_policy, state_text
+from policy import ARMS, CRITIC, NARRATOR, ORDERS, make_policy, state_text
 from talk import (
     IDLE_S,
     EventLog,
@@ -149,7 +149,7 @@ def main() -> None:
     partner = EventPartner(random.Random(args.seed)) if args.partner_events else None
     # Who writes spoken lines: the narrator adapter, or the base model without one.
     talker = getattr(pol, "talker", None) or "base"
-    models = ["base", *BEHAVIORS, ARMS, CRITIC, ROUTER]
+    models = ["base", *BEHAVIORS, ARMS, CRITIC, ORDERS]
     view = Overlay(models + ([NARRATOR] if talker != "base" else []))
     talk_until, routed = -1, False  # the frame the line writer runs through
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -167,17 +167,19 @@ def main() -> None:
     tag_rng = random.Random(args.seed)
     live, fist = 0, 0  # tics alive, and of those holding the fist
     kind = KINDS.get(getattr(pol, "placement", "base"), "")
+    adapter = BEHAVIORS[0]
     for what, secs in args.segment:
         info: dict = {"instruction": None}
         if what in BEHAVIORS:
             adapter = what
         else:
-            r = pol.route(what)
-            adapter = r.adapter
+            r = pol.order(what)
+            if r.kind in BEHAVIORS:  # a style order; the rest keep the style
+                adapter = r.kind
             routed = True
             info = {
                 "instruction": what,
-                "routed": r.adapter,
+                "routed": r.kind,
                 "route_p": r.prob,
                 "route_ms": r.ms,
             }
@@ -185,7 +187,7 @@ def main() -> None:
         action, critic, plan = "wait", {}, None
         for _ in range(int(float(secs) * TIC_HZ)):
             weapon = None
-            active: set[str] = {ROUTER} if routed else set()  # models run this tic
+            active: set[str] = {ORDERS} if routed else set()  # models run this tic
             routed = False
             log.add(fired)
             if clock is not None:

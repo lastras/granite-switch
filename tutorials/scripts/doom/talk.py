@@ -87,10 +87,14 @@ class Tracker:
     JSON-able snapshot: collect.py stores it with every row and the engine's
     game worker sends it with every state; :func:`game_state` and
     :func:`brief` render it. ``match_s``: the match length, for the time left.
+    ``orders``: the match's :class:`orders.Orders`, whose events (an order
+    given, ended, hurting him) the tracker fires and whose latest order its
+    facts hold, once there is one.
     """
 
-    def __init__(self, match_s: float | None = None):
+    def __init__(self, match_s: float | None = None, orders=None):
         self.match_s = match_s
+        self.orders = orders
         self.tick = 0
         self.frags = self.deaths = 0
         self.bots: dict[str, int] = {}
@@ -213,6 +217,9 @@ class Tracker:
             self._arms = set(obs.arms)
         self._hud = None if obs.dead else (obs.hp, obs.armor, dict(obs.arms))
         self._close_call(obs, fire)
+        if self.orders is not None:
+            for e in self.orders.update(obs):
+                fire(e.pop("kind"), **e)
 
         self.frags, self.deaths = obs.frags, obs.deaths
         best = max(bots.values(), default=0)
@@ -283,7 +290,7 @@ class Tracker:
     def facts(self) -> dict:
         t = self.tick / TIC_HZ
         board = sorted(self.bots.items(), key=lambda kv: (-kv[1], kv[0]))
-        return {
+        out = {
             "t": round(t, 2),
             "left": None if self.match_s is None else max(0, round(self.match_s - t)),
             "frags": self.frags,
@@ -297,6 +304,9 @@ class Tracker:
             "bot_deaths": dict(self.bot_deaths),
             "news": [dict(e) for e in self.news],
         }
+        if self.orders is not None and self.orders.cur is not None:
+            out["order"] = self.orders.facts()
+        return out
 
 
 class EventLog:
@@ -405,6 +415,19 @@ def event_json(e: dict) -> dict | None:
         return {"type": "close_call", "health_lost": e["lost"], "health_left": e["low"]}
     if k == "streak" and e["n"] in STREAK_LEVELS:
         return {"type": "streak", "frags_in_10s": e["n"]}
+    if k in ("order", "order_end"):  # the partner's order: given, then over
+        d = {"type": k, "told": e["told"], "status": e["status"]}
+        if e.get("why"):
+            d["why"] = e["why"]
+        if k == "order_end" and e.get("lost"):
+            d["health_lost"] = e["lost"]
+        if e.get("got"):  # a goal's: what he picked up, whom he fragged
+            d["got"] = e["got"]
+        if "hit_wall" in e:
+            d["hit_wall"] = e["hit_wall"]
+        return d
+    if k == "order_hurts":
+        return {"type": "order_hurts", "told": e["told"], "health_lost": e["lost"]}
     return None
 
 
@@ -456,14 +479,40 @@ def standings(
     ]
 
 
+# An order over this long ago leaves the state (its recent_events stay).
+ORDER_KEEP_S = 20
+
+
+def order_json(o: dict, now: int) -> dict:
+    """The partner's latest order as the tool reports it (``o``: the facts'
+    ``order``, :meth:`orders.Orders.facts`)."""
+    d = {"told": o["told"], "status": o["status"]}
+    if o["why"]:
+        d["why"] = o["why"]
+    if o.get("ended"):  # "go": the order it called off
+        d["called_off"] = o["ended"]
+    d["seconds_ago"] = _ago(now, o["tick"])
+    if o["lost"]:
+        d["health_lost"] = o["lost"]
+    if o.get("hit_wall") is not None:
+        d["hit_wall"] = o["hit_wall"]
+    if o.get("got"):
+        d["got"] = o["got"]
+    return d
+
+
 def game_state(
     state: str, facts: dict, events: list[dict], style: str | None = None
 ) -> dict:
     """What ``get_game_state`` returns at a moment: ``state`` (the state line,
     :func:`policy.state_text`), ``facts`` (:meth:`Tracker.facts`), the match's
     events so far (:class:`EventLog`; later ones are ignored) and ``style``,
-    the game adapter playing (fighter, cautious, collector)."""
+    the game adapter playing (fighter, cautious, collector; once the partner
+    has given an order, the facts' own, which a style order switches)."""
     now = round(facts["t"] * TIC_HZ)
+    order = facts.get("order")
+    if order:
+        style = order["style"]
     me = facts["frags"]
     board = facts["board"]
     nums = {k: int(m.group(1)) for k, r in _NUM.items() if (m := r.search(state))}
@@ -507,6 +556,10 @@ def game_state(
             "style": style,
             "last_moves": list(last.groups()) if last else [],
         }
+    if order and (
+        order["status"] == "doing" or now - order["end"] <= ORDER_KEEP_S * TIC_HZ
+    ):
+        out["order"] = order_json(order, now)
     d = facts["last_death"]
     if d:
         out["last_death"] = {"killer": d["by"] or "unknown"}
@@ -759,6 +812,11 @@ MAJOR = (
     "close_call",
     "drought_ended",
     "weapon",
+    # The partner's order: it hurts him while he obeys ("Really? I'm getting
+    # clobbered here."), or it ends in a way worth a word (the bonk, a stop
+    # that ran out, quitting halfway).
+    "order_hurts",
+    "order_done",
 )
 # A streak is news only as it grows past these (a strong player is on one most
 # of the time).
@@ -767,6 +825,9 @@ MIN_GAP_S = 3.0
 FRAG_GAP_S = 8.0
 IDLE_S = 12.0
 HOLD_S = 1.5  # an event not yet spoken to stays a reason to speak this long
+# ... an order's, longer: it often comes right after his reply to the order.
+ORDER_HOLD_S = 5.0
+ORDER_CUES = ("order_hurts", "order_done")
 
 
 class TalkClock:
@@ -781,15 +842,24 @@ class TalkClock:
         self.pending: list[tuple[int, str]] = []
 
     def event(self, events: list[dict]) -> None:
-        self.pending += [
-            (e["tick"], e["kind"] if e.get("n", 0) in (0, *STREAK_LEVELS) else "frag")
-            for e in events
-        ]
+        for e in events:
+            k = e["kind"]
+            if k == "order_end":  # only an end worth a remark is a cue
+                if not e.get("remark"):
+                    continue
+                k = "order_done"
+            elif e.get("n", 0) not in (0, *STREAK_LEVELS):
+                k = "frag"
+            self.pending.append((e["tick"], k))
 
     def due(self, tick: int) -> dict | None:
         """``{"cue": "event", "events": kinds}`` or ``{"cue": "idle", ...}``, or
         None."""
-        self.pending = [(t, k) for t, k in self.pending if tick - t <= HOLD_S * TIC_HZ]
+        self.pending = [
+            (t, k)
+            for t, k in self.pending
+            if tick - t <= (ORDER_HOLD_S if k in ORDER_CUES else HOLD_S) * TIC_HZ
+        ]
         since = (tick - self.last) / TIC_HZ
         kinds = sorted({k for _, k in self.pending})
         if (since >= MIN_GAP_S and any(k in MAJOR for k in kinds)) or (
@@ -885,21 +955,32 @@ def match_moments(
     limit: int = 0,
     style: str | None = None,
 ) -> list[dict]:
-    """The moments a live game speaks at on its own, in order (the
-    :class:`TalkClock` over the match's rows; ``limit``: the first so many, 0
-    for all). ``rows``: one match's collect.py rows (tick, history length,
-    state, tracker facts); each moment carries its cue, the tool's output
-    (``tool``, :func:`game_state`), what happened since the moment before
-    (``moment``, :func:`moment_events`), the brief, the facts and the last
-    log lines."""
+    """The moments a live game speaks at, in order: the :class:`TalkClock`
+    over the match's rows (``limit``: the first so many, 0 for all), and every
+    order the partner gave (collect.py ``--orders``): his reply comes on the
+    first live tic the order's status is known, as the live game waits for
+    it (cue ``partner``, with ``order``: the order, its status and the
+    partner's words). ``rows``: one match's collect.py rows (tick, history
+    length, state, tracker facts); each moment carries its cue, the tool's
+    output (``tool``, :func:`game_state`), what happened since the moment
+    before (``moment``, :func:`moment_events`), the brief, the facts and the
+    last log lines."""
     talk, log, out, prev, last = TalkClock(idle_s), EventLog(), [], -1, None
     for r in sorted(rows, key=lambda r: r["t"]):
         news = r["facts"]["news"]
         log.add(news)
-        talk.event([e for e in news if prev < e["tick"] <= r["t"]])
+        new = [e for e in news if prev < e["tick"] <= r["t"]]
+        talk.event(new)
         prev = r["t"]
         n = r["hist_n"]
-        if n < 5 or (cue := talk.due(r["t"])) is None:
+        told = [e for e in new if e["kind"] == "order"]
+        if told:
+            e = told[-1]
+            cue = {"cue": "partner", "events": sorted({k for _, k in talk.pending})}
+            cue["order"] = {
+                k: e[k] for k in ("order", "told", "status", "why", "said", "tick")
+            }
+        elif n < 5 or (cue := talk.due(r["t"])) is None:
             continue
         out.append(
             {
@@ -1116,22 +1197,174 @@ def check_tracker() -> None:
         "OK: tracker events, killer, streak, drought, close call, lead, pickups; "
         f"the tool's JSON ({len(json.dumps(js))} chars):\n  {json.dumps(js)}"
     )
+    check_orders()
+
+
+def check_orders() -> None:
+    """The partner's orders through the tracker: their events (given, over,
+    hurting) with indices and in the news, the facts' order, the tool's
+    ``order`` and its recent events, the clock's cues, a past moment's events."""
+    import json
+    from types import SimpleNamespace
+
+    from orders import Orders
+
+    s = {"tick": 0, "hp": 100, "hit": 0, "front": 6.0, "bot": None}
+
+    def obs(**kw):
+        s.update(kw)
+        seen = (
+            [] if s["bot"] is None else [SimpleNamespace(kind="enemy", dist=s["bot"])]
+        )
+        return SimpleNamespace(
+            tick=s["tick"],
+            events=(),
+            dead=False,
+            hp=s["hp"],
+            armor=0,
+            weapon="pistol",
+            slot=2,
+            arms={1: 0, 2: 50},
+            frags=0,
+            deaths=0,
+            priv=SimpleNamespace(scoreboard=[("AI", 0), ("Rambo", 0)]),
+            obits=(),
+            hit=s["hit"],
+            seen=seen,
+            walls=(9, int(s["front"]), 9, 9),
+            face=90,
+        )
+
+    orders = Orders()
+    tr, log, clock = Tracker(match_s=600, orders=orders), EventLog(), TalkClock()
+    line = "hp {hp} armor 0 | pistol 50 | arms 2:50 | see nothing | hit {hit} | last {a} {a}"
+
+    def tic(action="forward", **kw):
+        ob = obs(**kw)
+        fired = tr.update(ob)
+        log.add(fired)
+        clock.event(fired)
+        a, _ = orders.act(ob, action, None)
+        s["tick"] += 1
+        if a == "forward":
+            s["front"] = max(0.0, s["front"] - 0.5)
+        return a, fired
+
+    for _ in range(100):
+        tic()
+    assert "order" not in tr.facts(), "no order yet: the facts as before"
+    clock.said(s["tick"])
+    s["front"] = 4.0
+    assert orders.give("ram", None, "ram the wall", obs()) == "doing"
+    played, fired = [], []
+    for _ in range(80):
+        a, f = tic("fire")
+        played.append(a)
+        fired += f
+    assert played[:10] == ["forward"] * 10, played[:12]
+    kinds = [(e["kind"], e.get("status")) for e in fired]
+    assert kinds == [("order", "doing"), ("order_end", "done")], kinds
+    assert all("i" in e for e in fired), "tracker events carry their index"
+    st = json.loads(
+        json.dumps(
+            game_state(
+                line.format(hp=100, hit=0, a="fire"), tr.facts(), log.events, "fighter"
+            )
+        )
+    )
+    o = st["order"]
+    assert o == {
+        "told": "ram the wall",
+        "status": "done",
+        "seconds_ago": 2,
+        "hit_wall": True,
+    }, o
+    rec = [e for e in st["recent_events"] if e["type"].startswith("order")]
+    assert rec == [
+        {"time": "0:02", "type": "order", "told": "ram the wall", "status": "doing"},
+        {
+            "time": "0:04",
+            "type": "order_end",
+            "told": "ram the wall",
+            "status": "done",
+            "hit_wall": True,
+        },
+    ], rec
+    # The bonk, 1.2 s after his reply: still a cue once MIN_GAP_S has passed.
+    cue = clock.due(s["tick"] + TIC_HZ)
+    assert cue and cue["cue"] == "event" and "order_done" in cue["events"], cue
+    clock.said(s["tick"])
+    # Stopped under fire: it hurts (a cue), he quits at 25 (a cue); the style.
+    orders.give("stop", None, "stop", obs())
+    fired = []
+    for k in range(60):
+        _, f = tic(hp=max(10, 100 - 2 * k), hit=2, bot=20.0)
+        fired += f
+    kinds = [(e["kind"], e.get("status")) for e in fired]
+    assert kinds == [
+        ("order", "doing"),
+        ("order_hurts", None),
+        ("order_end", "refused"),
+    ], kinds
+    cue = clock.due(s["tick"] + 3 * TIC_HZ)
+    assert cue and {"order_hurts", "order_done"} <= set(cue["events"]), cue
+    past = moment_events(log.since(99, s["tick"]))
+    assert [e["type"] for e in past] == [
+        "order",
+        "order_end",
+        "order",
+        "order_hurts",
+        "order_end",
+    ], past
+    orders.give("cautious", None, "play it safe", obs())
+    tic()
+    st = game_state(
+        line.format(hp=10, hit=0, a="wait"), tr.facts(), log.events, "fighter"
+    )
+    assert st["playing"]["style"] == "cautious" and st["order"]["status"] == "done", st
+    s["tick"] += ORDER_KEEP_S * TIC_HZ + 1
+    tic()
+    st = game_state(
+        line.format(hp=10, hit=0, a="wait"), tr.facts(), log.events, "fighter"
+    )
+    assert "order" not in st and st["playing"]["style"] == "cautious", st
+    print(
+        "OK: orders through the tracker: events, facts, the tool's order and recent "
+        f"events, the cues order_done and order_hurts; e.g. {json.dumps(o)}"
+    )
 
 
 def check_parity(seconds: float = 40.0, seed: int = 5) -> None:
     """The dataset path against the live path on one match, with the scripted
-    player. Dataset: collect.py's worker (rows with the tracker's facts, a
-    JSON round trip), then :func:`match_moments`. Live: engine.py's game worker
-    plays the same actions on the wall clock, and its messages drive the talk
-    clock as the engine's Game does, and its events fill the event log. Every
-    state and every fact, and at every moment the brief, the tool's JSON and
-    the past moment's events, must be identical."""
+    player and a scripted partner's orders. Dataset: collect.py's worker
+    (``--orders``: rows with the tracker's facts, a JSON round trip), then
+    :func:`match_moments`. Live: engine.py's game worker plays the same
+    actions on the wall clock and gets the same orders on the same tics, and
+    its messages drive the talk clock as the engine's Game does, and its
+    events fill the event log. Every state and every fact (the order's
+    included), and at every moment the cue, the brief, the tool's JSON, the
+    past moment's events and the order answered, must be identical."""
     import json
     import multiprocessing as mp
 
     import collect
     import engine
 
+    sched = [  # the partner's orders: [tick, kind, arg, words, when]
+        [round(s * TIC_HZ), kind, arg, words, "at"]
+        for s, kind, arg, words in (
+            (8, "stop", None, "stop right there"),
+            (11, "go", None, "ok go"),
+            (14, "left", None, "turn left"),
+            (18, "ram", None, "ram the wall"),
+            (24, "weapon", 2, "use the pistol"),
+            (28, "cautious", None, "play it safe"),
+            (30, "fetch", "weapon", "grab a gun"),
+            (33, "around", None, "turn around"),
+            (35, "hunt", "Rambo", "go after rambo"),
+        )
+        if s < seconds - 2
+    ]
     task = {
         "behavior": "fighter",
         "ep": 0,
@@ -1146,11 +1379,16 @@ def check_parity(seconds: float = 40.0, seed: int = 5) -> None:
         "policy": "teacher",
         "keep_rows": True,
         "video": None,
+        "orders": sched,
     }
     res = json.loads(json.dumps(collect._teacher_episode(task)))
     rows, entries = res["rows"], res["history"]["entries"]
     data = match_moments(entries, rows, style="fighter")
     plan = {r["t"]: (r["act"], r["weapon"]) for r in rows}
+    # Each order on the tic the dataset path gave it: a live tic (dead, the
+    # worker reads what has arrived without waiting, a race for this check).
+    given = {o["tick"]: o for o in res["orders"]}
+    assert len(given) == len(sched) and set(given) <= set(plan), "orders on live tics"
 
     ctx = mp.get_context("spawn")
     conn, child = ctx.Pipe()
@@ -1159,12 +1397,14 @@ def check_parity(seconds: float = 40.0, seed: int = 5) -> None:
     proc.start()
     got: dict[int, tuple] = {}
     hist, talk, live, log, last = [], TalkClock(), [], EventLog(), None
+    told: list[dict] = []  # orders given since the last live tic
     while True:
         msg = conn.recv()
         if msg[0] == "ready":
             conn.send(("start",))
             continue
         if msg[0] == "done":
+            order_log = msg[3]
             conn.send(("bye",))
             break
         _, tick, state, entry, _events, facts, fired = msg
@@ -1172,29 +1412,54 @@ def check_parity(seconds: float = 40.0, seed: int = 5) -> None:
             hist.append(entry)
         talk.event(fired)
         log.add(fired)
+        told += [e for e in fired if e["kind"] == "order"]
         if state is None:
             continue
+        if tick in given:
+            o = given[tick]
+            conn.send(("order", o["kind"], o["arg"], o["said"]))
         act, slot = plan.get(tick, ("wait", None))
         conn.send(("act", tick, act, None if slot is None else int(slot)))
         got[tick] = (state, json.loads(json.dumps(facts)))
-        if len(hist) >= 5 and (cue := talk.due(tick)) is not None:
+        cue = None
+        if told:  # the partner gave an order: his reply, as the engine's Game waits
+            e = told[-1]
+            cue = {"cue": "partner"}
+            order = {
+                k: e[k] for k in ("order", "told", "status", "why", "said", "tick")
+            }
+            told = []
+        elif len(hist) >= 5 and (cue := talk.due(tick)) is not None:
+            order = None
+        if cue is not None:
             tool = json.loads(
                 json.dumps(game_state(state, facts, log.events, "fighter"))
             )
             past = moment_events(log.since(last, tick))
-            live.append((tick, cue["cue"], brief(hist, state, facts), tool, past))
+            live.append(
+                (tick, cue["cue"], brief(hist, state, facts), tool, past, order)
+            )
             talk.said(tick)
             last = tick
     proc.join(10)
     bad = [r["t"] for r in rows if got.get(r["t"]) != (r["state"], r["facts"])]
     assert not bad, f"{len(bad)} of {len(rows)} tics differ, first at tick {bad[0]}"
-    want = [(m["t"], m["cue"], m["brief"], m["tool"], m["moment"]) for m in data]
+    want = [
+        (m["t"], m["cue"], m["brief"], m["tool"], m["moment"], m.get("order"))
+        for m in data
+    ]
     for a, b in zip(live, want):
         assert a == b, f"moment at tick {b[0]} differs\n live {a}\n data {b}"
     assert len(live) == len(want), f"{len(live)} live moments, {len(want)} in the data"
+    keep = ("kind", "tick", "status", "end", "acts", "lost", "hit_wall")
+    assert [{k: o[k] for k in keep} for o in order_log] == [
+        {k: o[k] for k in keep} for o in res["orders"]
+    ], "the same orders, played the same way"
+    n_told = sum(m.get("order") is not None for m in data)
     print(
-        f"OK: {len(rows)} tics, same state and facts; {len(data)} moments, same "
-        "cue, brief, tool JSON and past events on both paths, e.g.\n  "
+        f"OK: {len(rows)} tics, same state and facts; {len(data)} moments ({n_told} "
+        f"replies to {len(sched)} orders), same cue, brief, tool JSON, past events "
+        "and order on both paths, e.g.\n  "
         + (json.dumps(data[-1]["tool"]) if data else "")
     )
 

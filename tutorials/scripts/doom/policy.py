@@ -3,11 +3,12 @@
 
 Every policy answers ``decide(obs, adapter, history) -> Decision``,
 ``decide_many(obs, adapters, history)`` (several adapters on one state, one
-engine step) and ``route(instruction) -> Route``, so rollouts, the latency bench
-and the live server can use any of them:
+engine step) and ``order(words) -> Order`` (what the partner told the player
+to do, :mod:`orders`), so rollouts, the latency bench and the live server can
+use any of them:
 
 * :class:`ExpertPolicy`: the scripted player, its weapon planner, a rule-based
-  danger estimate and a keyword router. Needs no model, so the whole demo runs
+  danger estimate and keyword orders. Needs no model, so the whole demo runs
   on a laptop.
 * :class:`VLLMPolicy`: the composed Granite Switch checkpoint served in-process
   by vLLM. One engine step per tic prefills the fresh tokens and emits one
@@ -75,20 +76,21 @@ from conversation import Conversation, Exchange, narrator_ids, narrator_text
 from doom_env import ACTIONS, WEAPON_SLOTS, Observation
 from expert import BEHAVIORS, Expert
 from history import History, now_prefix
+from orders import ORDER_WORDS
 
 ARMS = "arms"  # weapon planner: one slot digit
 CRITIC = "critic"  # danger of taking damage or dying within 1 s
-ROUTER = "router"
+ORDERS = "orders"  # what the partner told him to do: one order (orders.ORDERS)
 NARRATOR = "narrator"  # the player's voice: one spoken line (chat layout)
 GAME_ADAPTERS: tuple[str, ...] = (*BEHAVIORS, ARMS, CRITIC)
-ADAPTERS: tuple[str, ...] = (*GAME_ADAPTERS, ROUTER)
+ADAPTERS: tuple[str, ...] = (*GAME_ADAPTERS, ORDERS)
 WEAPON_TOKENS: tuple[str, ...] = tuple(str(s) for s in WEAPON_SLOTS)
 DANGER_LEVELS: tuple[str, ...] = ("low", "mid", "high")
 OUTPUTS: dict[str, tuple[str, ...]] = {
     **{b: ACTIONS for b in BEHAVIORS},
     ARMS: WEAPON_TOKENS,
     CRITIC: DANGER_LEVELS,
-    ROUTER: BEHAVIORS,
+    ORDERS: ORDER_WORDS,
 }
 
 SYSTEM_PROMPT = (
@@ -242,10 +244,18 @@ def spoken_entry(state: str, line: str, extra: str = "") -> str:
     return closing_text(state, extra) + f"{line}{_EOT}\n{_SOR}user{_EOR}"
 
 
-ROUTER_SYSTEM_PROMPT = (
-    "Pick the Doom deathmatch play style that best follows the player's instruction: "
-    "fighter (hunt and frag the bots), cautious (avoid damage, fight only up close, "
-    "heal), collector (collect items, armor and weapons). Reply with the style name."
+# The orders adapter's prompt: this system turn, then the partner's words as
+# the user turn (live: AUDIO_MARKER, their speech transcribed in its place).
+ORDERS_SYSTEM_PROMPT = (
+    "You play a Doom deathmatch against bots, and your partner, watching next to "
+    "you, may tell you what to do. Their words come as speech recognition writes "
+    "them. Reply with the order they give: stop (stand still), go (carry on as "
+    "you were), left or right (turn that way), around (turn around), back (back "
+    "up), ram (run into the wall), fire (shoot), weapon (switch guns), fighter "
+    "(play aggressive from now on), cautious (play it safe), collector (grab the "
+    "loot), fetch (go get one thing: a gun, health, armor, ammo), hunt (go after "
+    "the bots, or one of them), explore (go look around), or none: a question, a "
+    "comment, or anything else."
 )
 
 _SOR, _EOR, _EOT = "<|start_of_role|>", "<|end_of_role|>", "<|end_of_text|>"
@@ -277,8 +287,8 @@ class Decision:
 
 
 @dataclass
-class Route:
-    adapter: str
+class Order:
+    kind: str  # an order (orders.ORDERS), or "none"
     prob: float
     ms: float
     probs: dict[str, float] = field(default_factory=dict)
@@ -317,18 +327,19 @@ def danger_token_ids(tokenizer) -> dict[str, int]:
     return output_token_ids(tokenizer, DANGER_LEVELS)
 
 
-def route_token_ids(tokenizer) -> dict[str, int]:
-    """Map each behavior to the first token of its name (the router's one output token)."""
-    ids = {b: tokenizer.encode(b, add_special_tokens=False)[0] for b in BEHAVIORS}
+def order_token_ids(tokenizer) -> dict[str, int]:
+    """Map each order to the first token of its name (the orders adapter's one
+    output token: "cautious" is three tokens, its first is enough)."""
+    ids = {w: tokenizer.encode(w, add_special_tokens=False)[0] for w in ORDER_WORDS}
     if len(set(ids.values())) != len(ids):
-        raise ValueError(f"behavior first tokens collide: {ids}")
+        raise ValueError(f"order first tokens collide: {ids}")
     return ids
 
 
 def vocab_ids(tokenizer, adapter: str) -> dict[str, int]:
     """Output word -> token id for an adapter's one output token."""
-    if adapter == ROUTER:
-        return route_token_ids(tokenizer)
+    if adapter == ORDERS:
+        return order_token_ids(tokenizer)
     return output_token_ids(tokenizer, OUTPUTS[adapter])
 
 
@@ -402,7 +413,7 @@ class PromptBuilder:
         return [self.pad_id] * (-n % self.block) if self.block else []
 
     def ids(self, text: str, adapter: str | None) -> list[int]:
-        """A prompt without history (the router's)."""
+        """A prompt without history (the orders adapter's)."""
         return self.head[adapter] + self._enc(text) + self.suffix[adapter]
 
     def game_ids(
@@ -482,6 +493,13 @@ def has_narrator(tokenizer) -> bool:
     return control_token(NARRATOR) in tokenizer.get_vocab()
 
 
+def has_orders(tokenizer) -> bool:
+    """Whether a composed checkpoint carries the orders adapter (without it,
+    an earlier one with the router, the partner's words go to the narrator
+    alone and steer nothing)."""
+    return control_token(ORDERS) in tokenizer.get_vocab()
+
+
 def alora_invocation_ids(tokenizer) -> list[int]:
     return tokenizer.encode(f"{_SOR}assistant{_EOR}", add_special_tokens=False)
 
@@ -515,11 +533,15 @@ def adapter_placement(tokenizer) -> str:
 def check_template(
     model_dir: str,
     games: list[tuple[str, str]],
-    routes: list[str],
+    said: list[str],
     layout: str = "log",
     talks: list[tuple[int, str]] = (),
 ):
     """Assert direct id assembly == ``apply_chat_template`` for every adapter.
+
+    ``said`` holds what a partner might say, each the user turn of an orders
+    prompt (and, in a checkpoint with audio, :data:`AUDIO_MARKER`, where live
+    speech is transcribed).
 
     ``games`` holds (history text, state text) pairs from real play. With the
     chat layout each becomes a conversation: the first half of the log, a
@@ -542,7 +564,7 @@ def check_template(
     composed = control_token(BEHAVIORS[0]) in tok.get_vocab()
     placement = adapter_placement(tok) if composed else "alora"
     game_names = (*GAME_ADAPTERS, None) if composed else (None,)
-    route_names = (ROUTER, None) if composed else (None,)
+    order_names = (ORDERS, None) if composed else (None,)
     adapters = ADAPTERS if composed else ()
     narrator = has_narrator(tok)
     if narrator:
@@ -550,8 +572,10 @@ def check_template(
     system = system_prompt(layout)
     pb = PromptBuilder(tok, system, adapters, placement=placement, align=False)
     rb = PromptBuilder(
-        tok, ROUTER_SYSTEM_PROMPT, adapters, placement=placement, align=False
+        tok, ORDERS_SYSTEM_PROMPT, adapters, placement=placement, align=False
     )
+    if AUDIO_MARKER in tok.get_vocab():
+        said = [*said, AUDIO_MARKER]
 
     def render(msgs: list[tuple[str, str]], a: str | None) -> tuple[list[int], str]:
         kw = {"adapter_name": a} if a else {}
@@ -597,9 +621,9 @@ def check_template(
         for a, g in zip(game_names, got):
             ref, r = rendered_ids(system, hist_text + state, a)
             assert g == ref, f"adapter={a}\n got={g}\n ref={ref}\n{r!r}"
-    for text in routes:
-        for a in route_names:
-            ref, r = rendered_ids(ROUTER_SYSTEM_PROMPT, text, a)
+    for text in said:
+        for a in order_names:
+            ref, r = rendered_ids(ORDERS_SYSTEM_PROMPT, text, a)
             assert rb.ids(text, a) == ref, f"adapter={a}\n{r!r}"
     words = ("who got you", None, None, "what is the score", None, AUDIO_MARKER)
     lines = (
@@ -637,7 +661,7 @@ def check_template(
     what = f"{kind} adapters {', '.join(adapters)} and base" if composed else "base"
     print(
         f"OK: prompt ids match apply_chat_template for {what} on {len(games)} "
-        f"history+state prompts ({layout} layout), {len(routes)} instructions and "
+        f"history+state prompts ({layout} layout), {len(said)} orders prompts and "
         f"{len(talks)} narrator conversations (up to {longest} tokens)."
     )
 
@@ -649,11 +673,11 @@ def check_output_tokens(tok) -> None:
         "actions": action_token_ids(tok),
         "weapon slots": weapon_token_ids(tok),
         "danger levels": danger_token_ids(tok),
-        "route first tokens": route_token_ids(tok),
+        "order first tokens": order_token_ids(tok),
     }
     eor = tok.encode(_EOR, add_special_tokens=False)
     for name, ids in groups.items():
-        if name == "route first tokens":
+        if name == "order first tokens":
             continue
         for w, i in ids.items():
             got = tok.encode(_EOR + w, add_special_tokens=False)
@@ -663,34 +687,69 @@ def check_output_tokens(tok) -> None:
         print(f"  {name}: {len(ids)} single, distinct tokens")
 
 
-# ── Keyword router (stand-in when no model is loaded) ───────────────────────────
-_KEYWORDS = {
-    "fighter": r"kill|hunt|fight|attack|shoot|aggress|destroy|frag|slay|murder|rampage|clear",
-    "cautious": r"surviv|safe|careful|avoid|run away|flee|hide|retreat|heal|health|defen|cautious|stay alive|don.t die",
-    "collector": r"collect|loot|pick|gather|item|ammo|armor|scaveng|grab|supplies|weapon",
+# ── Keyword orders (stand-in when no model is loaded) ───────────────────────────
+# A local run without a model only: the orders adapter reads the partner's words
+# in the demo. First rule that matches wins; then the style words.
+_ORDER_RULES = (
+    (
+        "none",
+        r"^(?:what|who|whose|how|why|where|when|which|is|are|was|were|did|does|do you|"
+        r"have you|can you tell)\b",
+    ),
+    (
+        "go",
+        r"^(?:ok(?:ay)? |alright |all right )?(?:go|go go|go ahead|go on|move|move on|"
+        r"carry on|keep going|resume|as you were|you can (?:go|move))(?: now)?$",
+    ),
+    (
+        "stop",
+        r"\b(?:stop|freeze|halt|hold (?:it|still|up|on)|stand still|don.?t move|"
+        r"do not move|wait)\b",
+    ),
+    ("around", r"\b(?:turn|spin) a?round\b|\babout face\b|\bbehind you\b|\b180\b"),
+    ("back", r"\bback (?:up|off|away)\b|\bbackwards?\b|\breverse\b"),
+    ("ram", r"\bram\b|\bwall\b|\bheadbutt\b|\brun into\b"),
+    (
+        "fetch",
+        r"\b(?:grab|get|find|pick up|go get|fetch)\s+(?:a|an|the|some|me a|that|more)?\s*"
+        r"(?:gun|weapon|shotgun|chaingun|rocket launcher|launcher|plasma|bfg|health|"
+        r"medikit|armor|ammo|shells|rockets|bullets|cells)\b",
+    ),
+    (
+        "hunt",
+        r"\bgo after\b|\bhunt\b|\bchase\b|\bgo kill\b|\bkill (?:someone|something|"
+        r"a bot|him|rambo|leone|machete|mcclane|macgyver|plissken|anderson)\b|\bget a frag\b",
+    ),
+    ("explore", r"\bexplore\b|\blook around\b|\bwander\b|\bgo somewhere\b"),
+    ("left", r"\b(?:turn|go|look|hard|to the|to your) left\b|^left\b"),
+    ("right", r"\b(?:turn|go|look|hard|to the|to your) right\b|^right\b"),
+    (
+        "weapon",
+        r"\bswitch\b|\bweapons?\b|\bguns?\b|\b(?:use|take|pull out|get out) "
+        r"(?:the |your )?(?:shotgun|chaingun|rocket|plasma|bfg|pistol|fist)|"
+        r"^(?:shotgun|chaingun|rockets?|rocket launcher|plasma|bfg|pistol)\b",
+    ),
+    ("fire", r"\bfire\b|\bshoot\b|\bopen up\b"),
+)
+_STYLE_WORDS = {
+    "fighter": r"kill|hunt|fight|attack|aggress|destroy|frag|slay|rampage|"
+    r"go get (?:them|em)|rip and tear",
+    "cautious": r"surviv|safe|careful|avoid|run away|flee|hide|retreat|heal|defen|"
+    r"cautious|stay alive|don.?t die|do not die",
+    "collector": r"collect|loot|gather|items?\b|scaveng|grab|supplies|pick (?:up|stuff)",
 }
 
 
-_NEGATION = r"(?:stop|don.?t|do not|no|never|quit|avoid|without)\s+(?:\w+\s+){0,2}?"
-
-
-def keyword_route(instruction: str) -> Route:
+def keyword_orders(words: str) -> Order:
+    """The order in the partner's words, by keyword (``none`` if no rule fits)."""
     t0 = time.perf_counter()
-    text = instruction.lower()
-    # "stop fighting" is a vote for cautious, not fighter.
-    negated_fights = len(
-        re.findall(_NEGATION + "(?:" + _KEYWORDS["fighter"] + ")", text)
-    )
-    text = re.sub(_NEGATION + "(?:" + _KEYWORDS["fighter"] + ")\\w*", " ", text)
-    scores = {b: len(re.findall(p, text)) for b, p in _KEYWORDS.items()}
-    scores["cautious"] += negated_fights
-    total = sum(scores.values())
-    if total == 0:
-        probs = {b: 1 / len(BEHAVIORS) for b in BEHAVIORS}
-    else:
-        probs = {b: s / total for b, s in scores.items()}
-    best = max(probs, key=lambda b: (probs[b], b == "fighter"))
-    return Route(best, probs[best], (time.perf_counter() - t0) * 1000, probs)
+    text = " ".join(words.lower().split())
+    kind = next((k for k, rx in _ORDER_RULES if re.search(rx, text)), None)
+    if kind is None:
+        scores = {b: len(re.findall(rx, text)) for b, rx in _STYLE_WORDS.items()}
+        best = max(scores, key=scores.get)
+        kind = best if scores[best] else "none"
+    return Order(kind, 1.0, (time.perf_counter() - t0) * 1000, {kind: 1.0})
 
 
 def rule_danger(obs: Observation) -> str:
@@ -733,8 +792,8 @@ class ExpertPolicy:
     ) -> dict[str, Decision]:
         return {a: self.decide(obs, a) for a in adapters}
 
-    def route(self, instruction: str) -> Route:
-        return keyword_route(instruction)
+    def order(self, words: str) -> Order:
+        return keyword_orders(words)
 
 
 def _vllm_at_least(major: int, minor: int) -> bool:
@@ -803,11 +862,12 @@ class PromptKit:
     placement: str
     lora: bool
     pb: PromptBuilder  # game prompts
-    rb: PromptBuilder  # router prompts
+    rb: PromptBuilder  # orders prompts (the partner's words)
     vocab: dict[str, dict[str, int]]
     words: dict[str, dict[int, str]]
     sp: dict  # adapter -> SamplingParams
     talker: str | None = None  # who writes spoken lines: NARRATOR, or the base model
+    orders: bool = False  # the checkpoint has the orders adapter
 
 
 def system_prompt(layout: str) -> str:
@@ -838,6 +898,7 @@ def prompt_kit(
         placement=placement,
         lora=placement == "lora",
         talker=talker,
+        orders=not base_model and has_orders(tok),
         pb=PromptBuilder(
             tok,
             system,
@@ -847,7 +908,7 @@ def prompt_kit(
             persona=PERSONAS[persona],
         ),
         rb=PromptBuilder(
-            tok, ROUTER_SYSTEM_PROMPT, adapters, placement=place, align=False
+            tok, ORDERS_SYSTEM_PROMPT, adapters, placement=place, align=False
         ),
         vocab=vocab,
         words={a: {i: w for w, i in v.items()} for a, v in vocab.items()},
@@ -896,8 +957,8 @@ class VLLMPolicy:
             baseline).
         temperature: Sampling temperature for the style adapters and the
             weapon planner (0 = greedy). Students of a stochastic RL teacher
-            play better sampling, as the teacher does; the critic and router
-            stay greedy.
+            play better sampling, as the teacher does; the critic and the
+            orders adapter stay greedy.
         attention: vLLM ``attention_config``. ``None`` picks FlashAttention 2
             for a Shadow Residual checkpoint: its attention is one layer with
             twice the model's query heads, and FlashAttention 3's
@@ -1054,13 +1115,14 @@ class VLLMPolicy:
     ) -> Decision:
         return self.decide_many(obs, (adapter,), history)[adapter]
 
-    def route(self, instruction: str) -> Route:
+    def order(self, words: str) -> Order:
+        """The orders adapter on the partner's words (text)."""
         t0 = time.perf_counter()
-        prompt = self.rb.ids(instruction, self._prompt_adapter(ROUTER))
-        out = self.run([prompt], [self.sp[ROUTER]])[0]
-        probs = dict(self._dist(out, ROUTER))
-        best = self.words[ROUTER][out.outputs[0].token_ids[0]]
-        return Route(
+        prompt = self.rb.ids(words, self._prompt_adapter(ORDERS))
+        out = self.run([prompt], [self.sp[ORDERS]])[0]
+        probs = dict(self._dist(out, ORDERS))
+        best = self.words[ORDERS][out.outputs[0].token_ids[0]]
+        return Order(
             best, probs.get(best, 0.0), (time.perf_counter() - t0) * 1000, probs
         )
 
@@ -1134,7 +1196,7 @@ class VLLMPolicy:
         for i in range(n):
             hist = hist + self.tok.encode(entry, add_special_tokens=False)
             self.decide_games([(hist, state)], [list(GAME_ADAPTERS[: 1 + i % 5])])
-        self.route("go kill everything")
+        self.order("stop right there")
         conv = Conversation([Exchange(35, WARM_MOMENT, None, "Hm.")])
         for n_games in (1, 4, 16):  # the talk path, at a few batch sizes
             self.narrate([(conv, WARM_STATE, None)] * n_games, max_tokens=4)
@@ -1188,8 +1250,8 @@ def main() -> None:
         if not obs.done:
             log.add(tracker.update(obs))
     env.close()
-    routes = ["go kill everything", "stay alive, grab health", "collect all the loot"]
-    check_template(args.check_template, games[::5], routes, args.layout, talks)
+    said = ["stop right there", "turn left", "play it safe", "what is the score"]
+    check_template(args.check_template, games[::5], said, args.layout, talks)
 
 
 if __name__ == "__main__":

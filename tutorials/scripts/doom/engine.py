@@ -52,11 +52,13 @@ from conversation import CONV_EXCHANGES, Conversation, Exchange, narrator_ids
 from doom_env import TIC_HZ, DoomEnv, isolate_workdir
 from expert import BEHAVIORS, PLAN_EVERY_TICS
 from history import History
+from orders import Orders, order_arg
 from policy import (
     ARMS,
     AUDIO_MARKER,
     CRITIC,
     LAYOUTS,
+    ORDERS,
     WARM_MOMENT,
     WARM_STATE,
     engine_kwargs,
@@ -130,12 +132,16 @@ def game_worker(conn, spec: dict) -> None:
     ``("obs", tick, state | None, entry | None, events, facts, fired)`` every
     tic (``entry`` is the history entry the previous tic produced; ``facts``
     and ``fired``: the match tracker's snapshot and this tic's events), then
-    ``("done", stats, lags)``. From the server: ``("act", tick, action, slot |
-    None)``. The clock starts only when the server says so (after
-    ``("ready",)``), and the socket closes only after the server's ``("bye",)``:
-    closing with unread decisions in the buffer sends a TCP reset that can
-    destroy the final message. ``spec["frames"]``: the name of a
-    :class:`SharedFrame` to publish every frame to (the live demo's video)."""
+    ``("done", stats, lags, order_log)``. From the server: ``("act", tick,
+    action, slot | None)``, and ``("order", kind, arg, said)``: the partner's
+    order (:class:`orders.Orders`: given at once, played instead of the
+    decisions while it runs, its status in the next tic's facts). The clock
+    starts only when the server says so (after ``("ready",)``), and the socket
+    closes only after the server's ``("bye",)``: closing with unread decisions
+    in the buffer sends a TCP reset that can destroy the final message.
+    ``spec["frames"]``: the name of a :class:`SharedFrame` to publish every
+    frame to (the live demo's video); ``spec["style"]``: the style adapter the
+    server starts with."""
     isolate_workdir()
     timeout = int(spec["seconds"] * TIC_HZ)
     env = DoomEnv(
@@ -149,7 +155,9 @@ def game_worker(conn, spec: dict) -> None:
         n_bots=spec["n_bots"],
     )
     hist = History()  # text only: the server tokenizes
-    tracker = Tracker(match_s=timeout / TIC_HZ)  # the same as collect.py's
+    orders = Orders(spec.get("style", BEHAVIORS[0]))
+    # The same as collect.py's (with --orders).
+    tracker = Tracker(match_s=timeout / TIC_HZ, orders=orders)
     frames = SharedFrame(spec["frames"]) if spec.get("frames") else None
     obs = env.reset(seed=spec["seed"])
     fired = tracker.update(obs)
@@ -167,11 +175,18 @@ def game_worker(conn, spec: dict) -> None:
         msg = ("obs", obs.tick, state, entry, list(obs.events), tracker.facts(), fired)
         conn.send(msg)
         deadline = t_tic + TIC_S - (step_ms + 1.0) / 1000
-        while state is not None:
-            left = deadline - time.perf_counter()
-            if left <= 0 or not conn.poll(left):
+        while True:
+            # Alive: wait for this tic's decision until the tic is due. Dead: no
+            # decision is needed; only take what has arrived (an order).
+            left = deadline - time.perf_counter() if state is not None else 0.0
+            if not conn.poll(max(0.0, left)):
                 break
-            _, tick, a, s = conn.recv()
+            msg = conn.recv()
+            if msg[0] == "order":
+                _, kind, arg, said = msg
+                orders.give(kind, arg, said, obs)
+                continue
+            _, tick, a, s = msg
             if tick >= fresh_of:
                 action, fresh_of = a, tick
             if s is not None:
@@ -180,9 +195,10 @@ def game_worker(conn, spec: dict) -> None:
                 break
         if state is not None:
             lags.append(obs.tick - fresh_of if fresh_of >= 0 else 99)
-        entry = hist.observe(obs, None if obs.dead else action)
+        played, played_slot = orders.act(obs, action, slot)
+        entry = hist.observe(obs, None if obs.dead else played)
         t0 = time.perf_counter()
-        obs = env.step(action, weapon=slot)
+        obs = env.step(played, weapon=played_slot)
         fired = [] if obs.done else tracker.update(obs)
         slot = None
         step_ms = 0.9 * step_ms + 0.1 * (time.perf_counter() - t0) * 1000
@@ -197,7 +213,7 @@ def game_worker(conn, spec: dict) -> None:
     env.close()
     if frames is not None:
         frames.close()
-    conn.send(("done", stats, lags))
+    conn.send(("done", stats, lags, orders.log))
     t_end = time.perf_counter() + 10
     while time.perf_counter() < t_end:  # drain late decisions until the server's bye
         try:
@@ -281,6 +297,12 @@ class AsyncPolicy:
             res[a] = (words[o.outputs[0].token_ids[0]], dict(output_dist(o, words)))
         return res
 
+    def _transcript(self, ids: list[int], out) -> str:
+        """What the ASR heard: the tokens that replaced the audio marker."""
+        at = ids.index(self.audio_id)
+        got = out.prompt_token_ids
+        return self.tok.decode(got[at : len(got) - (len(ids) - at - 1)]).strip()
+
     async def talk(
         self, conv: Conversation, state: dict, player=None
     ) -> tuple[str, str | None]:
@@ -298,14 +320,21 @@ class AsyncPolicy:
             None, narrator_ids, self.ntok, conv, state, said, self.kit.talker
         )
         o = await self._one(ids, self.talk_sp, audio)
-        heard = player
-        if audio is not None:
-            # The transcript is what replaced the marker in the prompt.
-            at = ids.index(self.audio_id)
-            got = o.prompt_token_ids
-            heard = self.tok.decode(got[at : len(got) - (len(ids) - at - 1)]).strip()
+        heard = player if audio is None else self._transcript(ids, o)
         text = re.sub(r"\[[^\]]*\]\s*", "", o.outputs[0].text)  # tags: not the model's
         return text.strip().strip('"').split("\n")[0], heard
+
+    async def order(self, player) -> tuple[str, str, dict[str, float]]:
+        """The orders adapter on what the person watching said (text, or 16 kHz
+        speech, which the checkpoint's ASR transcribes inside this request):
+        the order (:data:`orders.ORDERS`, ``none`` if it is not one), the
+        words as text, and the adapter's distribution."""
+        audio = None if isinstance(player, str) else player
+        ids = self.kit.rb.ids(AUDIO_MARKER if audio is not None else player, ORDERS)
+        o = await self._one(ids, self.kit.sp[ORDERS], audio)
+        words = self.kit.words[ORDERS]
+        heard = player if audio is None else self._transcript(ids, o)
+        return words[o.outputs[0].token_ids[0]], heard, dict(output_dist(o, words))
 
     async def warmup(self) -> None:
         state = (
@@ -324,6 +353,10 @@ class AsyncPolicy:
                 )
             )
             await asyncio.gather(*(self.talk(conv, WARM_STATE) for _ in range(n)))
+            if self.kit.orders:
+                await asyncio.gather(
+                    *(self.order("stop right there") for _ in range(n))
+                )
 
 
 def nodelay(conn) -> None:
@@ -351,6 +384,9 @@ def remote_worker(addr: tuple[str, int], spec: dict) -> None:
 
 
 AUTHKEY = b"granite-switch-doom"
+# How long an order waits for the game's word on it (a live tic; through a
+# respawn, about a second dead).
+ORDER_WAIT_S = 2.5
 
 
 class Game:
@@ -360,8 +396,18 @@ class Game:
     ``idle_s``: the talk clock's silence before a remark (0: no talk of its
     own; replies to the watcher still come).
 
+    What the watcher says goes first to the orders adapter, when the
+    checkpoint has one (:meth:`player_said`): an order is sent to the game at
+    once, and the narrator answers on the next live tic, when the game state
+    says how the order went (doing it, refused, could not), from the words as
+    text (the orders request transcribed them). ``orders``: each order given,
+    with its status and the time from the words to the game's word on it;
+    ``order_log``: the worker's own, at the end (what was played).
+
     Hooks for the live demo (``doom_live.py``): ``on_decision(tick, dists,
-    ms)`` after every decision, ``on_line(line_info)`` after every spoken line;
+    ms)`` after every decision, ``on_read(tick, order)`` when the orders
+    adapter has read the watcher's words, ``on_line(line_info)`` after every
+    spoken line;
     :meth:`hush` holds back remarks while the watcher is talking;
     ``autostart=False`` holds the match's clock until :meth:`start`.
     ``conv_n``: how many exchanges the narrator's conversation keeps."""
@@ -397,12 +443,18 @@ class Game:
         self.lines: list[tuple[float, str, int, str | None]] = []
         self.stats: dict = {}
         self.lags: list[int] = []
-        self.player_queue: list = []  # what the watcher said (text or speech), unanswered
+        # What the watcher said, unanswered: (text or speech, its order or None).
+        self.player_queue: list[tuple] = []
+        self.orders: list[dict] = []
+        self.order_log: list[dict] = []
+        self._orders_sent = 0
+        self._order_wait: tuple[int, asyncio.Future] | None = None
+        self._hearing = asyncio.Lock()  # utterances read in the order spoken
         self.facts: dict | None = None  # the match tracker's latest snapshot
         self.state: str | None = None  # the latest live state, and its tick
         self.tick = 0
         self.done = self.lost = False
-        self.on_decision = self.on_line = None
+        self.on_decision = self.on_line = self.on_read = None
         self.autostart, self.ready = autostart, False
         self._tasks: set[asyncio.Task] = set()  # keep running tasks referenced
 
@@ -437,7 +489,7 @@ class Game:
                         self.conn.send(("start",))
                     continue
                 if msg[0] == "done":
-                    _, self.stats, self.lags = msg
+                    _, self.stats, self.lags, self.order_log = msg
                     self.done = True
                     with contextlib.suppress(OSError):
                         self.conn.send(("bye",))
@@ -451,6 +503,10 @@ class Game:
                 if state is None:
                     continue
                 self.state, self.tick = state, tick
+                if self._order_wait is not None:  # the game's word on an order
+                    n, fut = self._order_wait
+                    if (self.facts.get("order") or {}).get("n") == n and not fut.done():
+                        fut.set_result(None)
                 if self.inflight:
                     self.skipped += 1
                 else:
@@ -499,15 +555,78 @@ class Game:
 
     def player_said(self, what) -> None:
         """The person watching spoke (text, or 16 kHz float32 speech): the
-        player answers as soon as it can (after the line it may be writing)."""
-        self.player_queue.append(what)
+        player answers as soon as it can (after the line it may be writing).
+        With the orders adapter, its request reads the words first (and
+        transcribes speech): an order goes to the game at once, not after the
+        line he may be writing."""
         self.hushed = False
+        if self.pol.kit.orders:
+            self._spawn(self._hear(what, time.perf_counter()))
+        else:
+            self._queue(what, None)
+
+    def _queue(self, what, order: dict | None) -> None:
+        self.player_queue.append((what, order))
         if not self.talking and self.state is not None:
             self.talking = True
             self._spawn(self._talk(self.tick, self.state, "partner"))
 
+    async def _hear(self, what, t0: float) -> None:
+        async with self._hearing:
+            order = await self._order(what, t0)
+        # The narrator reads the words as text (no second transcription).
+        self._queue(what if order is None else order["heard"], order)
+
+    async def _order(self, what, t0: float) -> dict | None:
+        """The orders adapter on the watcher's words; an order is sent to the
+        game, and its status waited for (the next live tic's facts). Returns
+        the order (``kind`` ``none``: not one), or None if the request failed
+        (the narrator then reads the words himself)."""
+        try:
+            kind, heard, dist = await self.pol.order(what)
+        except Exception as e:
+            print(
+                f"game {self.gid}: the orders request failed ({type(e).__name__}: {e})",
+                flush=True,
+            )
+            return None
+        info = {
+            "kind": kind,
+            "heard": heard,
+            "p": round(dist.get(kind, 0.0), 3),
+            "read_ms": round(1000 * (time.perf_counter() - t0)),
+        }
+        if self.on_read is not None:
+            self.on_read(self.tick, info)
+        if kind == "none":
+            return info
+        arg = order_arg(kind, heard)
+        self._orders_sent += 1
+        fut = asyncio.get_running_loop().create_future()
+        self._order_wait = (self._orders_sent, fut)
+        try:
+            self.conn.send(("order", kind, arg, heard))
+        except (BrokenPipeError, OSError):
+            return info  # the match just ended
+        if kind in BEHAVIORS:
+            self.style = kind  # the style adapter decides from the next tic
+        try:
+            await asyncio.wait_for(fut, ORDER_WAIT_S)
+        except TimeoutError:
+            print(f"game {self.gid}: no word from the game on {kind!r}", flush=True)
+        self._order_wait = None
+        o = (self.facts or {}).get("order") or {}
+        info.update(
+            arg=arg,
+            status=o.get("status") if o.get("n") == self._orders_sent else None,
+            why=o.get("why"),
+            ms=round(1000 * (time.perf_counter() - t0)),  # words -> the game's word
+        )
+        self.orders.append({"tick": self.tick, **info})
+        return info
+
     async def _talk(self, tick: int, state: str, cue: str) -> None:
-        player = self.player_queue.pop(0) if self.player_queue else None
+        player, order = self.player_queue.pop(0) if self.player_queue else (None, None)
         if player is not None:
             cue = "partner"  # the watcher spoke: whatever woke it, this is a reply
         if self.clock is not None:
@@ -534,6 +653,7 @@ class Game:
                         "cue": cue,
                         "line": line,
                         "heard": heard,
+                        "order": order,  # what the orders adapter made of it
                         "state": gs,  # what get_game_state returned
                         "moment": moment,
                         "brief": brief(self.hist.entries, state, self.facts),
@@ -725,6 +845,10 @@ async def serve(args) -> dict:
                 "skipped_share": round(g.skipped / max(1, g.skipped + g.decided), 4),
                 "overrun_tics": s.get("overrun_tics"),
                 "lines": g.lines,
+                # The watcher's words -> the game's word on the order.
+                "order_ms_p50": pct([o["ms"] for o in g.orders], 50),
+                "orders": g.orders,
+                "order_log": g.order_log,
             }
         )
     keys = (

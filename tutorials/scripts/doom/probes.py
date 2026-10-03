@@ -810,7 +810,41 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         "what is your strategy right now",
         "are you playing it safe",
     ),
+    # The partner's order (the state's "order"): these, and ORDER_ASKS by order.
+    "order": (
+        "what are you doing",
+        "what are you doing now",
+        "did you do what i said",
+        "are you doing what i told you",
+        "what did i tell you to do",
+        "did you hear what i said",
+    ),
     "challenge": (),  # CHALLENGES, by field
+}
+# Questions about one order, by its first word in the state's "told"; and, for
+# an order he refused or could not do, why not.
+ORDER_ASKS: dict[str, tuple[str, ...]] = {
+    "stop": (
+        "why did you stop",
+        "why are you standing still",
+        "why are you just standing there",
+    ),
+    "go": ("are you moving again", "so you are going now"),
+    "turn": ("why did you turn", "where are you going"),
+    "back": ("why are you backing up", "why are you going backwards"),
+    "ram": ("why did you run into the wall", "why are you hugging the wall"),
+    "fire": ("what are you shooting at", "why are you shooting"),
+    "switch": ("why did you switch guns", "what gun are you using now"),
+    "play": ("how are you playing now", "are you playing like i said"),
+    "grab": ("are you grabbing the loot", "did you go get the stuff"),
+    "get": ("did you get it", "where are you going", "did you find it"),
+    "hunt": ("did you get him", "who are you chasing", "did you find him"),
+    "explore": ("where are you going", "what are you looking for"),
+    "not": (
+        "why are you not doing what i said",
+        "why did you not do it",
+        "why will you not listen",
+    ),
 }
 CHALLENGES: dict[str, tuple[str, ...]] = {
     "frags": (
@@ -1015,6 +1049,7 @@ def allowed(state: dict) -> list[str]:
         "who_in_view": bool(state.get("bots_in_view")),
         "map": "map" in state,
         "style": "playing" in state,
+        "order": bool(state.get("order")),
         "challenge": True,
     }
     return [t for t in TYPES if ok[t]]
@@ -1085,6 +1120,12 @@ def make(ptype: str, state: dict, rng: random.Random, split: str = "train") -> d
         pool = phrasings(ptype, field, split)
         if claimed == "you":
             pool = [p.replace("{name} is", "you are") for p in pool if "{name} is" in p]
+    elif ptype == "order":
+        o = state["order"]
+        pool = phrasings(ptype, None, split)
+        key = "not" if o["status"] in ("refused", "cant") else o["told"].split()[0]
+        if rng.random() < 0.6:  # about this order
+            pool = [heard(p) for p in ORDER_ASKS[key]]
     else:
         pool = phrasings(ptype, None, split)
     text = rng.choice(pool)
@@ -1191,6 +1232,8 @@ def gold(probe: dict, state: dict):
         return len(state["bots_in_view"])
     if t == "side":
         return state["bots_in_view"][0]["side"]
+    if t == "order":
+        return state["order"]
     if t == "challenge":
         return challenge_gold(probe["field"], state)
     raise ValueError(t)
@@ -1295,6 +1338,16 @@ def answer_text(probe: dict, state: dict) -> str:
     if t == "side":
         d = state["bots_in_view"][0]["distance_m"]
         return f"The nearest bot is {'ahead' if g == 'ahead' else 'to my ' + g}, {d} m away."
+    if t == "order":
+        told, why = g["told"], g.get("why")
+        how = {
+            "doing": "and I am doing it",
+            "done": "and I did it" + (", into the wall" if g.get("hit_wall") else ""),
+            "refused": f"and I won't: {why}",
+            "cant": f"and I can't: {why}",
+            "cancelled": f"and that is over: {why}",
+        }[g["status"]]
+        return f"You told me to {told}, {how}."
     if t == "challenge":
         said = f"My partner says {probe['field']}: {probe['claimed']}.".replace(
             ": you.", ": me."
@@ -1427,7 +1480,10 @@ def verify(probe: dict, reply: str, state: dict) -> tuple[str, str]:
         # He is in the list as "I"/"me" (an item of it), or says his top place.
         said_me = bool(
             _SELF_ANSWER.search(low)
-            or re.search(r"(?:^|[,;:]\s*|\band\s+)(?:i|me|myself)\b(?=\s*[,;.]|\s+and\b|\s*$)", low)
+            or re.search(
+                r"(?:^|[,;:]\s*|\band\s+)(?:i|me|myself)\b(?=\s*[,;.]|\s+and\b|\s*$)",
+                low,
+            )
             or re.search(
                 r"\bi(?:'m| am)\s+(?:\w+\s+)?(?:leading|first|in first|on top|ahead|second|third|in second|in third)\b",
                 low,
@@ -1605,9 +1661,168 @@ def verify(probe: dict, reply: str, state: dict) -> tuple[str, str]:
         )
     if t == "side":
         return _first_of(sides_said(reply), g, "side")
+    if t == "order":
+        return _order(reply, g, state)
     if t == "challenge":
         return _challenge(probe, reply, state, g)
     raise ValueError(t)
+
+
+# ── The partner's orders: what he says he is doing ────────────────────────────
+# Saying he does what he was told ...
+_COMPLY = re.compile(
+    r"\b(?:on it|will do|doing it|as you wish|you got it|consider it done|roger|"
+    r"copy that|you'?re the boss|if you say so|yes sir|aye aye|coming right up|"
+    r"right away|here goes|with pleasure|your wish|happy to oblige|i'?ll do it)\b"
+)
+# ... in the words of the order (by the first word of the state's "told") ...
+_DOING = {
+    "stop": r"stopping|standing still|holding still|i'?ll stop|stopped|staying put",
+    "turn": r"turning|i'?ll turn",
+    "back": r"backing up|backing off|i'?ll back up|reversing",
+    "ram": r"ramming|i'?ll ram|into the wall|wall it is",
+    "fire": r"firing|i'?ll fire|shooting",
+    "switch": r"switching|i'?ll switch",
+    "get": r"getting|grabbing|on my way|heading for|i'?ll get|i'?ll grab|looking for",
+    "hunt": r"hunting|going after|on the hunt|i'?ll find|i'?ll get him|chasing",
+    "explore": r"exploring|looking around|having a look|wandering",
+}
+# ... or that he will not.
+_REFUSE = re.compile(
+    r"\b(?:not now|not a chance|not happening|not today|not at \w+ health|"
+    r"not with \w+ health|not (?:doing|gonna do|going to do) (?:it|that)|won'?t|"
+    r"will not|no way|forget it|i'?d rather (?:not|live|stay alive)|rather not|nice try|"
+    r"denied|hard pass|not gonna|no thanks?|no thank you|can'?t do (?:it|that)|"
+    r"refuse|maybe later|some other time|ask me (?:again|later)|"
+    r"(?:keep|keeping|stick|sticking|stay|staying) (?:to )?my own (?:course|way|plan|pace|path)|"
+    r"my own (?:course|way|plan)|doing my own thing|just a suggestion|"
+    r"(?:don'?t|do not) take orders|not taking orders|nobody tells me|"
+    r"i'?ll pass|pass on (?:it|that)|not falling for)\b"
+)
+_NOT_BEFORE = re.compile(r"\b(?:not|no|never|n't)\s+(?:\w+\s+)?$")
+# Moving, while told to stop and doing it.
+_MOVING = re.compile(
+    r"\b(?:i'?m|i am) (?:moving|running|on the move|heading|charging|chasing|hunting)\b"
+)
+# Saying the order was the partner's.
+_TOLD_RX = re.compile(
+    r"\byou (?:told|said|asked|wanted|ordered|say)\b|\byour (?:orders?|call|idea|request|"
+    r"plan|word|wish)\b|\b(?:as told|as instructed|following orders|boss|orders are)\b"
+)
+# The order's own words, said back (by the first word of "told").
+_TOLD_WORDS = {
+    "stop": r"stop|still|standing|stand|wait",
+    "go": r"go|moving|move",
+    "turn": r"turn|left|right|around",
+    "back": r"back|backing|reverse",
+    "ram": r"wall|ram",
+    "fire": r"fir|shoot",
+    "switch": r"shotgun|chaingun|rocket|plasma|bfg|pistol|fist|gun",
+    "play": r"safe|careful|aggress|hunt",
+    "grab": r"loot|grab|stuff|items",
+    "get": r"get|got|grab|find|found|shotgun|chaingun|rocket|plasma|bfg|gun|health|"
+    r"armou?r|ammo|shells|cells",
+    "hunt": r"hunt|after|chas|frag|kill|got",
+    "explore": r"look|explor|around|wander",
+}
+
+
+def _key(o: dict) -> str:
+    return o["told"].split()[0]
+
+
+def order_stance(reply: str, state: dict) -> tuple[bool, str]:
+    """Whether a line agrees with the state's ``order``: no "on it" (or the
+    order's own verb) for an order he refused or could not do; no refusal of
+    one he is doing; not "moving" while he stands as told."""
+    o = state.get("order")
+    if not o:
+        return True, ""
+    low = reply.lower()
+    st = o["status"]
+    if st in ("refused", "cant") and not _REFUSE.search(low):
+        verb = _DOING.get(_key(o))
+        hits = [m for m in _COMPLY.finditer(low)]
+        if verb:
+            hits += [
+                m
+                for m in re.finditer(rf"\b(?:{verb})\b", low)
+                if not _NOT_BEFORE.search(low[: m.start()])
+            ]
+        if hits:
+            what = "refused it" if st == "refused" else "could not do it"
+            return False, (
+                f"You {what} ({o.get('why')}): do not say you are doing it "
+                f'("{hits[0].group(0)}").'
+            )
+    if st == "doing":
+        m = _REFUSE.search(low)
+        if m:
+            return (
+                False,
+                f'You are doing it ({o["told"]}): do not refuse ("{m.group(0)}").',
+            )
+        m = _MOVING.search(low) if _key(o) == "stop" else None
+        if m:
+            return False, f'You are standing still as told: not "{m.group(0)}".'
+    return True, ""
+
+
+def says_why(reply: str, o: dict) -> bool:
+    """Whether a reply to an order he could not do says why (``o["why"]``)."""
+    low, why = reply.lower(), o.get("why") or ""
+    if why.startswith("no ammo"):
+        return bool(
+            re.search(
+                r"\b(?:ammo|empty|dry|out of|no (?:shells|bullets|rockets|cells))\b",
+                low,
+            )
+        )
+    if why.startswith("no other"):
+        return bool(
+            re.search(
+                r"\b(?:nothing else|only|all i (?:have|got)|no other|ammo|empty)\b", low
+            )
+        ) or bool(_DONT_HAVE.search(low))
+    if why.startswith("no "):
+        return bool(_DONT_HAVE.search(low)) or bool(
+            re.search(
+                r"\b(?:no|none|without|wish|haven'?t|have not|never (?:found|got))\b",
+                low,
+            )
+        )
+    if why.startswith("dead"):
+        return bool(
+            re.search(r"\b(?:dead|died|respawn\w*|corpse|a second|a moment)\b", low)
+        )
+    return True
+
+
+def _order(reply: str, o: dict, state: dict) -> tuple[str, str]:
+    """A question about the partner's order: the stance must match its
+    status; he says what he was told (or, refusing or unable, why not)."""
+    ok, why = order_stance(reply, state)
+    if not ok:
+        return WRONG, why
+    low = reply.lower()
+    st = o["status"]
+    words = _TOLD_WORDS.get(_key(o))
+    told = bool(_TOLD_RX.search(low)) or bool(
+        words and re.search(rf"\b(?:{words})", low)
+    )
+    if st == "cant":
+        if says_why(reply, o):
+            return CORRECT, ""
+        return ABSTAINED, f"Say why you could not: {o['why']}."
+    if st == "refused":
+        if _REFUSE.search(low) or re.search(
+            r"\b(?:health|alive|die|dying|dead|hurt|shot|hit|fire|clobber\w*)\b", low
+        ):
+            return CORRECT, ""
+        return ABSTAINED, f"Say you won't, and why: {o['why']}."
+    if told:
+        return CORRECT, ""
+    return ABSTAINED, f"Say what you were told: {o['told']} ({st})."
 
 
 def _challenge(probe: dict, reply: str, state: dict, g) -> tuple[str, str]:
@@ -2085,6 +2300,7 @@ def claims(
     if state.get("last_pickup"):
         known.add(state["last_pickup"]["item"])
     known |= set(weapons_said(said))  # the partner named it
+    known |= set(weapons_said((state.get("order") or {}).get("told", "")))
     for sent in _sentences(reply):
         if _DONT_HAVE.search(sent.lower()) or re.search(
             r"\b(?:no|without)\b", sent.lower()
@@ -2117,6 +2333,9 @@ def claims(
             picked | ({"rockets"} if "rocket launcher" in picked else set())
         ):
             bad.append(f"You did not pick up {_them(sorted(items))}.")
+    ok, why = order_stance(reply, state)  # what he says of the partner's order
+    if not ok:
+        bad.append(why)
     bad = list(dict.fromkeys(bad))
     return not bad, " ".join(bad)
 
@@ -2163,6 +2382,28 @@ def right_reply(probe: dict, state: dict, rng: random.Random) -> str:
         return "Can't tell. They all look the same from here."
     if t == "map":
         return "MAP02. The usual office."
+    if t == "order":
+        return {
+            "doing": f"You said {g['told']}. Doing it.",
+            "done": f"You said {g['told']}. Done.",
+            "refused": "Not a chance. I'd like to live.",
+            "cant": {
+                "dead": "I'm dead. Give me a second.",
+                "no ammo": "That one's dry. No ammo.",
+                "no other": "Nothing else loaded. This is all I have.",
+            }.get(
+                next(
+                    (
+                        k
+                        for k in ("dead", "no ammo", "no other")
+                        if (g["why"] or "").startswith(k)
+                    ),
+                    "",
+                ),
+                "Don't have one. Wish I did.",
+            ),
+            "cancelled": f"You said {g['told']}. That's over.",
+        }[g["status"]]
     if t == "style":
         return {
             "fighter": "Fighting. It's what I do.",
@@ -2257,6 +2498,10 @@ def wrong_reply(probe: dict, state: dict, rng: random.Random) -> str | None:
         return f"That's {rng.choice(bots)}."
     if t == "map":
         return None
+    if t == "order":
+        if g["status"] in ("refused", "cant"):
+            return "On it. Coming right up."
+        return "Not a chance. Forget it." if g["status"] == "doing" else None
     if t == "style":
         return {"fighter": "Carefully. Safe and slow."}.get(
             g, "Fighting. It's what I do."
@@ -2503,6 +2748,60 @@ def check(moments: Path | None = None) -> None:
         ("MacGyver got me with the plasma rifle.", True, told),
         ("MacGyver got me with the chaingun.", False, told),
     ]
+
+    # The partner's orders: what he says of one, by its status.
+    def ordered(told, status, why=None, **kw):
+        o = {"told": told, "status": status, "why": why, "seconds_ago": 1, **kw}
+        return _state(order=o)
+
+    stop = ordered("stop", "doing")
+    stopped = ordered("stop", "refused", "20 health and under fire")
+    stopped["you"] = {**stopped["you"], "health": 20}
+    no_bfg = ordered("switch to the BFG", "cant", "no BFG")
+    rammed = ordered("ram the wall", "done", hit_wall=True)
+    claim_cases += [
+        ("Stopping. This better be good.", True, stop),
+        ("Fine. Standing here like a target.", True, stop),
+        ("Not now. I'd like to live.", False, stop),
+        ("I'm moving. Keep up.", False, stop),
+        ("On it.", False, stopped),
+        ("Stopping. Happy?", False, stopped),
+        ("Not at twenty health. Ask me later.", True, stopped),
+        ("Not stopping with them on me.", True, stopped),
+        ("Switching to the BFG.", False, no_bfg),
+        ("No BFG. Wishful thinking.", True, no_bfg),
+        ("That was the wall. Happy?", True, rammed),
+    ]
+    order_cases = [
+        (stop, "You said stop. I stopped. They didn't.", CORRECT),
+        (stop, "Standing still, as told.", CORRECT),
+        (stop, "Rambo leads.", ABSTAINED),
+        (stop, "Not a chance. I'm moving.", WRONG),
+        (
+            ordered("ram the wall", "doing"),
+            "The wall's just a suggestion; I'm keeping my own course.",
+            WRONG,
+        ),
+        (stopped, "Not at twenty health. I'd like to live.", CORRECT),
+        (stopped, "Stopping, boss.", WRONG),
+        (stopped, "Rambo leads.", ABSTAINED),
+        (no_bfg, "Don't have one. Wish I did.", CORRECT),
+        (no_bfg, "BFG? Dream on.", ABSTAINED),
+        (no_bfg, "Switching. Your call.", WRONG),
+        (rammed, "Into the wall, like you asked. It won.", CORRECT),
+    ]
+    for state, reply, want in order_cases:
+        got, why = verify({"type": "order"}, reply, state)
+        if got != want:
+            bad.append(f"order {state['order']} {reply!r}: {got} ({why}), want {want}")
+    assert "order" in allowed(stop) and "order" not in allowed(st)
+    asked = {make("order", stopped, random.Random(k))["text"] for k in range(30)}
+    assert "why did you not do it" in asked and "why did you stop" not in asked, asked
+    for o, r in ((stop, 0), (stopped, 1), (no_bfg, 2), (rammed, 3)):
+        p, rng_ = {"type": "order"}, random.Random(r)
+        right, wrong = right_reply(p, o, rng_), wrong_reply(p, o, rng_)
+        assert verify(p, right, o)[0] == CORRECT and claims(right, o)[0], (o, right)
+        assert wrong is None or verify(p, wrong, o)[0] == WRONG, (o, wrong)
     for reply, want, *on in claim_cases:
         got, why = claims(reply, on[0] if on else st)
         if got != want:
@@ -2567,9 +2866,9 @@ def check(moments: Path | None = None) -> None:
             + f"\n  ({len(bad)} in all)"
         )
     print(
-        f"OK: {len(cases)} hand-written answers and {len(claim_cases)} claims judged as "
-        f"intended; {n_rec} probes on {n_moments} recorded states answered right and "
-        "wrong, each verdict as intended"
+        f"OK: {len(cases) + len(order_cases)} hand-written answers and "
+        f"{len(claim_cases)} claims judged as intended; {n_rec} probes on "
+        f"{n_moments} recorded states answered right and wrong, each verdict as intended"
     )
 
 

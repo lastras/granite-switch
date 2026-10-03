@@ -22,7 +22,7 @@ from doom_env import (
     WEAPON_NAMES,
 )
 from PIL import Image, ImageDraw, ImageFont
-from policy import ARMS, CRITIC, DANGER_LEVELS, NARRATOR, ROUTER
+from policy import ARMS, CRITIC, DANGER_LEVELS, NARRATOR, ORDERS
 
 W_GAME, H = 640, 480
 W_PANEL = 360
@@ -38,6 +38,7 @@ AMBER = (210, 161, 6)
 RED = (250, 77, 86)
 GREEN = (66, 190, 101)
 COLORS = {"fighter": RED, "cautious": TEAL, "collector": AMBER}
+ORDER_COLORS = {"doing": GREEN, "refused": RED, "cant": AMBER, "cancelled": HELP}
 
 HEAT_ROW = 10  # pixels per action row
 H_HEAT = 82 + HEAT_ROW * len(DISPLAY_ORDER)  # heatmap strip under the game and panel
@@ -92,12 +93,22 @@ class Panel:
             fill=HELP,
         )
         y += 38
-        if t.get("instruction"):
+        if t.get("order"):  # the partner's latest order (the live demo)
+            o = t["order"]
+            col = ORDER_COLORS.get(o["status"], TEXT2)
+            d.rounded_rectangle([x, y, x + W_PANEL - 36, y + 18], radius=9, fill=LAYER2)
+            d.text((x + 10, y + 2), f"ORDER: {o['told']}", font=self.f_small, fill=TEXT)
+            d.text((x + 236, y + 2), o["status"], font=self.f_small, fill=col)
+            y += 20
+            if o.get("why"):
+                d.text((x + 10, y), o["why"][:46], font=self.f_small, fill=HELP)
+            y += 16
+        elif t.get("instruction"):
             d.text((x, y), f"“{t['instruction'][:40]}”", font=self.f_small, fill=TEXT2)
             y += 16
             d.text(
                 (x, y),
-                f"router -> {t['routed']} ({100 * t['route_p']:.0f}%, {t['route_ms']:.1f} ms)",
+                f"orders -> {t['routed']} ({100 * t['route_p']:.0f}%, {t['route_ms']:.1f} ms)",
                 font=self.f_small,
                 fill=HELP,
             )
@@ -307,14 +318,14 @@ MODEL_COLORS = {
     **COLORS,
     ARMS: BLUE,
     CRITIC: PURPLE,
-    ROUTER: GREEN,
+    ORDERS: GREEN,
     NARRATOR: TEAL,
 }
 MODEL_LABELS = {
     "base": "base model",
     ARMS: "weapon plan",
     CRITIC: "critic",
-    ROUTER: "router",
+    ORDERS: "orders",
     NARRATOR: "narrator",
 }
 
