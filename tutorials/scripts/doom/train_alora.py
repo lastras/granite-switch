@@ -945,20 +945,20 @@ def main() -> None:
     pairs = (
         load_pairs(args.pairs, tok, args.conv_exchanges) if lines and args.pairs else []
     )
-    ref = None
+    dpo_ref = None
     if pairs:
         args.out.mkdir(parents=True, exist_ok=True)
         ref_path = args.out / "dpo_ref.pt"
         if ref_path.exists():
-            ref = torch.load(ref_path)
+            dpo_ref = torch.load(ref_path)
         else:
-            ref = torch.zeros(len(pairs), 2)
+            dpo_ref = torch.zeros(len(pairs), 2)
             raw.eval()
             with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
                 for i in range(0, len(pairs), args.micro):
                     chunk = pairs[i : i + args.micro]
                     for j, side in enumerate((1, 2)):
-                        ref[i : i + len(chunk), j] = (
+                        dpo_ref[i : i + len(chunk), j] = (
                             seq_logps(
                                 raw,
                                 [c[0] for c in chunk],
@@ -971,7 +971,7 @@ def main() -> None:
                         )
             raw.train()
             if main_rank:
-                torch.save(ref, ref_path)
+                torch.save(dpo_ref, ref_path)
         if main_rank:
             print(
                 f"DPO: {len(pairs)} pairs ({dict(Counter(c[3] for c in pairs))}), beta {args.beta}",
@@ -1066,7 +1066,7 @@ def main() -> None:
                         ]
                         lp = seq_logps(model, prompts, targets, pad_id, device).float()
                         lc, lr = lp[: len(sub)], lp[len(sub) :]
-                        r = ref[sub].to(device)
+                        r = dpo_ref[sub].to(device)
                         margin = (lc - r[:, 0]) - (lr - r[:, 1])
                         dpo = -torch.nn.functional.logsigmoid(
                             args.beta * margin
