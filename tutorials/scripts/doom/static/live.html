@@ -1,114 +1,111 @@
 <!doctype html>
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- The live demo's page (doom_pipecat.py serves it at /): the game's stream
-     fills the window, your microphone goes up, his voice comes down. -->
+<!-- The live demo's page (doom_pipecat.py serves it at /): the game's video,
+     and around it the dashboard, drawn here from the telemetry (live.js):
+     the panel, which model runs, the action heatmap, captions and the
+     conversation. Your microphone goes up, his voice comes down. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Granite Switch · Doom, live</title>
-<style>
-  [hidden] { display: none !important; }  /* over the display: flex below */
-  html, body { margin: 0; height: 100%; background: #000; color: #ddd;
-               font: 14px system-ui, sans-serif; overflow: hidden; }
-  video { position: fixed; inset: 0; width: 100vw; height: 100vh;
-          object-fit: contain; background: #000; }
-  #starts { position: fixed; inset: 0; margin: auto; width: 260px; height: 150px;
-            display: flex; flex-direction: column; gap: 10px; }
-  #starts button { height: 54px; font-size: 17px; }
-  #bar { position: fixed; left: 12px; bottom: 12px; display: flex; gap: 8px;
-         align-items: center; opacity: 0.35; transition: opacity 0.2s; }
-  #bar:hover { opacity: 0.95; }
-  button { background: #1d1d1d; color: #eee; border: 1px solid #444;
-           border-radius: 6px; padding: 6px 12px; cursor: pointer; }
-  button:disabled { opacity: 0.5; cursor: default; }
-  #status { padding: 4px 8px; }
-</style>
+<link rel="stylesheet" href="/static/live.css">
+<link rel="icon" href="data:,">
 </head>
 <body>
-<video id="screen" autoplay playsinline></video>
+<div id="app">
+  <div id="stage">
+    <div id="game">
+      <video id="screen" autoplay playsinline></video><!-- his voice too -->
+      <div id="caps"></div>
+      <div id="linkdown" hidden>Reconnecting to the game…</div>
+    </div>
+    <div id="maps">
+      <div class="maphead"><b>WHICH MODEL RUNS</b>
+        <span>one column per tic, newest at the right · one request per adapter;
+          their shared prefix is computed once (aLoRA)</span></div>
+      <canvas id="act"></canvas>
+      <div class="maphead"><b>ACTION PROBABILITIES</b>
+        <span>top strip: active behavior · danger: critic P(mid) amber, P(high) red ·
+          marks: fresh decisions</span></div>
+      <canvas id="heat"></canvas>
+      <div id="axis">
+        <span id="span">−10 s</span>
+        <span id="legend">p <i id="ramp"></i>
+          <span id="ticks"></span></span>
+        <span>now</span>
+      </div>
+    </div>
+  </div>
+  <div id="side">
+    <div id="panel">
+      <div class="title">GRANITE SWITCH · DOOM</div>
+      <div class="help">one output token per tic</div>
+      <div class="row">
+        <span class="chip"><i id="dot"></i><span id="style">–</span></span>
+        <span class="help" id="kind"></span>
+      </div>
+      <div id="order" hidden>
+        <div class="badge"><span>ORDER: <b id="o-told"></b></span><span id="o-status"></span></div>
+        <div class="help" id="o-why"></div>
+      </div>
+      <section>
+        <div class="label">DECISION · 1 s MEDIAN</div>
+        <div class="row">
+          <span class="big"><span id="ms">–</span><small> ms</small></span>
+          <span class="runs"><span id="p50"></span><span id="p99"></span></span>
+        </div>
+        <div class="bar" id="budget"><i id="budget-fill"></i><b id="tic-mark"></b></div>
+        <div class="row scale"><span id="tic-label"></span><span>100 ms</span></div>
+      </section>
+      <section>
+        <div class="label">ACTION</div>
+        <div class="row"><span id="action">–</span><code id="action-key"></code></div>
+      </section>
+      <section>
+        <div class="label">CRITIC · DANGER NEXT SECOND</div>
+        <div class="bar" id="critic"><i class="low"></i><i class="mid"></i><i class="high"></i></div>
+        <div class="small" id="critic-text"></div>
+      </section>
+      <section>
+        <div class="label">WEAPON PLANNER · EVERY 0.5 s</div>
+        <div class="small" id="plan">–</div>
+      </section>
+      <section>
+        <div class="label" id="match-label">MATCH</div>
+        <div id="stats">
+          <span><b id="s-hp">–</b>hp</span><span><b id="s-armor">–</b>armor</span>
+          <span><b id="s-frags">–</b>frags</span><span><b id="s-deaths">–</b>deaths</span>
+          <span><b id="s-rank">–</b>rank</span><span><b id="s-best">–</b>best bot</span>
+        </div>
+      </section>
+      <section id="input-box">
+        <div class="label">MODEL INPUT</div>
+        <pre id="input"></pre>
+      </section>
+      <div class="help" id="foot"></div>
+    </div>
+    <div id="conv">
+      <div class="label">CONVERSATION</div>
+      <div id="lines"></div>
+    </div>
+    <div id="bar" hidden>
+      <button id="mute">Mute mic</button>
+      <button id="sfx">Game sound: on</button>
+      <input id="sfxvol" type="range" min="0" max="60" value="18" title="Game sound volume">
+      <button id="reset">New match</button>
+      <button id="pixels" title="Nearest-neighbour scaling of the game">Pixels: smooth</button>
+      <button id="full">Full screen</button>
+      <span id="link" title="call: the browser's round trip, the video's bitrate and frame rate; GPU: the laptop's round trip to the GPU side, the stream's JPEG quality and fps"></span>
+      <span id="status"></span>
+    </div>
+  </div>
+</div>
 <div id="starts">
   <button id="start">Start (allow the microphone)</button>
   <button id="watch">Watch only (no microphone)</button>
-  <div id="error" style="color:#f88; text-align:center"></div>
+  <div id="error"></div>
 </div>
-<div id="bar" hidden>
-  <button id="mute">Mute mic</button>
-  <button id="sfx">Game sound: on</button>
-  <input id="sfxvol" type="range" min="0" max="60" value="18" title="Game sound volume">
-  <button id="reset">New match</button>
-  <button id="full">Full screen</button>
-  <span id="status"></span>
-</div>
-<script>
-const $ = (id) => document.getElementById(id);
-const status = (s) => { $("status").textContent = s; };
-let pc, mic, channel;
-
-async function start(withMic) {
-  $("start").disabled = $("watch").disabled = true;
-  (withMic ? $("start") : $("watch")).textContent = "Connecting…";
-  try {
-    pc = new RTCPeerConnection();
-    if (withMic) {
-      // The browser's own echo cancellation, noise suppression and gain.
-      mic = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      });
-      mic.getAudioTracks().forEach((t) => pc.addTrack(t, mic)); // first: audio
-    } else {
-      pc.addTransceiver("audio", { direction: "recvonly" });    // first: his voice
-      $("mute").hidden = true;
-    }
-    pc.addTransceiver("video", { direction: "recvonly" });     // second: the game
-    channel = pc.createDataChannel("app");
-    channel.onopen = () => setInterval(() => channel.send("ping"), 1000);
-    const remote = new MediaStream();
-    $("screen").srcObject = remote;
-    pc.ontrack = (e) => { remote.addTrack(e.track); $("screen").play().catch(() => {}); };
-    pc.onconnectionstatechange = () => status(pc.connectionState);
-    await pc.setLocalDescription(await pc.createOffer());
-    await new Promise((done) => {  // every candidate in the offer: no trickle
-      if (pc.iceGatheringState === "complete") return done();
-      pc.onicegatheringstatechange = () => pc.iceGatheringState === "complete" && done();
-      setTimeout(done, 3000);
-    });
-    const r = await fetch("/api/offer", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type }),
-    });
-    await pc.setRemoteDescription(await r.json());
-    $("starts").hidden = true;
-    $("bar").hidden = false;
-  } catch (err) {
-    $("start").disabled = $("watch").disabled = false;
-    $("start").textContent = "Start (allow the microphone)";
-    $("watch").textContent = "Watch only (no microphone)";
-    $("error").textContent = "Could not start: " + err;
-  }
-}
-
-$("start").onclick = () => start(true);
-$("watch").onclick = () => start(false);
-$("mute").onclick = () => {
-  const t = mic.getAudioTracks()[0];
-  t.enabled = !t.enabled;
-  $("mute").textContent = t.enabled ? "Mute mic" : "Unmute mic";
-};
-// Pipecat's RTVI layer reads the data channel: a client-message reaches the pipeline.
-const tell = (t, d = {}) => channel && channel.readyState === "open" &&
-  channel.send(JSON.stringify({ label: "rtvi-ai", type: "client-message",
-                                id: String(Date.now()), data: { t, d } }));
-$("reset").onclick = () => tell("reset");
-$("sfx").onclick = () => {  // the game's sound, mixed under his voice on the laptop
-  tell("sfx");
-  $("sfx").textContent = $("sfx").textContent.endsWith("on")
-    ? "Game sound: off" : "Game sound: on";
-};
-// Its volume: a gain from 0 to 0.6 (the slider's percent; 18 is the default, -15 dB).
-$("sfxvol").oninput = () => tell("sfx_gain", { gain: $("sfxvol").value / 100 });
-$("full").onclick = () => document.fullscreenElement
-  ? document.exitFullscreen() : document.documentElement.requestFullscreen();
-</script>
+<script src="/static/live.js"></script>
 </body>
 </html>

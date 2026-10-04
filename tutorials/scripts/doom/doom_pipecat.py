@@ -12,9 +12,13 @@ own ASR transcribes inside the narrator's request. No speech-to-text, LLM or
 text-to-speech service runs here. When you start talking over him, his line
 stops (an interruption) and the GPU side drops what he had not said yet.
 
-The page at ``/`` (``static/live.html``) shows the stream full-window, with a
-mute button, a game-sound button and a new-match button; Pipecat's prebuilt
-client is still at ``/client``.
+The page at ``/`` (``static/live.html``, ``live.js``, ``live.css``) shows the
+game's video with the dashboard around it, drawn in the browser from the
+telemetry (crisp at any size): the panel, which model runs, the action
+heatmap, captions and the conversation; with a mute button, the game's sound,
+a new-match button and the link's state. The GPU side's ``wide`` and
+``classic`` views send it all drawn into the video instead; the page then
+shows the video alone. Pipecat's prebuilt client is still at ``/client``.
 
 A small environment of its own (not the vLLM one)::
 
@@ -49,6 +53,7 @@ import numpy as np
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from loguru import logger
 from PIL import Image
 from pipecat.audio.mixers.base_audio_mixer import BaseAudioMixer
@@ -65,6 +70,7 @@ from pipecat.frames.frames import (
     MixerControlFrame,
     MixerEnableFrame,
     OutputImageRawFrame,
+    OutputTransportMessageUrgentFrame,
     StartFrame,
     TTSAudioRawFrame,
     VADUserStartedSpeakingFrame,
@@ -89,6 +95,19 @@ from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 MIC_HZ = 16_000  # what the ASR takes
 PRE_ROLL_S = 0.3  # audio kept from before the VAD's start, so no word is clipped
 SFX_HZ = 22_050  # the game's sound as the GPU side sends it (its hello says so)
+# What the GPU side sends that the page draws (over the call's data channel).
+TO_PAGE = {
+    "hello",
+    "tics",
+    "panel",
+    "match_start",
+    "line",
+    "event",
+    "quality",
+    "latency",
+}
+RETRY_S = (0.5, 5.0)  # reconnecting to the GPU side: first wait, longest wait
+REPLACED = 4000  # the GPU side's close code when a newer call took over (doom_live)
 
 
 class GameSound(BaseAudioMixer):
@@ -152,8 +171,13 @@ class DoomLink(FrameProcessor):
     """The pipeline's link to the GPU side. Up: each utterance (from the VAD's
     start to its stop, with a little audio from before the start), and a
     "speaking" notice at the start. Down: the frames (JPEG, decoded here) as
-    video, his lines as TTS audio, so an interruption stops them, and the
-    game's sound to the mixer (``sound``)."""
+    video, his lines as TTS audio, so an interruption stops them, the game's
+    sound to the mixer (``sound``), and to the page, over the data channel
+    (``{"label": "doom", ...}``), what it draws (:data:`TO_PAGE`: the hello's
+    schema, the telemetry, his lines) and the link's state (``{"type":
+    "link", "state": "up" | "down" | "replaced", "rtt": ms}``). The connection
+    is kept: when it drops, it is made again (:meth:`_keep_link`), unless a
+    newer call replaced this one there."""
 
     def __init__(self, url: str, sound: GameSound | None = None):
         super().__init__()
@@ -169,6 +193,9 @@ class DoomLink(FrameProcessor):
         self._last_line = 0
         self._dropped_upto = 0  # lines talked over: their late audio is dropped
         self._rtt: list[float] = []  # the link's round trips (ping, pong), ms
+        self._hello: dict | None = None  # the GPU side's latest, for the page
+        self._replaced = False  # a newer call took the GPU side: do not reconnect
+        self._link: dict = {"type": "link", "state": "connecting"}
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -195,6 +222,10 @@ class DoomLink(FrameProcessor):
                 logger.info(f"game sound {'on' if self.sound.on else 'off'}")
             elif frame.type == "sfx_gain" and self.sound is not None:  # the slider
                 self.sound.gain = min(1.0, max(0.0, float((frame.data or {})["gain"])))
+            elif frame.type == "hello":  # the page's channel opened: what it missed
+                if self._hello is not None:
+                    await self._to_page(self._hello)
+                await self._to_page(self._link)
             return
         if isinstance(frame, InputAudioRawFrame):  # the microphone: up, not out
             if self._speaking:
@@ -214,8 +245,7 @@ class DoomLink(FrameProcessor):
         elif isinstance(frame, VADUserStoppedSpeakingFrame):
             self._speaking = False
             pcm, self._utt = b"".join(self._utt), []
-            if self._ws is not None and not self._ws.closed:
-                await self._ws.send_bytes(b"U" + pcm)
+            if await self._send(b"U" + pcm):
                 logger.info(f"utterance sent: {len(pcm) / (2 * MIC_HZ):.1f} s")
         elif isinstance(frame, BotStartedSpeakingFrame):
             self._bot_speaking = True
@@ -223,26 +253,83 @@ class DoomLink(FrameProcessor):
             self._bot_speaking = False
         await self.push_frame(frame, direction)
 
-    async def _send(self, msg: dict) -> None:
-        if self._ws is not None and not self._ws.closed:
-            await self._ws.send_str(json.dumps(msg))
+    async def _send(self, msg: dict | bytes) -> bool:
+        """To the GPU side, if connected (False if not, or it just dropped)."""
+        ws = self._ws
+        if ws is None or ws.closed:
+            return False
+        try:
+            if isinstance(msg, bytes):
+                await ws.send_bytes(msg)
+            else:
+                await ws.send_str(json.dumps(msg))
+        except (ConnectionError, RuntimeError, aiohttp.ClientError):
+            return False
+        return True
+
+    async def _to_page(self, msg: dict) -> None:
+        await self.push_frame(
+            OutputTransportMessageUrgentFrame(message={"label": "doom", **msg})
+        )
+
+    async def _set_link(self, state: str, rtt: float | None = None) -> None:
+        self._link = {"type": "link", "state": state, "rtt": rtt}
+        await self._to_page(self._link)
 
     async def _connect(self) -> None:
         self._session = aiohttp.ClientSession()
-        try:
-            self._ws = await self._session.ws_connect(self.url, max_msg_size=64 * 2**20)
-        except aiohttp.ClientError as e:
-            logger.error(
-                f"cannot reach the GPU side at {self.url} ({e}); is ssh -L up?"
-            )
-            return
-        logger.info(f"connected to {self.url}")
-        self._task = self.create_task(self._receive(), "doom_receive")
+        self._task = self.create_task(self._keep_link(), "doom_link")
         self._pinger = self.create_task(self._ping(), "doom_ping")
+
+    async def _keep_link(self) -> None:
+        """Connect to the GPU side, and again whenever the connection drops (the
+        tunnel blips, the service restarts): after ``RETRY_S[0]``, doubling up to
+        ``RETRY_S[1]``. The match goes on there meanwhile; the page is told. Not
+        when the GPU side closed it for a newer call (it says ``replaced``, and
+        closes with ``REPLACED``)."""
+        wait, said = RETRY_S[0], False
+        while True:
+            try:
+                self._ws = await asyncio.wait_for(
+                    self._session.ws_connect(
+                        self.url, max_msg_size=64 * 2**20, heartbeat=10
+                    ),
+                    15,
+                )
+            except (aiohttp.ClientError, OSError, TimeoutError) as e:
+                if not said:
+                    logger.error(
+                        f"cannot reach the GPU side at {self.url} ({e or type(e).__name__}); "
+                        "is ssh -L up? Trying again."
+                    )
+                    said = True
+                if self._link["state"] != "down":
+                    await self._set_link("down")
+                await asyncio.sleep(wait)
+                wait = min(2 * wait, RETRY_S[1])
+                continue
+            logger.info(f"connected to {self.url}")
+            wait, said = RETRY_S[0], False
+            await self._send({"type": "acking"})  # frames wait for acks from the first
+            await self._set_link("up")
+            try:
+                await self._receive()
+            except (aiohttp.ClientError, OSError) as e:
+                logger.warning(f"the link to the GPU side failed: {e}")
+            replaced = self._replaced or self._ws.close_code == REPLACED
+            self._ws = None
+            if replaced:  # a newer call has the game: this one leaves it
+                logger.warning("another call connected to the GPU side; this one stops")
+                await self._set_link("replaced")
+                return
+            await self._set_link("down")
+            logger.warning("the GPU side's connection closed; reconnecting")
+            await asyncio.sleep(wait)
 
     async def _ping(self, every_s: float = 1.0) -> None:
         """A ping a second, on the stream the frames and his voice come down; its
-        round trip, logged every 10, is how far behind the link runs."""
+        round trip (to the page with each pong; logged every 10) is how far
+        behind the link runs."""
         while True:
             await asyncio.sleep(every_s)
             await self._send({"type": "ping", "t": time.perf_counter()})
@@ -297,12 +384,20 @@ class DoomLink(FrameProcessor):
             m = json.loads(msg.data)
             if m["type"] == "hello":
                 self._sfx_hz = m.get("sfx_hz", SFX_HZ)
+                if self._hello is not None and m.get("boot") != self._hello.get("boot"):
+                    # The GPU side restarted: its line ids start again.
+                    self._last_line = self._dropped_upto = 0
+                    self._rates.clear()
+                self._hello = m
             elif m["type"] == "pong" and m.get("t") is not None:
-                self._rtt.append(1000 * (time.perf_counter() - m["t"]))
+                rtt = 1000 * (time.perf_counter() - m["t"])
+                self._rtt.append(rtt)
+                await self._set_link("up", round(rtt))
             elif m["type"] == "line":
                 self._last_line = max(self._last_line, m["id"])
                 heard = f" (you: {m['heard']})" if m.get("heard") else ""
                 logger.info(f"him: {m['line']}{heard}")
+                m = {k: v for k, v in m.items() if k != "state"}  # not for the page
             elif m["type"] == "audio":
                 self._rates[m["id"]] = m["sr"]
             elif m["type"] == "latency":
@@ -310,9 +405,14 @@ class DoomLink(FrameProcessor):
                     f"end of your speech to his voice: {m['speech_to_audio_ms']} ms "
                     f"(line written after {m['speech_to_line_ms']} ms)"
                 )
+            elif m["type"] == "replaced":  # before the close (its code may not come)
+                self._replaced = True
+            elif m["type"] == "quality":
+                logger.info(f"the stream: JPEG q{m['q']} at {m['fps']} fps ({m})")
             elif m["type"] == "event" and m["kind"] == "match_over":
                 logger.info(f"match over: {m.get('stats')}")
-        logger.warning("the GPU side closed the connection")
+            if m["type"] in TO_PAGE:
+                await self._to_page(m)
 
 
 def _decode(data: bytes) -> Image.Image:
@@ -409,15 +509,15 @@ def main() -> None:
         "--cert-dir", type=Path, default=Path.home() / ".cache" / "doom-pipecat"
     )
     ap.add_argument(
-        "--width", type=int, default=1920, help="If the GPU side does not say"
+        "--width", type=int, default=640, help="If the GPU side does not say"
     )
-    ap.add_argument("--height", type=int, default=1080)
+    ap.add_argument("--height", type=int, default=480)
     ap.add_argument(
         "--video-kbps",
         type=int,
-        default=8000,
-        help="Video bitrate cap (aiortc's own is 1500 kbps: the panel's text blurs; "
-        "the call stays on this machine)",
+        default=1500,
+        help="Video bitrate cap; the browser's congestion control adapts below it "
+        "(the game alone: the page draws the rest)",
     )
     ap.add_argument("--fps", type=int, default=20)
     ap.add_argument(
@@ -442,15 +542,17 @@ def main() -> None:
 
     for codec in (vpx, h264):
         codec.MAX_BITRATE = 1000 * args.video_kbps
-        codec.DEFAULT_BITRATE = min(codec.MAX_BITRATE, 2_500_000)
+        codec.DEFAULT_BITRATE = min(codec.MAX_BITRATE, 1_000_000)
 
     app = FastAPI()
     calls = SmallWebRTCRequestHandler()
     app.mount("/client", SmallWebRTCPrebuiltUI)  # Pipecat's own page, a small tile
+    static = Path(__file__).resolve().parent / "static"
+    app.mount("/static", StaticFiles(directory=static))  # the page's script, styles
 
     @app.get("/", include_in_schema=False)
-    async def root():  # the game, full window
-        return FileResponse(Path(__file__).resolve().parent / "static" / "live.html")
+    async def root():  # the game and the dashboard, full window
+        return FileResponse(static / "live.html")
 
     @app.post("/start")
     async def start(_request: Request):

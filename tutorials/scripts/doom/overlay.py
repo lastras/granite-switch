@@ -4,7 +4,9 @@ which model runs on each tic, the action distribution as a heatmap, and the
 spoken lines as captions over the game.
 
 :mod:`record_video` draws one per tic into an MP4; :mod:`doom_live` draws them
-in a renderer process and streams them as JPEG.
+in a renderer process and streams them as JPEG (its ``classic`` and ``wide``
+views), or streams the game alone and lets the browser draw the rest from
+:func:`schema` and the telemetry (its ``client`` view).
 """
 
 from __future__ import annotations
@@ -509,6 +511,45 @@ def _conversation(caps, box, k: float) -> Image.Image:
             d.text((pad, y + lh * i), ln, font=f, fill=col)
         y -= round(6 * k)
     return pane
+
+
+def schema(models: list[str]) -> dict:
+    """What a browser needs to draw the panel, the activity map and the
+    heatmap as this module does (the live demo's ``client`` view): the
+    labels, the colours (``#rrggbb``) and the heatmap's colour stops."""
+
+    def hx(c: tuple[int, int, int]) -> str:
+        return "#{:02x}{:02x}{:02x}".format(*c)
+
+    palette = {
+        "bg": BG,
+        "layer": LAYER,
+        "layer2": LAYER2,
+        "text": TEXT,
+        "text2": TEXT2,
+        "help": HELP,
+        "blue": BLUE,
+        "teal": TEAL,
+        "amber": AMBER,
+        "red": RED,
+        "green": GREEN,
+    }
+    return {
+        "models": models,
+        "model_labels": {m: MODEL_LABELS.get(m, m) for m in models},
+        "model_colors": {m: hx(MODEL_COLORS[m]) for m in models},
+        "colors": {k: hx(v) for k, v in COLORS.items()},
+        "order_colors": {k: hx(v) for k, v in ORDER_COLORS.items()},
+        "palette": {k: hx(v) for k, v in palette.items()},
+        "stops": [[p, hx(c)] for p, c in STOPS],  # over sqrt(p)
+        "display_order": list(DISPLAY_ORDER),
+        "short_labels": {a: SHORT_LABELS[a] for a in DISPLAY_ORDER},
+        "action_labels": ACTION_LABELS,
+        "danger_levels": list(DANGER_LEVELS),
+        "weapon_names": {str(k): v for k, v in WEAPON_NAMES.items()},
+        "tic_hz": TIC_HZ,
+        "tic_ms": TIC_MS,
+    }
 
 
 VIEWS = ("classic", "wide")

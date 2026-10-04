@@ -18,21 +18,33 @@ be checked afterwards (:mod:`probes`).
 
 Processes: this one (the decision loop, the websocket server), vLLM's engine
 core, the game (:func:`engine.game_worker`, publishing its frames to shared
-memory), a renderer that draws each frame as in the videos (:mod:`overlay`)
-and JPEG-encodes it at ``--fps``, and the voice (``voice_video.py --serve`` in
-a TTS environment: Kokoro by default, Chatterbox with ``--tts``). Drawing stays
-off the decision loop.
+memory), a renderer that JPEG-encodes the newest frame at ``--fps``, and the
+voice (``voice_video.py --serve`` in a TTS environment: Kokoro by default,
+Chatterbox with ``--tts``). In the ``client`` view (the default) the stream is
+the game's screen alone, and the renderer sends the telemetry the page draws
+the panel and the maps from; in ``wide`` and ``classic`` it draws them into
+the frame as the videos do (:mod:`overlay`). Drawing stays off the decision
+loop. The stream's quality and frame rate follow the link
+(:class:`LinkGovernor`).
 
-The websocket, at ``/ws`` (one client at a time; a new one replaces the old):
+The websocket, at ``/ws`` (one client at a time; a new one replaces the old,
+told ``{"type": "replaced"}`` and closed with code ``REPLACED``, so it does not
+reconnect):
 
 * down: ``b"J" + JPEG`` (a frame); ``b"A" + line id (4 bytes) + int16 PCM`` (a
   piece of his line); ``b"S" + int16 PCM`` (the game's own sound, mono at the
-  hello's ``sfx_hz``, every 40 ms; ``--no-sound``: none); JSON ``{"type": "hello" | "line" | "heard" | "audio_end"
-  | "event" | "latency", ...}`` (a line carries the game state he answered
-  from; events: ``died``, with the killer; ``frag``; ``match_over``).
+  hello's ``sfx_hz``, every 40 ms; ``--no-sound``: none); JSON ``{"type":
+  "hello" | "line" | "heard" | "audio" | "audio_end" | "event" | "latency" |
+  "quality" | "pong" | "replaced", ...}`` (the hello carries the page's
+  schema; a line, the game state he answered from; events: ``died``, with the
+  killer; ``frag``; ``match_over``; quality: the stream stepped down or up),
+  and in the client view ``{"type": "tics" | "panel" | "match_start", ...}``
+  (:func:`tic_column`, :func:`panel_fields`).
 * up: ``b"U" + int16 PCM, 16 kHz`` (one utterance); JSON ``{"type":
   "speaking"}`` (you started: he holds his remarks and drops what he had not
-  said yet), ``{"type": "reset"}`` (a new match).
+  said yet), ``{"type": "reset"}`` (a new match), ``{"type": "ack"}`` (a frame
+  arrived: the next may be sent; ``{"type": "acking"}`` first says acks will
+  come), ``{"type": "ping", "t": ...}`` (answered with a pong carrying ``t``).
 
 ::
 
@@ -86,29 +98,73 @@ from talk import sound_tag
 TTS_AUTHKEY = b"granite-switch-doom-tts"  # voice_video.TTS_AUTHKEY
 MODELS = ["base", *BEHAVIORS, ARMS, CRITIC, ORDERS, NARRATOR]
 ORDER_SHOWN_S = 4.0  # an order over stays on the panel this long
-IN_FLIGHT = 2  # frames sent and not yet acked, at most (a client that acks)
+# Frames sent and not yet acked, at most (a client that acks): 20 fps up to a 150 ms
+# round trip; 1 at the governor's lowest step (a frame takes long to cross there).
+IN_FLIGHT = 3
+BOOT = f"{os.getpid()}-{int(time.time())}"  # this process, in every hello
+REPLACED = 4000  # the websocket close code to a client a newer one replaced
 _SENTENCE = re.compile(r"(?<=[.?!])\s+")
 
 
 # ── The renderer (its own process) ─────────────────────────────────────────────
-def stream_size(view: str, scale: float) -> tuple[int, int]:
-    """The streamed frame's size: the view's, scaled, even (for the codec)."""
-    from overlay import Overlay
+VIEWS = ("client", "classic", "wide")
+TICS_EVERY_S = 0.1  # the client view: a batch of per-tic columns this often
+PANEL_EVERY_S = 0.2  # ... and the panel's fields this often
 
-    w, h = Overlay(MODELS, view).size
+
+def stream_size(view: str, scale: float) -> tuple[int, int]:
+    """The streamed frame's size: the view's, scaled, even (for the codec);
+    the ``client`` view's is the game's own screen."""
+    from overlay import W_GAME, H, Overlay
+
+    w, h = (W_GAME, H) if view == "client" else Overlay(MODELS, view).size
     return round(w * scale) // 2 * 2, round(h * scale) // 2 * 2
 
 
+def tic_column(
+    tick: int, style: str, probs: dict, critic: dict, decided: bool, ran: set
+) -> dict:
+    """One tic of the maps, for the client view's page: ``s`` the behavior,
+    ``p`` the action probabilities in ``DISPLAY_ORDER`` (0-255; None on a tic
+    with no decision), ``c`` the critic's low/mid/high (0-255), ``d`` a fresh
+    decision, ``a`` the models that ran (bit i: ``MODELS[i]``)."""
+    from doom_env import DISPLAY_ORDER
+    from policy import DANGER_LEVELS
+
+    return {
+        "k": tick,
+        "s": style,
+        "p": [round(255 * probs.get(a, 0.0)) for a in DISPLAY_ORDER]
+        if decided
+        else None,
+        "c": [round(255 * critic.get(c, 0.0)) for c in DANGER_LEVELS],
+        "d": int(decided),
+        "a": sum(1 << i for i, m in enumerate(MODELS) if m in ran),
+    }
+
+
 def render_loop(frames_name: str, inbox, out, opts: dict) -> None:
-    """Draw the newest game frame with the telemetry the server sends, as the
-    videos do, and send it out as JPEG, ``opts["fps"]`` times a second."""
+    """Send the newest game frame as JPEG, ``opts["fps"]`` times a second at
+    ``opts["quality"]`` (an inbox ``("quality", q, fps)`` changes both), and
+    what the server sends about each decision, each tagged on ``out``.
+
+    The ``client`` view sends the game's screen alone (``b"J"``), and the
+    telemetry for the page to draw: a batch of :func:`tic_column` every
+    ``TICS_EVERY_S`` (``b"T"``) and the panel's fields every ``PANEL_EVERY_S``
+    (``b"P"``; the server keeps only the newest). The ``classic`` and ``wide``
+    views draw it all into the frame, as the videos do (:mod:`overlay`)."""
     from overlay import KINDS, Overlay
+    from PIL import Image
 
     shared = SharedFrame(frames_name)
-    view = Overlay(MODELS, opts["view"])
-    caps: list[
-        tuple[float, str, str]
-    ] = []  # the captions; the wide view's conversation
+    client = opts["view"] == "client"
+
+    def overlay():
+        return None if client else Overlay(MODELS, opts["view"])
+
+    view = overlay()
+    caps: list[tuple[float, str, str]] = []  # the captions; the wide view's chat
+    cols: list[dict] = []  # the client view's columns not sent yet
     lat: deque[float] = deque(maxlen=1000)
     last_second: deque[float] = deque(maxlen=TIC_HZ)
     info = {
@@ -125,8 +181,20 @@ def render_loop(frames_name: str, inbox, out, opts: dict) -> None:
         "text": "",
         "gpu": opts["gpu"],
     }
+
+    def push(t: int, probs: dict, style: str, decided: bool, crit: dict, ran: set):
+        if client:
+            cols.append(tic_column(t, style, probs, crit, decided, ran))
+        else:
+            view.heat.push(probs, style, decided, crit)
+            view.act.push(ran)
+
+    def tell(kind: bytes, msg: dict) -> None:
+        out.send_bytes(kind + json.dumps(msg, separators=(",", ":")).encode())
+
     last_tick, talk_until, read_at = -1, -1, set()
-    period, due = 1.0 / opts["fps"], time.perf_counter()
+    quality, period = opts["quality"], 1.0 / opts["fps"]
+    due = tics_due = panel_due = time.perf_counter()
     size = stream_size(opts["view"], opts["scale"])
     while True:
         while True:
@@ -137,7 +205,12 @@ def render_loop(frames_name: str, inbox, out, opts: dict) -> None:
             if msg[0] == "stop":
                 return
             if msg[0] == "new":  # a new match
-                view, caps, last_tick = Overlay(MODELS, opts["view"]), [], -1
+                view, caps, cols, last_tick = overlay(), [], [], -1
+                if client:
+                    tell(b"T", {"type": "match_start"})
+                continue
+            if msg[0] == "quality":  # the link's state: the server's call
+                quality, period = msg[1], 1.0 / msg[2]
                 continue
             if msg[0] == "cap":
                 caps = caps[-15:] + [(msg[1] / TIC_HZ, msg[2], msg[3])]
@@ -146,7 +219,7 @@ def render_loop(frames_name: str, inbox, out, opts: dict) -> None:
                 talk_until = msg[1]
                 continue
             if msg[0] == "read":  # the orders adapter read the watcher's words
-                read_at.add(msg[1])
+                read_at.add(max(msg[1], last_tick + 1))  # not on a column drawn
                 continue
             _, tick, d, ms, state, stats, style, order = msg  # a decision
             info["adapter"] = style
@@ -162,14 +235,12 @@ def render_loop(frames_name: str, inbox, out, opts: dict) -> None:
                 )
 
             for t in range(last_tick + 1, tick):  # tics with no decision (dead, busy)
-                view.heat.push({}, style, False, info["critic"])
-                view.act.push(ran(t, set()))
+                push(t, {}, style, False, info["critic"], ran(t, set()))
             last_tick = tick
-            read_at = {t for t in read_at if t > tick}
             probs = d[style][1]
             critic = d[CRITIC][1] if CRITIC in d else {}
-            view.heat.push(probs, style, True, critic)
-            view.act.push(ran(tick, set(d)))
+            push(tick, probs, style, True, critic, ran(tick, set(d)))
+            read_at = {t for t in read_at if t > tick}
             info["order"] = order
             lat.append(ms)
             last_second.append(ms)
@@ -193,6 +264,15 @@ def render_loop(frames_name: str, inbox, out, opts: dict) -> None:
                     hp=int(hud.group(1)), armor=int(hud.group(2)), weapon=hud.group(3)
                 )
         now = time.perf_counter()
+        if client and now >= tics_due:
+            tics_due = max(tics_due + TICS_EVERY_S, now)
+            if cols:
+                tell(b"T", {"type": "tics", "cols": cols})
+                cols = []
+        if client and now >= panel_due:
+            panel_due = max(panel_due + PANEL_EVERY_S, now)
+            if "ms" in info:
+                tell(b"P", panel_fields(info))
         if now < due:
             time.sleep(min(due - now, 0.005))
             continue
@@ -201,12 +281,129 @@ def render_loop(frames_name: str, inbox, out, opts: dict) -> None:
         if got is None or "ms" not in info:
             continue
         tick, frame = got
-        img = view.draw(frame, {**info, "tick": tick}, caps, tick / TIC_HZ)
+        if client:
+            img = Image.fromarray(frame)
+        else:
+            img = view.draw(frame, {**info, "tick": tick}, caps, tick / TIC_HZ)
         if size != img.size:
             img = img.resize(size)
         buf = io.BytesIO()
-        img.save(buf, "JPEG", quality=opts["quality"])
-        out.send_bytes(buf.getvalue())
+        img.save(buf, "JPEG", quality=quality)
+        out.send_bytes(b"J" + buf.getvalue())
+
+
+def panel_fields(info: dict) -> dict:
+    """The panel's fields (what :meth:`overlay.Panel.draw` shows), for the page;
+    the weapon planner as its slot and that slot's probability."""
+    plan = info["plan"]
+    return {
+        "type": "panel",
+        **{
+            k: info[k]
+            for k in ("adapter", "action", "order", "stats", "hp", "armor", "weapon")
+        },
+        **{k: round(info[k], 2) for k in ("ms", "p50", "p99")},
+        "tick": info["tick"],
+        "critic": {k: round(v, 3) for k, v in info["critic"].items()},
+        "plan": plan
+        and {
+            "slot": plan["slot"],
+            "p": round(plan["probs"].get(str(plan["slot"]), 0.0), 3),
+        },
+        "text": info["text"],
+    }
+
+
+# ── The link: the stream's quality ─────────────────────────────────────────────
+LOWER_STEPS = ((60, 15), (45, 10))  # JPEG quality and fps, below the top's
+
+
+class LinkGovernor:
+    """The stream's JPEG quality and frame rate, stepped from how the link
+    keeps up, judged once a window (:meth:`judge`; :meth:`Live.adapt` calls it
+    every 2 s): from each frame's time from being sent to the client's ack,
+    and how many frames were replaced by a newer one before they could be sent
+    (the newest wins).
+
+    A window is slow when the median send-to-ack exceeds ``slow_ms`` or more
+    than ``slow_replaced`` of the frames were replaced: one step down. It is
+    healthy below ``fast_ms`` and ``fast_replaced``: after ``patience`` healthy
+    windows in a row, one step up. A step up that turns slow within
+    ``patience`` windows doubles the patience (up to ``max_patience``), so a
+    link at its limit does not swing up and down. At the lowest step, one
+    frame at a time is in flight (:attr:`in_flight`): fewer frames, but less
+    for his voice to wait behind."""
+
+    def __init__(
+        self,
+        steps: list[tuple[int, float]],
+        slow_ms: float = 150.0,
+        fast_ms: float = 100.0,
+        slow_replaced: float = 0.5,
+        fast_replaced: float = 0.2,
+        patience: int = 3,
+        max_patience: int = 30,
+    ):
+        self.steps = steps
+        self.slow_ms, self.fast_ms = slow_ms, fast_ms
+        self.slow_replaced, self.fast_replaced = slow_replaced, fast_replaced
+        self.first_patience, self.max_patience = patience, max_patience
+        self.reset()
+
+    def reset(self) -> None:
+        """A new client: the top step, and nothing measured."""
+        self.level, self.patience = 0, self.first_patience
+        self.healthy, self.since_up = 0, None
+        self.acks: list[float] = []
+        self.made = self.sent = 0
+
+    @property
+    def step(self) -> tuple[int, float]:
+        return self.steps[self.level]
+
+    @property
+    def in_flight(self) -> int:
+        """Frames that may be sent and not yet acked, at this step."""
+        lowest = self.level > 0 and self.level == len(self.steps) - 1
+        return 1 if lowest else IN_FLIGHT
+
+    def judge(self) -> tuple[str, dict] | None:
+        """End a window: ``("down" | "up", what was measured)`` when the step
+        changed (:attr:`step` is the new one), else None."""
+        acks, made, sent = self.acks, self.made, self.sent
+        self.acks, self.made, self.sent = [], 0, 0
+        if made == 0:  # nothing streamed (no client, no match)
+            return None
+        ms = float(np.median(acks)) if acks else None
+        replaced = max(0.0, 1.0 - sent / made)
+        seen = {"ack_ms": ms and round(ms), "replaced": round(replaced, 2)}
+        if self.since_up is not None:
+            self.since_up += 1
+        if (ms is not None and ms > self.slow_ms) or replaced > self.slow_replaced:
+            self.healthy = 0
+            if self.since_up is not None and self.since_up <= self.patience:
+                self.patience = min(2 * self.patience, self.max_patience)
+            self.since_up = None
+            if self.level + 1 < len(self.steps):
+                self.level += 1
+                return "down", seen
+            return None
+        if (ms is None or ms < self.fast_ms) and replaced < self.fast_replaced:
+            self.healthy += 1
+            if self.healthy >= self.patience and self.level > 0:
+                self.level -= 1
+                self.healthy, self.since_up = 0, 0
+                return "up", seen
+        else:
+            self.healthy = 0
+        return None
+
+
+def quality_steps(quality: int, fps: float) -> list[tuple[int, float]]:
+    """The governor's steps: ``(quality, fps)`` first, then the lower ones."""
+    return [(quality, fps)] + [
+        (q, f) for q, f in LOWER_STEPS if q < quality and f < fps
+    ]
 
 
 # ── His voice (a process in the TTS environment) ───────────────────────────────
@@ -257,12 +454,12 @@ class Voice:
 # ── The service ────────────────────────────────────────────────────────────────
 class Live:
     def __init__(self, args, pol: AsyncPolicy, voice: Voice | None, gpu: str):
-        self.args, self.pol, self.voice = args, pol, voice
+        self.args, self.pol, self.voice, self.gpu = args, pol, voice, gpu
         ctx = mp.get_context("spawn")
         self.frames = SharedFrame()
         self.tele = ctx.Queue()  # to the renderer; put() never waits
-        jpeg_r, jpeg_w = ctx.Pipe(duplex=False)
-        self.jpeg = jpeg_r
+        rendered_r, rendered_w = ctx.Pipe(duplex=False)
+        self.rendered = rendered_r  # from the renderer: frames and telemetry
         opts = {
             "fps": args.fps,
             "view": args.view,
@@ -274,7 +471,7 @@ class Live:
         }
         self.renderer = ctx.Process(
             target=render_loop,
-            args=(self.frames.name, self.tele, jpeg_w, opts),
+            args=(self.frames.name, self.tele, rendered_w, opts),
             daemon=True,
         )
         self.renderer.start()
@@ -293,8 +490,14 @@ class Live:
         self._next_frame: bytes | None = None
         self._acking, self._unacked = False, 0
         self._acked = asyncio.Event()
+        self._sent_at: deque[float] = deque()  # the unacked frames' send times
+        self.gov = LinkGovernor(quality_steps(args.quality, args.fps))
+        # The client view's telemetry: the tic batches in order, the panel newest-wins.
+        self._tele: deque[str] = deque()
+        self._panel: str | None = None
+        self._tele_sending = False
         # What happened in the last stats window (see stats()).
-        self.n = {"frames": 0, "frame_kb": 0, "voiced": 0, "heard": 0}
+        self.n = {"frames": 0, "frame_kb": 0, "tele_b": 0, "voiced": 0, "heard": 0}
         self.ms: list[float] = []
         self._tasks: set[asyncio.Task] = set()
         self.log = None  # this run's lines and matches, as JSON rows
@@ -319,36 +522,97 @@ class Live:
         try:
             if isinstance(data, bytes):
                 await ws.send_bytes(data)
+            elif isinstance(data, str):  # JSON already
+                await ws.send_str(data)
             else:
                 await ws.send_str(json.dumps(data))
         except (ConnectionError, RuntimeError):
             pass
 
-    # Frames: the newest one wins when the link is slow. A client that acks each
-    # frame ({"type": "ack"}) has at most IN_FLIGHT unacked: the link's buffers
-    # (the ssh tunnel's among them) never fill with frames, so his voice and the
-    # game's sound, on the same stream, do not wait behind them.
-    def on_jpeg(self) -> None:
-        self._next_frame = self.jpeg.recv_bytes()
-        if not self._sending:
-            self._sending = True
-            self.spawn(self._send_frames())
+    def watched(self) -> bool:
+        return self.ws is not None and not self.ws.closed
+
+    # What the renderer sends, by its tag: a frame (b"J"), a batch of tic
+    # columns (b"T") or the panel (b"P"). Frames: the newest one wins when the
+    # link is slow. A client that acks each frame ({"type": "ack"}) has at most
+    # LinkGovernor.in_flight unacked: the link's buffers (the ssh tunnel's) never
+    # fill with frames, so his voice, the game's sound and the telemetry, on
+    # the same stream, do not wait behind them. The telemetry goes at once (it
+    # is small): the tic batches all, in order; of the panels, the newest.
+    def on_render(self) -> None:
+        data = self.rendered.recv_bytes()
+        kind = data[:1]
+        if kind == b"J":
+            self.gov.made += 1
+            self._next_frame = data[1:]
+            if not self._sending:
+                self._sending = True
+                self.spawn(self._send_frames())
+            return
+        if not self.watched():
+            return
+        if kind == b"P":
+            self._panel = data[1:].decode()
+        else:
+            self._tele.append(data[1:].decode())
+        if not self._tele_sending:
+            self._tele_sending = True
+            self.spawn(self._send_tele())
 
     async def _send_frames(self) -> None:
         while self._next_frame is not None:
-            if self._acking and self._unacked >= IN_FLIGHT:
+            if self._acking and self._unacked >= self.gov.in_flight:
                 self._acked.clear()
                 try:
                     await asyncio.wait_for(self._acked.wait(), 2.0)
                 except TimeoutError:  # acks stopped: do not stall the stream
                     self._unacked = 0
+                    self._sent_at.clear()
+                    self.gov.acks.append(2000.0)
                 continue
             data, self._next_frame = self._next_frame, None
+            self._sent_at.append(time.perf_counter())
             await self.send(b"J" + data)
             self._unacked += 1
+            self.gov.sent += 1
             self.n["frames"] += 1
             self.n["frame_kb"] += len(data) // 1024
         self._sending = False
+
+    def on_ack(self) -> None:
+        self._acking = True
+        self._unacked = max(0, self._unacked - 1)
+        if self._sent_at:
+            self.gov.acks.append(1000 * (time.perf_counter() - self._sent_at.popleft()))
+        self._acked.set()
+
+    async def _send_tele(self) -> None:
+        while self._tele or self._panel is not None:
+            if self._tele:
+                data = self._tele.popleft()
+            else:
+                data, self._panel = self._panel, None
+            await self.send(data)
+            self.n["tele_b"] += len(data)
+        self._tele_sending = False
+
+    async def adapt(self, every_s: float = 2.0) -> None:
+        """Every ``every_s``: the stream's quality for the link, as the
+        governor judges it; the renderer and the client are told of a change."""
+        while True:
+            await asyncio.sleep(every_s)
+            if not self.watched():
+                continue
+            got = self.gov.judge()
+            if got is None:
+                continue
+            way, seen = got
+            q, fps = self.gov.step
+            self.tell(("quality", q, fps))
+            print(f"stream {way}: JPEG q{q} at {fps:g} fps ({seen})", flush=True)
+            await self.send(
+                {"type": "quality", "q": q, "fps": fps, "level": self.gov.level, **seen}
+            )
 
     # The match.
     async def new_game(self, start: bool = True) -> None:
@@ -398,7 +662,7 @@ class Live:
         await g.run()
         if g is not self.game:
             return
-        watched = self.ws is not None and not self.ws.closed
+        watched = self.watched()
         if watched:
             await self.send({"type": "event", "kind": "match_over", "stats": g.stats})
             await asyncio.sleep(5)
@@ -411,14 +675,15 @@ class Live:
         while True:
             await asyncio.sleep(every_s)
             pcm, self.sound_mark = self.sound.since(self.sound_mark)
-            if len(pcm) and self.ws is not None and not self.ws.closed:
+            if len(pcm) and self.watched():
                 await self.send(b"S" + pcm.tobytes())
 
     async def stats(self, every_s: float = 10.0) -> None:
         """Every ``every_s``: decision latency in the window (as the panel
         measures it: from asking the engine to having the answer, in this
-        process), with what else this process did (frames streamed, lines
-        voiced, utterances transcribed), and how late this event loop runs."""
+        process), with what else this process did (frames streamed, at which
+        JPEG quality and fps; telemetry; lines voiced, utterances
+        transcribed), and how late this event loop runs."""
         while True:
             t0 = time.perf_counter()
             await asyncio.sleep(every_s)
@@ -428,10 +693,12 @@ class Live:
             self.n = dict.fromkeys(self.n, 0)
             if not ms:
                 continue
+            q, fps = self.gov.step
             print(
                 f"[stats] decisions {len(ms) / every_s:4.1f}/s p50 {np.percentile(ms, 50):5.1f} "
                 f"ms p90 {np.percentile(ms, 90):5.1f} p99 {np.percentile(ms, 99):5.1f} | "
-                f"frames {n['frames'] / every_s:4.1f}/s ({n['frame_kb'] / every_s:5.0f} KB/s) "
+                f"frames {n['frames'] / every_s:4.1f}/s ({n['frame_kb'] / every_s:5.0f} KB/s, "
+                f"q{q}/{fps:g}) | telemetry {n['tele_b'] / 1024 / every_s:4.1f} KB/s "
                 f"| voiced {n['voiced']} heard {n['heard']} | loop lag {1000 * lag:.0f} ms",
                 flush=True,
             )
@@ -550,24 +817,52 @@ class Live:
             await self.send(lat)
 
     # The client.
+    def hello(self) -> dict:
+        """The first message to a client: the stream (its view and frame size,
+        the audio rates), and for the client view's page, what it draws the
+        rest with (:func:`overlay.schema`). ``boot`` is this process's: a
+        client that reconnects can tell a restart (line ids start again)."""
+        from overlay import KINDS, schema
+
+        a = self.args
+        return {
+            "type": "hello",
+            "boot": BOOT,
+            "view": a.view,
+            "size": list(stream_size(a.view, a.scale)),
+            "fps": a.fps,
+            "audio_hz": AUDIO_HZ,
+            "sfx_hz": GAME_HZ,
+            "kind": KINDS.get(self.pol.kit.placement, ""),
+            "gpu": self.gpu,
+            "n_bots": a.n_bots,
+            **schema(MODELS),
+        }
+
     async def handle(self, request):
         from aiohttp import WSMsgType, web
 
         ws = web.WebSocketResponse(max_msg_size=64 * 2**20, heartbeat=20)
         await ws.prepare(request)
-        if self.ws is not None and not self.ws.closed:
-            await self.ws.close()
+        old = self.ws
+        if old is not None and not old.closed:
+            # Replaced: told so (in band, as the close code may not arrive), it does
+            # not come back.
+            try:
+                await old.send_str(json.dumps({"type": "replaced"}))
+            except (ConnectionError, RuntimeError):
+                pass
+            await old.close(code=REPLACED, message=b"another client connected")
         self.ws = ws
-        self._acking, self._unacked = False, 0  # this client's frame acks
+        # This client's frame acks, and the stream's quality: from the top again.
+        self._acking, self._unacked = False, 0
+        self._sent_at.clear()
+        self._tele.clear()
+        if self.gov.level:
+            self.tell(("quality", *self.gov.steps[0]))
+        self.gov.reset()
         print("client connected", flush=True)
-        await self.send(
-            {
-                "type": "hello",
-                "fps": self.args.fps,
-                "audio_hz": AUDIO_HZ,
-                "sfx_hz": GAME_HZ,
-            }
-        )
+        await self.send(self.hello())
         if self.game is None or self.game.done:
             await self.new_game()
         else:
@@ -587,9 +882,9 @@ class Live:
                 elif m.get("type") == "reset":
                     await self.new_game()
                 elif m.get("type") == "ack":  # a frame arrived
+                    self.on_ack()
+                elif m.get("type") == "acking":  # it will ack: from the first frame
                     self._acking = True
-                    self._unacked = max(0, self._unacked - 1)
-                    self._acked.set()
                 elif m.get("type") == "ping":  # the link's delay, as the client sees it
                     await self.send({"type": "pong", "t": m.get("t")})
         print("client gone", flush=True)
@@ -623,10 +918,11 @@ async def serve(args) -> None:
     live = Live(args, pol, voice, gpu)
     await live.new_game(start=False)
     live.spawn(live.stats())
+    live.spawn(live.adapt())
     if live.sound is not None:
         live.spawn(live.stream_sound())
     loop = asyncio.get_running_loop()
-    loop.add_reader(live.jpeg.fileno(), live.on_jpeg)
+    loop.add_reader(live.rendered.fileno(), live.on_render)
     app = web.Application()
     app.router.add_get("/ws", live.handle)
     # The stream's frame size too: the laptop's video track is made that size.
@@ -905,18 +1201,24 @@ def main() -> None:
     s.add_argument("--log-dir", type=Path, help="Write each run's lines here (JSONL)")
     s.add_argument("--temperature", type=float, default=1.0, help="Style, planner")
     s.add_argument("--gpu-mem", type=float, default=0.45)
-    s.add_argument("--fps", type=float, default=20.0, help="Stream frame rate")
+    s.add_argument(
+        "--fps", type=float, default=20.0, help="Stream frame rate (on a good link)"
+    )
     s.add_argument("--no-sound", action="store_true", help="Not the game's own sound")
     s.add_argument(
         "--view",
-        choices=("classic", "wide"),
-        default="wide",
-        help="wide: 16:9, 1920x1080, for full screen; classic: 1000x910, as the videos",
+        choices=VIEWS,
+        default="client",
+        help="client: the game alone, 640x480, the page draws the rest from the "
+        "telemetry; drawn here instead: wide (16:9, 1920x1080) or classic "
+        "(1000x910, as the videos)",
     )
     s.add_argument(
         "--scale", type=float, default=1.0, help="Stream size, times the view's"
     )
-    s.add_argument("--quality", type=int, default=70, help="JPEG quality")
+    s.add_argument(
+        "--quality", type=int, default=75, help="JPEG quality (on a good link)"
+    )
     s.add_argument("--tts-python", help="The TTS environment's python (none: silent)")
     s.add_argument(
         "--tts",

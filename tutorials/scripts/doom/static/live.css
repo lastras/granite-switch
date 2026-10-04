@@ -1,0 +1,135 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* The live demo's page: the game at 4:3 on the left with the maps below it,
+   the panel and the conversation on the right; stacked on a narrow or
+   portrait screen. Colours: overlay.py's (live.js sets them from the hello). */
+:root {
+  --bg: #161616; --layer: #262626; --layer2: #393939;
+  --text: #f4f4f4; --text2: #c6c6c6; --help: #a8a8a8;
+  --blue: #0f62fe; --teal: #08bdba; --amber: #d2a106; --red: #fa4d56; --green: #42be65;
+  --maps-h: clamp(200px, 30vh, 460px);
+  --side-min: 340px;
+  --game-w: min(calc((100vh - var(--maps-h)) * 4 / 3), calc(100vw - var(--side-min)));
+}
+[hidden] { display: none !important; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+             font-family: system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
+button { background: #1d1d1d; color: #eee; border: 1px solid #444; border-radius: 6px;
+         padding: 0.35em 0.8em; cursor: pointer; font: inherit; }
+button:disabled { opacity: 0.5; cursor: default; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+#app { display: flex; width: 100vw; height: 100vh; }
+
+/* ── The game and the maps ─────────────────────────────────────────────── */
+#stage { flex: none; width: var(--game-w); height: 100vh; display: flex; flex-direction: column; }
+#game { position: relative; flex: none; width: 100%; aspect-ratio: 4 / 3; background: #000;
+        container-type: inline-size; overflow: hidden; }
+#game video { display: block; width: 100%; height: 100%; object-fit: contain; background: #000; }
+#game video.pixelated { image-rendering: pixelated; }
+#caps { position: absolute; left: 0; right: 0; bottom: 0; padding: 1.1cqi 2.4cqi 1.4cqi;
+        font-size: 2.5cqi; line-height: 1.4; background: rgba(10, 12, 16, 0.82); }
+#caps:empty { display: none; }
+#caps .you { color: var(--amber); }
+#caps .him { color: var(--teal); }
+#linkdown { position: absolute; top: 1.5cqi; left: 50%; transform: translateX(-50%);
+            padding: 0.4em 1em; border-radius: 6px; font-size: 2cqi;
+            background: rgba(10, 12, 16, 0.85); color: var(--amber); }
+
+#maps { flex: 1; min-height: 0; display: flex; flex-direction: column; color: var(--help);
+        padding: 0.3em 1em 0.4em; font-size: clamp(10px, 1.2vh, 15px); }
+.maphead { flex: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+           padding: 0.4em 0 0.25em; }
+.maphead b { font-weight: 500; letter-spacing: 0.03em; margin-right: 1.2em; }
+canvas { display: block; width: 100%; min-height: 0; }
+#act { flex: 11 1 0; }  /* rows of ~10 px at 1080p: a label each */
+#heat { flex: 20 1 0; }
+#axis { flex: none; display: flex; justify-content: space-between; align-items: flex-start;
+        padding: 0.3em 0 1.1em var(--gutter, 100px); }
+#legend { display: flex; align-items: center; gap: 0.6em; }
+#ramp { position: relative; display: inline-block; width: 16em; height: 0.7em; }
+#ramp span { position: absolute; top: 100%; transform: translateX(-50%); font-size: 0.9em; }
+
+/* ── The panel, the conversation, the controls ─────────────────────────── */
+#side { flex: 1; min-width: 0; height: 100vh; display: flex; flex-direction: column;
+        font-size: clamp(12px, 1.5vh, 22px); }
+#panel { flex: none; padding: 1em 1.4em 0.5em; }
+.title { color: var(--text2); letter-spacing: 0.04em; }
+.help { color: var(--help); font-size: 0.8em; }
+.label { color: var(--help); font-size: 0.76em; letter-spacing: 0.05em; margin-bottom: 0.3em; }
+.small { color: var(--text2); font-size: 0.85em; white-space: pre-wrap; }
+section { margin-top: 0.85em; }
+.row { display: flex; align-items: baseline; gap: 0.8em; }
+#panel > .row { margin-top: 0.8em; align-items: center; }
+.chip { display: inline-flex; align-items: center; gap: 0.5em; background: var(--layer2);
+        border-radius: 1em; padding: 0.2em 0.9em 0.2em 0.7em; }
+#dot { display: inline-block; width: 0.55em; height: 0.55em; border-radius: 50%; background: var(--text); }
+#order { margin-top: 0.5em; }
+#order .badge { display: flex; justify-content: space-between; background: var(--layer2);
+                border-radius: 0.7em; padding: 0.15em 0.8em; font-size: 0.85em; }
+#order .help { padding: 0.15em 0.8em 0; }
+.big { font-size: 2.3em; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.big small { font-size: 0.42em; color: var(--text2); }
+.runs { display: flex; flex-direction: column; margin-left: auto; text-align: right;
+        color: var(--text2); font-size: 0.8em; font-variant-numeric: tabular-nums; }
+.bar { position: relative; display: flex; height: 0.6em; margin-top: 0.45em; background: var(--layer2); }
+.bar i { display: block; height: 100%; }
+#budget-fill { width: 0; background: var(--teal); }
+#tic-mark { position: absolute; top: -0.3em; bottom: -0.3em; width: 2px; background: var(--text); }
+.scale { justify-content: space-between; color: var(--help); font-size: 0.72em; margin-top: 0.3em; }
+#tic-label { position: relative; }
+#critic .low { background: var(--green); }
+#critic .mid { background: var(--amber); }
+#critic .high { background: var(--red); }
+#critic-text { margin-top: 0.3em; font-variant-numeric: tabular-nums; }
+#action-key { color: var(--help); font-size: 0.8em; margin-left: auto; }
+#stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0.3em; }
+#stats span { display: flex; flex-direction: column; color: var(--help); font-size: 0.72em; }
+#stats b { color: var(--text); font-size: 1.7em; font-weight: 500; font-variant-numeric: tabular-nums;
+           white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#input { margin: 0; max-height: calc(6 * 1.35em); overflow: hidden; color: var(--text2);
+         font-size: 0.72em; line-height: 1.35; white-space: pre-wrap; overflow-wrap: anywhere; }
+#foot { margin-top: 0.7em; }
+
+#conv { flex: 1; min-height: 5em; display: flex; flex-direction: column; margin: 0 1.4em;
+        padding-top: 0.6em; border-top: 1px solid var(--layer2); }
+#lines { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column;
+         gap: 0.45em; padding-bottom: 0.5em; line-height: 1.38; }
+#lines .you { color: var(--amber); }
+#lines .him { color: var(--teal); }
+#lines .note { color: var(--help); font-size: 0.8em; text-align: center; }
+#lines b { font-weight: 600; margin-right: 0.4em; }
+
+#bar { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 0.4em;
+       padding: 0.5em 1.4em 0.7em; border-top: 1px solid var(--layer2); font-size: 0.78em; }
+#sfxvol { width: 6em; }
+#link { color: var(--help); font-variant-numeric: tabular-nums; }
+#link i { display: inline-block; width: 0.6em; height: 0.6em; border-radius: 50%;
+          margin-right: 0.35em; background: var(--help); }
+#status { color: var(--help); }
+
+#starts { position: fixed; inset: 0; margin: auto; width: 280px; height: 160px;
+          display: flex; flex-direction: column; gap: 10px; }
+#starts button { height: 54px; font-size: 17px; background: #1d1d1dee; }
+#error { color: #f88; text-align: center; }
+
+/* ── Narrow or portrait: one column, the page scrolls ──────────────────── */
+@media (max-aspect-ratio: 1/1), (max-width: 820px) {
+  html, body { height: auto; overflow: auto; }
+  #app { flex-direction: column; height: auto; }
+  #stage { width: 100vw; height: auto; }
+  #maps { flex: none; height: clamp(200px, 52vw, 420px); }
+  #side { height: auto; }
+  #conv { max-height: 50vh; min-height: 12em; }
+  #bar { position: sticky; bottom: 0; background: var(--bg); }
+}
+
+/* ── The GPU side drew it all into the video (its wide or classic view) ── */
+body.composited #maps, body.composited #panel, body.composited #conv,
+body.composited #caps { display: none !important; }
+body.composited #stage { width: 100vw; height: 100vh; }
+body.composited #game { height: 100%; aspect-ratio: auto; }
+body.composited #side { position: fixed; left: 12px; bottom: 12px; height: auto; width: auto;
+                        opacity: 0.35; transition: opacity 0.2s; font-size: 14px; }
+body.composited #side:hover { opacity: 0.95; }
+body.composited #bar { border: none; padding: 0; }
