@@ -33,6 +33,8 @@
 </div>
 <div id="bar" hidden>
   <button id="mute">Mute mic</button>
+  <button id="sfx">Game sound: on</button>
+  <input id="sfxvol" type="range" min="0" max="60" value="18" title="Game sound volume">
   <button id="reset">New match</button>
   <button id="full">Full screen</button>
   <span id="status"></span>
@@ -94,9 +96,17 @@ $("mute").onclick = () => {
   $("mute").textContent = t.enabled ? "Mute mic" : "Unmute mic";
 };
 // Pipecat's RTVI layer reads the data channel: a client-message reaches the pipeline.
-$("reset").onclick = () => channel && channel.readyState === "open" &&
+const tell = (t, d = {}) => channel && channel.readyState === "open" &&
   channel.send(JSON.stringify({ label: "rtvi-ai", type: "client-message",
-                                id: String(Date.now()), data: { t: "reset", d: {} } }));
+                                id: String(Date.now()), data: { t, d } }));
+$("reset").onclick = () => tell("reset");
+$("sfx").onclick = () => {  // the game's sound, mixed under his voice on the laptop
+  tell("sfx");
+  $("sfx").textContent = $("sfx").textContent.endsWith("on")
+    ? "Game sound: off" : "Game sound: on";
+};
+// Its volume: a gain from 0 to 0.6 (the slider's percent; 18 is the default, -15 dB).
+$("sfxvol").oninput = () => tell("sfx_gain", { gain: $("sfxvol").value / 100 });
 $("full").onclick = () => document.fullscreenElement
   ? document.exitFullscreen() : document.documentElement.requestFullscreen();
 </script>

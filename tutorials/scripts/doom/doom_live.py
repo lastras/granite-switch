@@ -26,7 +26,8 @@ off the decision loop.
 The websocket, at ``/ws`` (one client at a time; a new one replaces the old):
 
 * down: ``b"J" + JPEG`` (a frame); ``b"A" + line id (4 bytes) + int16 PCM`` (a
-  piece of his line); JSON ``{"type": "hello" | "line" | "heard" | "audio_end"
+  piece of his line); ``b"S" + int16 PCM`` (the game's own sound, mono at the
+  hello's ``sfx_hz``, every 40 ms; ``--no-sound``: none); JSON ``{"type": "hello" | "line" | "heard" | "audio_end"
   | "event" | "latency", ...}`` (a line carries the game state he answered
   from; events: ``died``, with the killer; ``frag``; ``match_over``).
 * up: ``b"U" + int16 PCM, 16 kHz`` (one utterance); JSON ``{"type":
@@ -77,7 +78,7 @@ sys.path.insert(0, str(HERE))
 
 from conversation import CONV_EXCHANGES, Conversation
 from doom_env import BOT_SETS, TIC_HZ
-from engine import AUDIO_HZ, AsyncPolicy, Game, SharedFrame
+from engine import AUDIO_HZ, GAME_HZ, AsyncPolicy, Game, SharedFrame, SharedSound
 from expert import BEHAVIORS
 from policy import ARMS, CRITIC, NARRATOR, ORDERS, WARM_STATE
 from talk import sound_tag
@@ -85,18 +86,29 @@ from talk import sound_tag
 TTS_AUTHKEY = b"granite-switch-doom-tts"  # voice_video.TTS_AUTHKEY
 MODELS = ["base", *BEHAVIORS, ARMS, CRITIC, ORDERS, NARRATOR]
 ORDER_SHOWN_S = 4.0  # an order over stays on the panel this long
+IN_FLIGHT = 2  # frames sent and not yet acked, at most (a client that acks)
 _SENTENCE = re.compile(r"(?<=[.?!])\s+")
 
 
 # ── The renderer (its own process) ─────────────────────────────────────────────
+def stream_size(view: str, scale: float) -> tuple[int, int]:
+    """The streamed frame's size: the view's, scaled, even (for the codec)."""
+    from overlay import Overlay
+
+    w, h = Overlay(MODELS, view).size
+    return round(w * scale) // 2 * 2, round(h * scale) // 2 * 2
+
+
 def render_loop(frames_name: str, inbox, out, opts: dict) -> None:
     """Draw the newest game frame with the telemetry the server sends, as the
     videos do, and send it out as JPEG, ``opts["fps"]`` times a second."""
     from overlay import KINDS, Overlay
 
     shared = SharedFrame(frames_name)
-    view = Overlay(MODELS)
-    caps: list[tuple[float, str, str]] = []
+    view = Overlay(MODELS, opts["view"])
+    caps: list[
+        tuple[float, str, str]
+    ] = []  # the captions; the wide view's conversation
     lat: deque[float] = deque(maxlen=1000)
     last_second: deque[float] = deque(maxlen=TIC_HZ)
     info = {
@@ -115,8 +127,7 @@ def render_loop(frames_name: str, inbox, out, opts: dict) -> None:
     }
     last_tick, talk_until, read_at = -1, -1, set()
     period, due = 1.0 / opts["fps"], time.perf_counter()
-    w, h = view.size
-    size = (round(w * opts["scale"]) // 2 * 2, round(h * opts["scale"]) // 2 * 2)
+    size = stream_size(opts["view"], opts["scale"])
     while True:
         while True:
             try:
@@ -126,10 +137,10 @@ def render_loop(frames_name: str, inbox, out, opts: dict) -> None:
             if msg[0] == "stop":
                 return
             if msg[0] == "new":  # a new match
-                view, caps, last_tick = Overlay(MODELS), [], -1
+                view, caps, last_tick = Overlay(MODELS, opts["view"]), [], -1
                 continue
             if msg[0] == "cap":
-                caps = caps[-6:] + [(msg[1] / TIC_HZ, msg[2], msg[3])]
+                caps = caps[-15:] + [(msg[1] / TIC_HZ, msg[2], msg[3])]
                 continue
             if msg[0] == "talk":
                 talk_until = msg[1]
@@ -191,7 +202,7 @@ def render_loop(frames_name: str, inbox, out, opts: dict) -> None:
             continue
         tick, frame = got
         img = view.draw(frame, {**info, "tick": tick}, caps, tick / TIC_HZ)
-        if size != (w, h):
+        if size != img.size:
             img = img.resize(size)
         buf = io.BytesIO()
         img.save(buf, "JPEG", quality=opts["quality"])
@@ -254,6 +265,7 @@ class Live:
         self.jpeg = jpeg_r
         opts = {
             "fps": args.fps,
+            "view": args.view,
             "scale": args.scale,
             "quality": args.quality,
             "gpu": gpu,
@@ -266,6 +278,9 @@ class Live:
             daemon=True,
         )
         self.renderer.start()
+        # The game's sound, as the worker writes it every tic, and how far it was sent.
+        self.sound = None if args.no_sound else SharedSound()
+        self.sound_mark = 0
         self.ws = None
         self.game: Game | None = None
         self.seed = args.seed
@@ -276,6 +291,8 @@ class Live:
         self.rng = random.Random(args.seed)  # which lines get a sound tag
         self._sending = False
         self._next_frame: bytes | None = None
+        self._acking, self._unacked = False, 0
+        self._acked = asyncio.Event()
         # What happened in the last stats window (see stats()).
         self.n = {"frames": 0, "frame_kb": 0, "voiced": 0, "heard": 0}
         self.ms: list[float] = []
@@ -307,21 +324,30 @@ class Live:
         except (ConnectionError, RuntimeError):
             pass
 
-    # Frames: the newest one wins when the link is slow.
+    # Frames: the newest one wins when the link is slow. A client that acks each
+    # frame ({"type": "ack"}) has at most IN_FLIGHT unacked: the link's buffers
+    # (the ssh tunnel's among them) never fill with frames, so his voice and the
+    # game's sound, on the same stream, do not wait behind them.
     def on_jpeg(self) -> None:
-        data = self.jpeg.recv_bytes()
-        if self._sending:
-            self._next_frame = data
-            return
-        self._sending = True
-        self.spawn(self._send_frames(data))
+        self._next_frame = self.jpeg.recv_bytes()
+        if not self._sending:
+            self._sending = True
+            self.spawn(self._send_frames())
 
-    async def _send_frames(self, data: bytes) -> None:
-        while data is not None:
+    async def _send_frames(self) -> None:
+        while self._next_frame is not None:
+            if self._acking and self._unacked >= IN_FLIGHT:
+                self._acked.clear()
+                try:
+                    await asyncio.wait_for(self._acked.wait(), 2.0)
+                except TimeoutError:  # acks stopped: do not stall the stream
+                    self._unacked = 0
+                continue
+            data, self._next_frame = self._next_frame, None
             await self.send(b"J" + data)
+            self._unacked += 1
             self.n["frames"] += 1
             self.n["frame_kb"] += len(data) // 1024
-            data, self._next_frame = self._next_frame, None
         self._sending = False
 
     # The match.
@@ -344,6 +370,7 @@ class Live:
             "bots": a.bots,
             "n_bots": a.n_bots,
             "frames": self.frames.name,
+            "sound": self.sound.name if self.sound else None,
         }
         self.seed += 1
         g = Game(0, spec, self.pol, a.idle_s, autostart=start, conv_n=a.conv_exchanges)
@@ -377,6 +404,15 @@ class Live:
             await asyncio.sleep(5)
         if g is self.game:
             await self.new_game(start=watched)
+
+    async def stream_sound(self, every_s: float = 0.04) -> None:
+        """The game's sound since the last send, every ``every_s``, to the client
+        (dropped while none is connected: it resumes at the live edge)."""
+        while True:
+            await asyncio.sleep(every_s)
+            pcm, self.sound_mark = self.sound.since(self.sound_mark)
+            if len(pcm) and self.ws is not None and not self.ws.closed:
+                await self.send(b"S" + pcm.tobytes())
 
     async def stats(self, every_s: float = 10.0) -> None:
         """Every ``every_s``: decision latency in the window (as the panel
@@ -522,8 +558,16 @@ class Live:
         if self.ws is not None and not self.ws.closed:
             await self.ws.close()
         self.ws = ws
+        self._acking, self._unacked = False, 0  # this client's frame acks
         print("client connected", flush=True)
-        await self.send({"type": "hello", "fps": self.args.fps, "audio_hz": AUDIO_HZ})
+        await self.send(
+            {
+                "type": "hello",
+                "fps": self.args.fps,
+                "audio_hz": AUDIO_HZ,
+                "sfx_hz": GAME_HZ,
+            }
+        )
         if self.game is None or self.game.done:
             await self.new_game()
         else:
@@ -542,6 +586,12 @@ class Live:
                     self.cancelled.update(range(1, self.line_id + 1))
                 elif m.get("type") == "reset":
                     await self.new_game()
+                elif m.get("type") == "ack":  # a frame arrived
+                    self._acking = True
+                    self._unacked = max(0, self._unacked - 1)
+                    self._acked.set()
+                elif m.get("type") == "ping":  # the link's delay, as the client sees it
+                    await self.send({"type": "pong", "t": m.get("t")})
         print("client gone", flush=True)
         if ws is self.ws:
             self.ws = None
@@ -573,11 +623,17 @@ async def serve(args) -> None:
     live = Live(args, pol, voice, gpu)
     await live.new_game(start=False)
     live.spawn(live.stats())
+    if live.sound is not None:
+        live.spawn(live.stream_sound())
     loop = asyncio.get_running_loop()
     loop.add_reader(live.jpeg.fileno(), live.on_jpeg)
     app = web.Application()
     app.router.add_get("/ws", live.handle)
-    app.router.add_get("/health", lambda _: web.json_response({"ok": True}))
+    # The stream's frame size too: the laptop's video track is made that size.
+    size = stream_size(args.view, args.scale)
+    app.router.add_get(
+        "/health", lambda _: web.json_response({"ok": True, "size": list(size)})
+    )
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, args.host, args.port).start()
@@ -850,7 +906,16 @@ def main() -> None:
     s.add_argument("--temperature", type=float, default=1.0, help="Style, planner")
     s.add_argument("--gpu-mem", type=float, default=0.45)
     s.add_argument("--fps", type=float, default=20.0, help="Stream frame rate")
-    s.add_argument("--scale", type=float, default=1.0, help="Stream size (1: 1000x898)")
+    s.add_argument("--no-sound", action="store_true", help="Not the game's own sound")
+    s.add_argument(
+        "--view",
+        choices=("classic", "wide"),
+        default="wide",
+        help="wide: 16:9, 1920x1080, for full screen; classic: 1000x910, as the videos",
+    )
+    s.add_argument(
+        "--scale", type=float, default=1.0, help="Stream size, times the view's"
+    )
     s.add_argument("--quality", type=int, default=70, help="JPEG quality")
     s.add_argument("--tts-python", help="The TTS environment's python (none: silent)")
     s.add_argument(

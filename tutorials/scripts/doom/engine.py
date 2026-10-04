@@ -49,6 +49,7 @@ from pathlib import Path
 
 import numpy as np
 from conversation import CONV_EXCHANGES, Conversation, Exchange, narrator_ids
+from doom_env import AUDIO_HZ as GAME_HZ
 from doom_env import TIC_HZ, DoomEnv, isolate_workdir
 from expert import BEHAVIORS, PLAN_EVERY_TICS
 from history import History
@@ -127,6 +128,54 @@ class SharedFrame:
             self.shm.unlink()
 
 
+class SharedSound:
+    """The game's sound in shared memory: a ring of the last ``RING_S``
+    seconds, mono int16 at ``GAME_HZ``, and the count of samples ever written.
+    The game appends each tic's sound; a reader takes what is new since its own
+    count (:meth:`since`), skipping ahead if it fell a ring behind. The count
+    is advanced only after the samples are in place. ``name=None`` creates it."""
+
+    RING_S = 2
+
+    def __init__(self, name: str | None = None):
+        from multiprocessing import shared_memory
+
+        self.owner = name is None
+        self.ring_n = self.RING_S * GAME_HZ
+        size = 8 + 2 * self.ring_n
+        self.shm = shared_memory.SharedMemory(name=name, create=self.owner, size=size)
+        self.name = self.shm.name
+        self.count = np.ndarray((1,), np.int64, self.shm.buf[:8])
+        self.ring = np.ndarray((self.ring_n,), np.int16, self.shm.buf[8:])
+        if self.owner:
+            self.count[0] = 0
+
+    def put(self, pcm: np.ndarray) -> None:
+        """Append one tic's sound ((n, 2) stereo or (n,) mono int16)."""
+        x = pcm.mean(axis=1).astype(np.int16) if pcm.ndim == 2 else pcm
+        c, n = int(self.count[0]), len(x)
+        i = c % self.ring_n
+        first = min(n, self.ring_n - i)
+        self.ring[i : i + first] = x[:first]
+        self.ring[: n - first] = x[first:]
+        self.count[0] = c + n
+
+    def since(self, mark: int) -> tuple[np.ndarray, int]:
+        """The samples written after ``mark`` (a count), and the new mark."""
+        c = int(self.count[0])
+        if c - mark > self.ring_n // 2 or mark > c:  # fell behind: the last 0.1 s
+            mark = max(0, c - GAME_HZ // 10)
+        i, n = mark % self.ring_n, c - mark
+        first = min(n, self.ring_n - i)
+        return np.concatenate([self.ring[i : i + first], self.ring[: n - first]]), c
+
+    def close(self) -> None:
+        del self.count, self.ring
+        self.shm.close()
+        if self.owner:
+            self.shm.unlink()
+
+
 def game_worker(conn, spec: dict) -> None:
     """Play one match in real time. Messages to the server:
     ``("obs", tick, state | None, entry | None, events, facts, fired)`` every
@@ -140,8 +189,9 @@ def game_worker(conn, spec: dict) -> None:
     closes only after the server's ``("bye",)``: closing with unread decisions
     in the buffer sends a TCP reset that can destroy the final message.
     ``spec["frames"]``: the name of a :class:`SharedFrame` to publish every
-    frame to (the live demo's video); ``spec["style"]``: the style adapter the
-    server starts with."""
+    frame to (the live demo's video); ``spec["sound"]``: of a
+    :class:`SharedSound` for the game's sound, every tic; ``spec["style"]``:
+    the style adapter the server starts with."""
     isolate_workdir()
     timeout = int(spec["seconds"] * TIC_HZ)
     env = DoomEnv(
@@ -153,12 +203,14 @@ def game_worker(conn, spec: dict) -> None:
         timeout_tics=timeout,
         bots=spec["bots"],
         n_bots=spec["n_bots"],
+        audio=bool(spec.get("sound")),
     )
     hist = History()  # text only: the server tokenizes
     orders = Orders(spec.get("style", BEHAVIORS[0]))
     # The same as collect.py's (with --orders).
     tracker = Tracker(match_s=timeout / TIC_HZ, orders=orders)
     frames = SharedFrame(spec["frames"]) if spec.get("frames") else None
+    sound = SharedSound(spec["sound"]) if spec.get("sound") else None
     obs = env.reset(seed=spec["seed"])
     fired = tracker.update(obs)
     action, fresh_of, slot, entry = "wait", -1, None, None
@@ -199,6 +251,8 @@ def game_worker(conn, spec: dict) -> None:
         entry = hist.observe(obs, None if obs.dead else played)
         t0 = time.perf_counter()
         obs = env.step(played, weapon=played_slot)
+        if sound is not None and env.audio() is not None:
+            sound.put(env.audio())
         fired = [] if obs.done else tracker.update(obs)
         slot = None
         step_ms = 0.9 * step_ms + 0.1 * (time.perf_counter() - t0) * 1000
@@ -213,6 +267,8 @@ def game_worker(conn, spec: dict) -> None:
     env.close()
     if frames is not None:
         frames.close()
+    if sound is not None:
+        sound.close()
     conn.send(("done", stats, lags, orders.log))
     t_end = time.perf_counter() + 10
     while time.perf_counter() < t_end:  # drain late decisions until the server's bye

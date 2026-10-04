@@ -3,7 +3,8 @@
 
 Pipecat serves the page and the WebRTC call: the browser sends your microphone
 (its own echo cancellation, noise suppression and gain applied) and plays the
-game's video and his voice. Everything else is on the GPU node
+game's video, his voice and the game's own sound (mixed under his voice, lower
+while he speaks: :class:`GameSound`). Everything else is on the GPU node
 (``doom_live.py serve``), one websocket away through ``ssh -L``, so WebRTC's
 UDP never crosses the cluster network. Pipecat's VAD (Silero) cuts what you say
 into utterances; each one goes up as a single audio segment, which the model's
@@ -12,8 +13,8 @@ text-to-speech service runs here. When you start talking over him, his line
 stops (an interruption) and the GPU side drops what he had not said yet.
 
 The page at ``/`` (``static/live.html``) shows the stream full-window, with a
-mute button and a new-match button; Pipecat's prebuilt client is still at
-``/client``.
+mute button, a game-sound button and a new-match button; Pipecat's prebuilt
+client is still at ``/client``.
 
 A small environment of its own (not the vLLM one)::
 
@@ -39,15 +40,19 @@ import ipaddress
 import json
 import socket
 import subprocess
+import time
 import uuid
 from pathlib import Path
 
 import aiohttp
+import numpy as np
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import FileResponse
 from loguru import logger
 from PIL import Image
+from pipecat.audio.mixers.base_audio_mixer import BaseAudioMixer
+from pipecat.audio.utils import create_stream_resampler, is_silence
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
@@ -57,6 +62,8 @@ from pipecat.frames.frames import (
     EndFrame,
     Frame,
     InputAudioRawFrame,
+    MixerControlFrame,
+    MixerEnableFrame,
     OutputImageRawFrame,
     StartFrame,
     TTSAudioRawFrame,
@@ -81,26 +88,87 @@ from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
 MIC_HZ = 16_000  # what the ASR takes
 PRE_ROLL_S = 0.3  # audio kept from before the VAD's start, so no word is clipped
+SFX_HZ = 22_050  # the game's sound as the GPU side sends it (its hello says so)
+
+
+class GameSound(BaseAudioMixer):
+    """The game's own sound, mixed into the call's audio under his voice.
+
+    The GPU side sends it every 40 ms (``b"S"``); it is resampled to the call's
+    rate and kept in a small jitter buffer: playback starts once ``PRIME_S`` is
+    buffered (again after running dry), and anything past ``MAX_S`` is dropped
+    from the old end, so it stays within about a tenth of a second of the
+    picture. While he speaks it plays at ``duck`` times its gain."""
+
+    PRIME_S, MAX_S = 0.1, 0.3
+
+    def __init__(self, gain: float = 0.18, duck: float = 0.3):
+        self.gain, self.duck, self.on = gain, duck, gain > 0
+        self.rate = 0
+        self.buf = bytearray()
+        self.primed = False
+        self.resampler = create_stream_resampler()
+
+    async def start(self, sample_rate: int):
+        self.rate = sample_rate
+
+    async def stop(self):
+        self.buf.clear()
+
+    async def process_frame(self, frame: MixerControlFrame):
+        if isinstance(frame, MixerEnableFrame):
+            self.on = frame.enable
+            self.buf.clear()
+
+    async def feed(self, pcm: bytes, rate: int = SFX_HZ) -> None:
+        if not self.on or not self.rate:
+            return
+        self.buf += await self.resampler.resample(pcm, rate, self.rate)
+        cap = 2 * int(self.MAX_S * self.rate)
+        if len(self.buf) > cap:
+            del self.buf[: len(self.buf) - cap]
+
+    async def mix(self, audio: bytes) -> bytes:
+        n = len(audio)
+        if not self.on or not n:
+            return audio
+        if not self.primed:
+            if len(self.buf) < 2 * int(self.PRIME_S * self.rate):
+                return audio
+            self.primed = True
+        take = bytes(self.buf[:n])
+        del self.buf[:n]
+        if len(take) < n:  # ran dry: wait for the buffer again
+            self.primed = False
+            take += b"\x00" * (n - len(take))
+        voice = not is_silence(audio)
+        g = self.gain * (self.duck if voice else 1.0)
+        out = np.frombuffer(audio, np.int16).astype(np.int32)
+        out += (np.frombuffer(take, np.int16) * g).astype(np.int32)
+        return np.clip(out, -32768, 32767).astype(np.int16).tobytes()
 
 
 class DoomLink(FrameProcessor):
     """The pipeline's link to the GPU side. Up: each utterance (from the VAD's
     start to its stop, with a little audio from before the start), and a
     "speaking" notice at the start. Down: the frames (JPEG, decoded here) as
-    video, and his lines as TTS audio, so an interruption stops them."""
+    video, his lines as TTS audio, so an interruption stops them, and the
+    game's sound to the mixer (``sound``)."""
 
-    def __init__(self, url: str):
+    def __init__(self, url: str, sound: GameSound | None = None):
         super().__init__()
-        self.url = url
+        self.url, self.sound = url, sound
+        self._sfx_hz = SFX_HZ
         self._session: aiohttp.ClientSession | None = None
         self._ws = None
-        self._task = None
+        self._task = self._pinger = None
         self._speaking = self._bot_speaking = False
         self._pre: list[bytes] = []
         self._utt: list[bytes] = []
         self._rates: dict[int, int] = {}
         self._last_line = 0
         self._dropped_upto = 0  # lines talked over: their late audio is dropped
+        self._rtt: list[float] = []  # the link's round trips (ping, pong), ms
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -120,6 +188,13 @@ class DoomLink(FrameProcessor):
                 if self._bot_speaking:
                     await self.broadcast_interruption()
                 logger.info("new match")
+            elif frame.type == "sfx" and self.sound is not None:
+                await self.sound.process_frame(
+                    MixerEnableFrame(enable=not self.sound.on)
+                )
+                logger.info(f"game sound {'on' if self.sound.on else 'off'}")
+            elif frame.type == "sfx_gain" and self.sound is not None:  # the slider
+                self.sound.gain = min(1.0, max(0.0, float((frame.data or {})["gain"])))
             return
         if isinstance(frame, InputAudioRawFrame):  # the microphone: up, not out
             if self._speaking:
@@ -163,8 +238,25 @@ class DoomLink(FrameProcessor):
             return
         logger.info(f"connected to {self.url}")
         self._task = self.create_task(self._receive(), "doom_receive")
+        self._pinger = self.create_task(self._ping(), "doom_ping")
+
+    async def _ping(self, every_s: float = 1.0) -> None:
+        """A ping a second, on the stream the frames and his voice come down; its
+        round trip, logged every 10, is how far behind the link runs."""
+        while True:
+            await asyncio.sleep(every_s)
+            await self._send({"type": "ping", "t": time.perf_counter()})
+            if len(self._rtt) >= 10:
+                r = sorted(self._rtt)
+                logger.info(
+                    f"link round trip p50 {r[len(r) // 2]:.0f} ms, max {r[-1]:.0f} ms"
+                )
+                self._rtt = []
 
     async def _close(self) -> None:
+        if self._pinger is not None:
+            await self.cancel_task(self._pinger)
+            self._pinger = None
         if self._task is not None:
             await self.cancel_task(self._task)
             self._task = None
@@ -178,12 +270,16 @@ class DoomLink(FrameProcessor):
             if msg.type == aiohttp.WSMsgType.BINARY:
                 kind, data = msg.data[:1], msg.data[1:]
                 if kind == b"J":
+                    await self._send({"type": "ack"})  # the GPU side may send the next
                     img = await asyncio.to_thread(_decode, data)
                     await self.push_frame(
                         OutputImageRawFrame(
                             image=img.tobytes(), size=img.size, format="RGB"
                         )
                     )
+                elif kind == b"S":
+                    if self.sound is not None:
+                        await self.sound.feed(data, self._sfx_hz)
                 elif kind == b"A":
                     lid = int.from_bytes(data[:4], "big")
                     if lid > self._dropped_upto:
@@ -199,7 +295,11 @@ class DoomLink(FrameProcessor):
             if msg.type != aiohttp.WSMsgType.TEXT:
                 break
             m = json.loads(msg.data)
-            if m["type"] == "line":
+            if m["type"] == "hello":
+                self._sfx_hz = m.get("sfx_hz", SFX_HZ)
+            elif m["type"] == "pong" and m.get("t") is not None:
+                self._rtt.append(1000 * (time.perf_counter() - m["t"]))
+            elif m["type"] == "line":
                 self._last_line = max(self._last_line, m["id"])
                 heard = f" (you: {m['heard']})" if m.get("heard") else ""
                 logger.info(f"him: {m['line']}{heard}")
@@ -219,17 +319,33 @@ def _decode(data: bytes) -> Image.Image:
     return Image.open(io.BytesIO(data)).convert("RGB")
 
 
+async def stream_size(args) -> tuple[int, int]:
+    """The GPU side's frame size (its health check says), else ``--width`` x
+    ``--height``: the video track is made that size (no resizing here)."""
+    url = args.cluster.replace("ws://", "http://").rsplit("/", 1)[0] + "/health"
+    try:
+        async with aiohttp.ClientSession() as s, s.get(url, timeout=5) as r:
+            w, h = (await r.json())["size"]
+            return int(w), int(h)
+    except (aiohttp.ClientError, TimeoutError, KeyError, ValueError):
+        return args.width, args.height
+
+
 async def run_call(conn: SmallWebRTCConnection, args) -> None:
+    sound = GameSound(args.sfx_gain, args.sfx_duck) if args.sfx_gain > 0 else None
+    width, height = await stream_size(args)
+    logger.info(f"video {width}x{height}")
     transport = SmallWebRTCTransport(
         webrtc_connection=conn,
         params=TransportParams(
             audio_in_enabled=True,
             audio_in_sample_rate=MIC_HZ,
             audio_out_enabled=True,
+            audio_out_mixer=sound,
             video_out_enabled=True,
             video_out_is_live=True,
-            video_out_width=args.width,
-            video_out_height=args.height,
+            video_out_width=width,
+            video_out_height=height,
             video_out_framerate=args.fps,
         ),
     )
@@ -237,7 +353,7 @@ async def run_call(conn: SmallWebRTCConnection, args) -> None:
         vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=args.stop_secs))
     )
     pipeline = Pipeline(
-        [transport.input(), vad, DoomLink(args.cluster), transport.output()]
+        [transport.input(), vad, DoomLink(args.cluster, sound), transport.output()]
     )
     task = PipelineTask(pipeline)
 
@@ -292,17 +408,29 @@ def main() -> None:
     ap.add_argument(
         "--cert-dir", type=Path, default=Path.home() / ".cache" / "doom-pipecat"
     )
-    ap.add_argument("--width", type=int, default=1000, help="As doom_live's stream")
-    ap.add_argument("--height", type=int, default=898)
+    ap.add_argument(
+        "--width", type=int, default=1920, help="If the GPU side does not say"
+    )
+    ap.add_argument("--height", type=int, default=1080)
     ap.add_argument(
         "--video-kbps",
         type=int,
-        default=4000,
-        help="Video bitrate cap (aiortc's own is 1500 kbps: the panel's text blurs)",
+        default=8000,
+        help="Video bitrate cap (aiortc's own is 1500 kbps: the panel's text blurs; "
+        "the call stays on this machine)",
     )
     ap.add_argument("--fps", type=int, default=20)
     ap.add_argument(
         "--stop-secs", type=float, default=0.45, help="Silence that ends an utterance"
+    )
+    ap.add_argument(
+        "--sfx-gain",
+        type=float,
+        default=0.18,
+        help="The game's sound as a gain (0.18: -15 dB; 0: none); the page's slider sets it",
+    )
+    ap.add_argument(
+        "--sfx-duck", type=float, default=0.3, help="... times this while he speaks"
     )
     args = ap.parse_args()
     host = args.host or ("0.0.0.0" if args.https else "localhost")

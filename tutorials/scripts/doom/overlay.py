@@ -41,7 +41,6 @@ COLORS = {"fighter": RED, "cautious": TEAL, "collector": AMBER}
 ORDER_COLORS = {"doing": GREEN, "refused": RED, "cant": AMBER, "cancelled": HELP}
 
 HEAT_ROW = 10  # pixels per action row
-H_HEAT = 82 + HEAT_ROW * len(DISPLAY_ORDER)  # heatmap strip under the game and panel
 HEAT_PX = 3  # pixels per tic
 HEAT_GUTTER = 100  # row labels
 # Colour position is sqrt(p), so runner-up actions at a few percent stay visible.
@@ -63,128 +62,145 @@ def font(size: int, mono: bool = False):
 
 
 class Panel:
-    def __init__(self) -> None:
-        self.f_title = font(15)
-        self.f_big = font(34)
-        self.f = font(15)
-        self.f_small = font(12)
-        self.f_mono = font(12, mono=True)
+    """The telemetry panel, drawn at ``k`` times its first size (360 x 480) in
+    a box of its own (``x0``, width ``w``, height ``h``)."""
 
-    def draw(self, img: Image.Image, t: dict) -> None:
+    def __init__(self, k: float = 1.0) -> None:
+        self.k = k
+        self.f_title = font(round(15 * k))
+        self.f_big = font(round(34 * k))
+        self.f = font(round(15 * k))
+        self.f_small = font(round(12 * k))
+        self.f_mono = font(round(12 * k), mono=True)
+
+    def draw(
+        self, img: Image.Image, t: dict, x0: int = W_GAME, w: int = W_PANEL, h: int = H
+    ) -> None:
+        k = self.k
+
+        def S(v: float) -> int:  # a size at this panel's scale
+            return round(v * k)
+
         d = ImageDraw.Draw(img)
-        x0 = W_GAME
-        d.rectangle([x0, 0, x0 + W_PANEL, H], fill=BG)
-        x = x0 + 18
-        y = 14
+        d.rectangle([x0, 0, x0 + w, h], fill=BG)
+        x = x0 + S(18)
+        y = S(14)
+        bw = w - S(36)
         d.text((x, y), "GRANITE SWITCH  ·  DOOM", font=self.f_title, fill=TEXT2)
-        y += 26
+        y += S(26)
         d.text((x, y), "one output token per tic", font=self.f_small, fill=HELP)
-        y += 26
+        y += S(26)
 
         # Behavior chip
         c = COLORS.get(t["adapter"], TEXT)
-        d.rounded_rectangle([x, y, x + 150, y + 28], radius=14, fill=LAYER2)
-        d.ellipse([x + 12, y + 10, x + 20, y + 18], fill=c)
-        d.text((x + 28, y + 5), t["adapter"], font=self.f, fill=TEXT)
+        d.rounded_rectangle([x, y, x + S(150), y + S(28)], radius=S(14), fill=LAYER2)
+        d.ellipse([x + S(12), y + S(10), x + S(20), y + S(18)], fill=c)
+        d.text((x + S(28), y + S(5)), t["adapter"], font=self.f, fill=TEXT)
         d.text(
-            (x + 162, y + 6),
+            (x + S(162), y + S(6)),
             f"{t.get('kind', 'aLoRA')} adapter",
             font=self.f_small,
             fill=HELP,
         )
-        y += 38
+        y += S(38)
         if t.get("order"):  # the partner's latest order (the live demo)
             o = t["order"]
             col = ORDER_COLORS.get(o["status"], TEXT2)
-            d.rounded_rectangle([x, y, x + W_PANEL - 36, y + 18], radius=9, fill=LAYER2)
-            d.text((x + 10, y + 2), f"ORDER: {o['told']}", font=self.f_small, fill=TEXT)
-            d.text((x + 236, y + 2), o["status"], font=self.f_small, fill=col)
-            y += 20
+            d.rounded_rectangle([x, y, x + bw, y + S(18)], radius=S(9), fill=LAYER2)
+            d.text(
+                (x + S(10), y + S(2)),
+                f"ORDER: {o['told']}",
+                font=self.f_small,
+                fill=TEXT,
+            )
+            d.text((x + bw - S(88), y + S(2)), o["status"], font=self.f_small, fill=col)
+            y += S(20)
             if o.get("why"):
-                d.text((x + 10, y), o["why"][:46], font=self.f_small, fill=HELP)
-            y += 16
+                d.text((x + S(10), y), o["why"][:46], font=self.f_small, fill=HELP)
+            y += S(16)
         elif t.get("instruction"):
             d.text((x, y), f"“{t['instruction'][:40]}”", font=self.f_small, fill=TEXT2)
-            y += 16
+            y += S(16)
             d.text(
                 (x, y),
                 f"orders -> {t['routed']} ({100 * t['route_p']:.0f}%, {t['route_ms']:.1f} ms)",
                 font=self.f_small,
                 fill=HELP,
             )
-            y += 20
+            y += S(20)
         else:
-            y += 36
+            y += S(36)
 
         # Decision latency
         d.text((x, y), "DECISION  ·  1 s MEDIAN", font=self.f_small, fill=HELP)
-        y += 16
+        y += S(16)
         num = f"{t['ms']:.1f}"
         d.text((x, y), num, font=self.f_big, fill=TEXT)
         d.text(
-            (x + d.textlength(num, font=self.f_big) + 6, y + 16),
+            (x + d.textlength(num, font=self.f_big) + S(6), y + S(16)),
             "ms",
             font=self.f,
             fill=TEXT2,
         )
         d.text(
-            (x + 140, y + 4),
+            (x + S(140), y + S(4)),
             f"run p50 {t['p50']:.1f} ms",
             font=self.f_small,
             fill=TEXT2,
         )
         d.text(
-            (x + 140, y + 22),
+            (x + S(140), y + S(22)),
             f"run p99 {t['p99']:.1f} ms",
             font=self.f_small,
             fill=TEXT2,
         )
-        y += 46
+        y += S(46)
         # Tic budget bar: 0..100 ms
-        bw = W_PANEL - 36
-        d.rectangle([x, y, x + bw, y + 10], fill=LAYER2)
-        d.rectangle([x, y, x + int(bw * min(1.0, t["ms"] / 100.0)), y + 10], fill=TEAL)
+        d.rectangle([x, y, x + bw, y + S(10)], fill=LAYER2)
+        d.rectangle(
+            [x, y, x + int(bw * min(1.0, t["ms"] / 100.0)), y + S(10)], fill=TEAL
+        )
         tx = x + int(bw * TIC_MS / 100.0)
-        d.line([tx, y - 4, tx, y + 14], fill=TEXT, width=1)
-        d.text((tx + 4, y + 13), "1 tic 28.6 ms", font=self.f_small, fill=TEXT2)
-        d.text((x + bw - 50, y + 13), "100 ms", font=self.f_small, fill=HELP)
-        y += 36
+        d.line([tx, y - S(4), tx, y + S(14)], fill=TEXT, width=max(1, S(1)))
+        d.text((tx + S(4), y + S(13)), "1 tic 28.6 ms", font=self.f_small, fill=TEXT2)
+        d.text((x + bw - S(50), y + S(13)), "100 ms", font=self.f_small, fill=HELP)
+        y += S(36)
 
         # Action (the full distribution is in the heatmap below)
         d.text((x, y), "ACTION", font=self.f_small, fill=HELP)
-        y += 16
+        y += S(16)
         d.text(
             (x, y), ACTION_LABELS.get(t["action"], t["action"]), font=self.f, fill=TEXT
         )
-        d.text((x + 200, y + 2), t["action"], font=self.f_mono, fill=HELP)
-        y += 26
+        d.text((x + S(200), y + S(2)), t["action"], font=self.f_mono, fill=HELP)
+        y += S(26)
 
         # Critic: danger of being hit in the next second
         d.text((x, y), "CRITIC  ·  DANGER NEXT SECOND", font=self.f_small, fill=HELP)
-        y += 16
-        crit = [t["critic"].get(k, 0.0) for k in DANGER_LEVELS]
+        y += S(16)
+        crit = [t["critic"].get(c_, 0.0) for c_ in DANGER_LEVELS]
         tot = sum(crit) or 1.0
         x1 = x
         for p_, col in zip(crit, (GREEN, AMBER, RED)):
             x2 = x1 + int(bw * p_ / tot)
             if x2 > x1:
-                d.rectangle([x1, y, x2, y + 10], fill=col)
+                d.rectangle([x1, y, x2, y + S(10)], fill=col)
             x1 = x2
-        y += 14
+        y += S(14)
         d.text(
             (x, y),
             "   ".join(
-                f"{k} {100 * c / tot:.0f}%" for k, c in zip(DANGER_LEVELS, crit)
+                f"{c_} {100 * c / tot:.0f}%" for c_, c in zip(DANGER_LEVELS, crit)
             ),
             font=self.f_small,
             fill=TEXT2,
         )
-        y += 22
+        y += S(22)
 
         # Weapon planner and match
         plan = t.get("plan")
         d.text((x, y), "WEAPON PLANNER  ·  EVERY 0.5 s", font=self.f_small, fill=HELP)
-        y += 16
+        y += S(16)
         if plan:
             p_ = plan["probs"].get(str(plan["slot"]), 0.0)
             d.text(
@@ -194,38 +210,56 @@ class Panel:
                 font=self.f_small,
                 fill=TEXT2,
             )
-        y += 22
-        s = t["stats"]
+        y += S(22)
+        st = t["stats"]
         d.text((x, y), "MATCH VS 7 BOTS", font=self.f_small, fill=HELP)
-        y += 16
+        y += S(16)
         d.text(
             (x, y),
-            f"hp {t['hp']}  frags {s['frags']}  deaths {s['deaths']}  "
-            f"rank {s['rank']}  best bot {s['best_bot'][1]}",
+            f"hp {t['hp']}  frags {st['frags']}  deaths {st['deaths']}  "
+            f"rank {st['rank']}  best bot {st['best_bot'][1]}",
             font=self.f_small,
             fill=TEXT2,
         )
-        y += 24
+        y += S(24)
 
         # What the model reads
         d.text((x, y), "MODEL INPUT", font=self.f_small, fill=HELP)
-        y += 16
-        words, line, lines = t["text"].split(" "), "", []
-        for w in words:
-            if len(line) + len(w) + 1 > 46:
-                lines.append(line)
-                line = w
-            else:
-                line = f"{line} {w}".strip()
-        lines.append(line)
-        for ln in lines:
-            if y > H - 40:
+        y += S(16)
+        for ln in wrap(d, t["text"], self.f_mono, bw):
+            if y > h - S(40):
                 break
             d.text((x, y), ln, font=self.f_mono, fill=TEXT2)
-            y += 14
+            y += S(14)
         d.text(
-            (x, H - 22), f"tic {t['tick']}  ·  {t['gpu']}", font=self.f_small, fill=HELP
+            (x, h - S(22)),
+            f"tic {t['tick']}  ·  {t['gpu']}",
+            font=self.f_small,
+            fill=HELP,
         )
+
+
+_WRAPPED: dict[tuple, list[str]] = {}
+
+
+def wrap(d: ImageDraw.ImageDraw, text: str, f, width: int) -> list[str]:
+    """``text`` in lines no wider than ``width`` pixels in font ``f`` (the
+    same lines are asked for every frame: kept)."""
+    key = (text, id(f), width)
+    if key in _WRAPPED:
+        return _WRAPPED[key]
+    lines, line = [], ""
+    for w in text.split():
+        cand = f"{line} {w}".strip()
+        if line and f.getlength(cand) > width:
+            lines.append(line)
+            line = w
+        else:
+            line = cand
+    if len(_WRAPPED) > 4000:
+        _WRAPPED.clear()
+    _WRAPPED[key] = out = [*lines, line] if line else lines
+    return out
 
 
 def cmap(p: np.ndarray) -> np.ndarray:
@@ -238,9 +272,12 @@ def cmap(p: np.ndarray) -> np.ndarray:
 
 
 class Heatmap:
-    """Per-tic action distribution: fills from the left, then slides."""
+    """Per-tic action distribution: fills from the left, then slides.
+    ``row``: pixels per action row (``height`` follows)."""
 
-    def __init__(self, width: int):
+    def __init__(self, width: int, row: int = HEAT_ROW):
+        self.row = row
+        self.height = 82 + row * len(DISPLAY_ORDER)
         self.win = (width - HEAT_GUTTER - 18) // HEAT_PX
         # rows: behavior, the actions, danger, fresh-decision mark
         self.buf = np.empty((len(DISPLAY_ORDER) + 3, self.win, 3), np.uint8)
@@ -281,17 +318,19 @@ class Heatmap:
         gap[:] = BG
         rows = [np.repeat(self.buf[0:1], 6, axis=0), gap]
         rows += [
-            np.repeat(self.buf[i : i + 1], HEAT_ROW, axis=0) for i in range(1, n + 1)
+            np.repeat(self.buf[i : i + 1], self.row, axis=0) for i in range(1, n + 1)
         ]
         rows += [gap, np.repeat(self.buf[n + 1 : n + 2], 8, axis=0)]
         rows += [gap, np.repeat(self.buf[n + 2 : n + 3], 4, axis=0)]
         arr = np.repeat(np.concatenate(rows, axis=0), HEAT_PX, axis=1)
         top = y0 + 28
         img.paste(Image.fromarray(arr), (HEAT_GUTTER, top))
+        every = -(-11 // self.row)  # rows too thin for a label each: every few
         for i, a in enumerate(DISPLAY_ORDER):
-            y = top + 9 + HEAT_ROW * i - 1
-            d.text((18, y), SHORT_LABELS[a], font=self.f, fill=TEXT2)
-        d.text((18, top + 9 + HEAT_ROW * n + 3), "danger", font=self.f, fill=HELP)
+            if i % every == 0:
+                y = top + 9 + self.row * i - 1
+                d.text((18, y), SHORT_LABELS[a], font=self.f, fill=TEXT2)
+        d.text((18, top + 9 + self.row * n + 3), "danger", font=self.f, fill=HELP)
         yb = top + arr.shape[0] + 4
         d.text(
             (HEAT_GUTTER, yb),
@@ -336,19 +375,19 @@ class Activity:
     adapter's request), one row each, a column per tic, newest at the right;
     the labels light up while their model runs."""
 
-    def __init__(self, width: int, models: list[str]):
-        self.models = models
+    def __init__(self, width: int, models: list[str], row: int = ACT_ROW):
+        self.models, self.row = models, row
         self.win = (width - HEAT_GUTTER - 18) // HEAT_PX
         self.buf = np.empty((len(models), self.win, 3), np.uint8)
         self.buf[:] = BG
         self.count = 0
         self.now: set[str] = set()
-        self.f = font(10, mono=True)
+        self.f = font(min(10, row), mono=True)  # a label per row: no taller than it
         self.f_small = font(11)
 
     @property
     def height(self) -> int:
-        h = 52 + ACT_ROW * len(self.models)
+        h = 52 + self.row * len(self.models)
         return h + h % 2  # the video codec wants an even frame height
 
     def push(self, active: set[str]) -> None:
@@ -373,14 +412,14 @@ class Activity:
             font=self.f_small,
             fill=HELP,
         )
-        rows = np.repeat(self.buf, ACT_ROW, axis=0)
-        rows[ACT_ROW - 2 :: ACT_ROW] = BG  # a thin gap between rows
+        rows = np.repeat(self.buf, self.row, axis=0)
+        rows[self.row - 2 :: self.row] = BG  # a thin gap between rows
         arr = np.repeat(rows, HEAT_PX, axis=1)
         top = y0 + 28
         img.paste(Image.fromarray(arr), (HEAT_GUTTER, top))
         for i, m in enumerate(self.models):
             on = m in self.now
-            y = top + ACT_ROW * i - 1
+            y = top + self.row * i - 1
             if on:
                 d.rectangle([10, y + 2, 14, y + 8], fill=MODEL_COLORS[m])
             d.text(
@@ -395,51 +434,133 @@ CAPTION_S = 5.0  # how long a spoken line stays on screen
 KINDS = {"alora": "aLoRA", "lora": "LoRA", "sr": "Shadow Residual", "base": "no"}
 
 
-def draw_captions(img: Image.Image, caps: list[tuple[float, str, str]], now: float):
-    """The latest line from the watcher and from the player, over the game view."""
-    f = font(16)
-    shown = [
-        (who, re.sub(r"\[[a-z ]+\]\s*", "", text))  # sound tags are voiced, not shown
+def _said(caps, now: float | None = None) -> list[tuple[str, str]]:
+    """(who, text) of the caption lines (the recent ones if ``now``); sound
+    tags are voiced, not shown."""
+    return [
+        (who, re.sub(r"\[[a-z ]+\]\s*", "", text))
         for t, who, text in caps
-        if now - t < CAPTION_S
-    ][-2:]
+        if now is None or now - t < CAPTION_S
+    ]
+
+
+def draw_captions(
+    img: Image.Image,
+    caps: list[tuple[float, str, str]],
+    now: float,
+    w: int = W_GAME,
+    h: int = H,
+    size: int = 16,
+):
+    """The latest line from the watcher and from the player, over the game view
+    (``w`` x ``h`` at the top left)."""
+    f = font(size)
+    shown = _said(caps, now)[-2:]
     if not shown:
         return
-    rows = []
-    for who, text in shown:
-        words, line = f"{'YOU' if who == 'player' else 'GRANITE'}: {text}".split(), ""
-        for w in words:
-            if len(line) + len(w) + 1 > 66:
-                rows.append((who, line))
-                line = w
-            else:
-                line = f"{line} {w}".strip()
-        rows.append((who, line))
     d = ImageDraw.Draw(img)
-    y = H - 14 - 22 * len(rows)
-    d.rectangle([0, y - 8, W_GAME, H], fill=(10, 12, 16))
+    pad, lh = round(size * 0.9), round(size * 1.4)
+    rows = [
+        (who, ln)
+        for who, text in shown
+        for ln in wrap(
+            d, f"{'YOU' if who == 'player' else 'GRANITE'}: {text}", f, w - 2 * pad
+        )
+    ]
+    y = h - pad - lh * len(rows)
+    d.rectangle([0, y - pad // 2, w, h], fill=(10, 12, 16))
     for who, row in rows:
-        d.text((14, y), row, font=f, fill=AMBER if who == "player" else TEAL)
-        y += 22
+        d.text((pad, y), row, font=f, fill=AMBER if who == "player" else TEAL)
+        y += lh
+
+
+_PANE: dict = {}
+
+
+def draw_conversation(
+    img: Image.Image, caps: list[tuple[float, str, str]], box, k: float = 1.5
+) -> None:
+    """The conversation so far (the watcher's words and his lines), newest at
+    the bottom, as much as fits in ``box`` (x0, y0, x1, y1). Drawn again only
+    when it changes."""
+    key = (tuple(caps), tuple(box), k)
+    if _PANE.get("key") != key:
+        _PANE["key"], _PANE["img"] = key, _conversation(caps, box, k)
+    img.paste(_PANE["img"], tuple(box[:2]))
+
+
+def _conversation(caps, box, k: float) -> Image.Image:
+    w, h = box[2] - box[0], box[3] - box[1]
+    pane = Image.new("RGB", (w, h), BG)
+    d = ImageDraw.Draw(pane)
+    f, fh = font(round(14 * k)), font(round(12 * k))
+    pad, lh = round(18 * k), round(20 * k)
+    d.line([pad, 0, w - pad, 0], fill=LAYER2, width=1)
+    d.text((pad, round(10 * k)), "CONVERSATION", font=fh, fill=HELP)
+    top, y = round(34 * k), h - pad
+    for who, text in reversed(_said(caps)):
+        label = "YOU" if who == "player" else "GRANITE"
+        lines = wrap(d, f"{label}: {text}", f, w - 2 * pad)
+        if y - lh * len(lines) < top:
+            break
+        y -= lh * len(lines)
+        for i, ln in enumerate(lines):
+            col = AMBER if who == "player" else TEAL
+            d.text((pad, y + lh * i), ln, font=f, fill=col)
+        y -= round(6 * k)
+    return pane
+
+
+VIEWS = ("classic", "wide")
+WIDE = (1920, 1080)  # 16:9, the size of most screens a demo is shown on
+WIDE_GAME_K = 1.62  # the game in the wide view: 1037 x 778
+WIDE_PANEL_K, WIDE_PANEL_H = 1.5, 720
 
 
 class Overlay:
     """One whole frame: the game with captions, the panel, the activity map
     and the heatmap. Push each tic's columns (:attr:`act`, :attr:`heat`), then
-    :meth:`draw`."""
+    :meth:`draw`.
 
-    def __init__(self, models: list[str]):
-        self.panel = Panel()
-        self.heat = Heatmap(W_GAME + W_PANEL)
-        self.act = Activity(W_GAME + W_PANEL, models)
+    ``view``: ``classic`` (1000 x 898: the game at its own size, the panel
+    beside it, the maps below; the videos) or ``wide`` (16:9, 1920 x 1080: the
+    game 1.62x with large captions, the maps below it; on the right, the panel
+    1.5x and the conversation so far; the live demo in full screen)."""
+
+    def __init__(self, models: list[str], view: str = "classic"):
+        if view not in VIEWS:
+            raise ValueError(f"view must be one of {VIEWS}")
+        self.view = view
+        if view == "wide":
+            self.gw, self.gh = round(W_GAME * WIDE_GAME_K), round(H * WIDE_GAME_K)
+            self.panel = Panel(WIDE_PANEL_K)
+            self.act = Activity(self.gw, models, row=10)
+            self.heat = Heatmap(self.gw, row=4)
+        else:
+            self.gw, self.gh = W_GAME, H
+            self.panel = Panel()
+            self.heat = Heatmap(W_GAME + W_PANEL)
+            self.act = Activity(W_GAME + W_PANEL, models)
 
     @property
     def size(self) -> tuple[int, int]:
-        return W_GAME + W_PANEL, H + self.act.height + H_HEAT
+        if self.view == "wide":
+            return WIDE
+        return W_GAME + W_PANEL, H + self.act.height + self.heat.height
 
     def draw(self, frame: np.ndarray, info: dict, caps, now: float) -> Image.Image:
         img = Image.new("RGB", self.size, BG)
-        img.paste(Image.fromarray(frame), (0, 0))
+        game = Image.fromarray(frame)
+        if self.view == "wide":
+            img.paste(game.resize((self.gw, self.gh), Image.BILINEAR), (0, 0))
+            w, h = self.size
+            self.panel.draw(img, info, x0=self.gw, w=w - self.gw, h=WIDE_PANEL_H)
+            draw_captions(img, caps, now, self.gw, self.gh, size=26)
+            self.act.draw(img, self.gh)
+            self.heat.draw(img, self.gh + self.act.height)
+            draw_conversation(img, caps, (self.gw, WIDE_PANEL_H, w, h), WIDE_PANEL_K)
+            return img
+        img.paste(game, (0, 0))
         self.panel.draw(img, info)
         draw_captions(img, caps, now)
         self.act.draw(img, H)
