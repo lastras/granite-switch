@@ -526,19 +526,25 @@ class Game:
             loop.remove_reader(fd)
 
     async def _decide(self, tick: int, state: str) -> None:
-        t0 = time.perf_counter()
-        want = [self.style, CRITIC] + ([ARMS] if tick % PLAN_EVERY_TICS == 0 else [])
-        talking = self.talking
-        d = await self.pol.decide(self.hist.ids, state, want)
-        ms = (time.perf_counter() - t0) * 1000
-        self.lat_ms.append(ms)
-        self.lat_talking.append(talking or self.talking)
-        slot = int(d[ARMS][0]) if ARMS in d else None
+        # The style this decision asks: a style order can switch self.style while
+        # the request runs, and takes effect from the next one. The next one is
+        # asked whatever happens to this one (inflight), or the player stops.
+        style = self.style
         try:
-            self.conn.send(("act", tick, d[self.style][0], slot))
-        except (BrokenPipeError, OSError):
-            pass  # the match just ended
-        self.inflight = False
+            t0 = time.perf_counter()
+            want = [style, CRITIC] + ([ARMS] if tick % PLAN_EVERY_TICS == 0 else [])
+            talking = self.talking
+            d = await self.pol.decide(self.hist.ids, state, want)
+            ms = (time.perf_counter() - t0) * 1000
+            self.lat_ms.append(ms)
+            self.lat_talking.append(talking or self.talking)
+            slot = int(d[ARMS][0]) if ARMS in d else None
+            try:
+                self.conn.send(("act", tick, d[style][0], slot))
+            except (BrokenPipeError, OSError):
+                pass  # the match just ended
+        finally:
+            self.inflight = False
         if self.on_decision is not None:
             self.on_decision(tick, d, ms)
 
