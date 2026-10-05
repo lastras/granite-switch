@@ -274,6 +274,7 @@ async def run_matches(args) -> list:
         gpu_mem=args.gpu_mem,
         temperature=1.0,  # the game adapters', as the demo serves them
         layout="chat",
+        max_model_len=args.max_model_len,
     )
     await pol.warmup()
     rows: list = []
@@ -702,6 +703,271 @@ def score(args) -> None:
         print("\n".join(shown[key]))
 
 
+# ── Remarks: what he says on his own ───────────────────────────────────────────
+# A remark is a line he says with nobody to answer. Each one is checked in code
+# against the state he was given: whether it is about the news (the most
+# salient event of the last NEWS_S seconds), whether it names a bot nothing has
+# happened to for STALE_S, whether it uses the bots' own war (a bot-on-bot kill
+# of the last WAR_S), its habits (an opening he used in his last 8 lines, the
+# word "still", an "Even ..." opening, naming a weapon), and its claims.
+NEWS_S = 4.0  # talk.NEWS_S: the state's "Just now"
+STALE_S = 30.0
+WAR_S = 10.0
+# Kinds of news, most salient first; a streak comes with the frag that made it.
+NEWS_KINDS = {
+    "death": ("death",),
+    "order": ("order_end", "order"),
+    "frag": ("streak", "frag"),
+    "close_call": ("close_call",),
+    "lead": ("lead",),
+    "kill": ("kill",),
+    "pickup": ("pickup",),
+}
+SALIENCE = list(NEWS_KINDS)
+_KIND = {t: k for k, ts in NEWS_KINDS.items() for t in ts}
+# Besides the names in it, what a line may say to be about a kind of news.
+NEWS_WORDS = {
+    "death": r"\b(kill|killed|took me|got me|dead|died|down|dropped me|respawn)",
+    "streak": r"\b(streak|in a row|two|three|four|five|six|double|triple|another|more)\b",
+    "frag": r"\b(frag|fragged|dropped|got one|got him|one more|another|kill)",
+    "close_call": r"\b(close|barely|scratch|hanging|lucky|alive|breath)",
+    "lead": r"\b(lead|leading|first|top|ahead|behind|tied|front)",
+}
+_WEAPON = re.compile(
+    r"\b(bfg|pistol|chaingun|chain gun|shotgun|plasma|rocket|launcher|fist|chainsaw)",
+    re.I,
+)
+
+
+def _secs(clock: str) -> int:
+    m, s = clock.split(":")
+    return 60 * int(m) + int(s)
+
+
+def _names(text: str, names) -> set[str]:
+    return {n for n in names if re.search(rf"\b{re.escape(n)}\b", text, re.I)}
+
+
+def _about(e: dict, line: str) -> bool:
+    """Whether ``line`` mentions event ``e``: a bot in it, its item or order,
+    or the words its kind takes."""
+    bots = {e.get(k) for k in ("killer", "victim", "leader")} - {None, "you", "unknown"}
+    if _names(line, bots):
+        return True
+    words = re.findall(r"[a-z]{3,}", f"{e.get('item', '')} {e.get('told', '')}".lower())
+    if any(re.search(rf"\b{w}", line, re.I) for w in words if w not in ("the", "and")):
+        return True
+    pat = NEWS_WORDS.get(e["type"])
+    return bool(pat and re.search(pat, line, re.I))
+
+
+def remark_flags(line: str, state: dict, prev: list[str]) -> dict:
+    """One remark's checks (see above); ``prev``: his earlier lines this match."""
+    now = _secs(state["time"])
+    events = [(now - _secs(e["time"]), e) for e in state.get("recent_events", ())]
+    bots = [e["name"] for e in state.get("scoreboard", ()) if e["name"] != "you"]
+    fresh = [e for age, e in events if age <= NEWS_S and e["type"] in _KIND]
+    news = min((SALIENCE.index(_KIND[e["type"]]) for e in fresh), default=None)
+    news = news is not None and SALIENCE[news]  # the most salient kind just now
+    # When each bot last figured in what the game told him.
+    seen = {}
+    for age, e in events:
+        for k in ("killer", "victim", "leader"):
+            if e.get(k) in bots:
+                seen[e[k]] = min(seen.get(e[k], age), age)
+    d = state.get("last_death") or {}
+    if d.get("killer") in bots:
+        seen[d["killer"]] = min(seen.get(d["killer"], 1e9), d["seconds_ago"])
+    named = _names(line, bots)
+    war = [e for age, e in events if e["type"] == "kill" and age <= WAR_S]
+    opening = " ".join(re.findall(r"[a-z']+", line.lower())[:3])
+    return {
+        "news": news or None,
+        "about news": any(_about(e, line) for e in fresh if _KIND[e["type"]] == news),
+        "about anything new": any(_about(e, line) for e in fresh),
+        "old-news bot": any(seen.get(b, 1e9) > STALE_S for b in named),
+        "war available": bool(war),
+        "uses the war": any(_names(line, {e["killer"], e["victim"]}) for e in war),
+        "repeats an opening": any(
+            " ".join(re.findall(r"[a-z']+", p.lower())[:3]) == opening
+            for p in prev[-8:]
+        ),
+        "still": bool(re.search(r"\bstill\b", line, re.I)),
+        "'Even' opening": line.lower().startswith("even"),
+        "names a weapon": bool(_WEAPON.search(line)),
+        "claims fail": not probes.claims(line, state)[0],
+    }
+
+
+def read_lines(path: Path) -> dict[str, list[dict]]:
+    """His lines, by match, from a test-partner run or a live run log
+    (``doom_live.py serve --log-dir``): ``{match: [{tick, line, heard, state}]}``."""
+    matches: dict[str, list[dict]] = defaultdict(list)
+    n = 0
+    for x in map(json.loads, open(path)):
+        if x.get("type") == "match":  # a live log's next match
+            n += 1
+        elif x.get("kind") == "line" or x.get("type") == "line":
+            key = f"g{x['gid']}" if "gid" in x else f"m{n}"
+            matches[key].append(x)
+    return matches
+
+
+# What the judge is asked of a remark (one call, all three): the code checks
+# above only see words; these need reading. Unlike partner_ivr.JUDGE_ALL, the
+# state does name the bots he fragged.
+JUDGE_REMARK = {
+    "news": "His state's recent_events end with what has just happened (times are "
+    "match time; the clock now is the state's time). Is the line about the most "
+    "notable of the events of the last few seconds (his death, his frags or a "
+    "streak, a close call, the lead changing, a bot killing a bot, an order "
+    "ending), rather than about something older or nothing in particular?",
+    "true": "Is the line free of anything the state contradicts: a kill, death or "
+    "killer that did not happen (recent_events names the bots he fragged too), "
+    "wrong standings, health, armor or weapons (held or owned), a pickup he did "
+    "not make? A line with no game facts is YES.",
+    "grounded": "Does the line avoid stating as fact what the game does not tell "
+    "him about the bots: what a bot is doing, thinking or feeling, where a named "
+    "bot is, which bot he sees (bots in view are never identified)? An obvious "
+    "joke, an opinion, or a threat about what he will do is fine (YES).",
+    "specific": "Does the line only make sense at this moment of the match (YES), "
+    "or could he have said it at almost any moment (NO)?",
+}
+
+
+def judge_remark(client, model: str, line: str, state: dict, prev: list[str]):
+    """The judge's YES (True) or NO on each :data:`JUDGE_REMARK` question, and
+    its answer."""
+    from conversation import tool_text
+
+    listing = "\n".join(f"{k}: {q}" for k, q in JUDGE_REMARK.items())
+    prompt = (
+        "Judge one line that Granite, a player in a Doom deathmatch against bots, "
+        "said on his own (nobody had spoken to him).\n\n"
+        f'The game state he had just read ("you" is him):\n{tool_text(state)}\n\n'
+        "His previous lines, oldest first:\n"
+        + ("\n".join(prev[-6:]) or "(none)")
+        + f'\n\nThe line: "{line}"\n\nQuestions:\n{listing}\n\n'
+        f"Answer with exactly {len(JUDGE_REMARK)} lines, one per question, each as "
+        "`name: YES` or `name: NO - short reason`."
+    )
+    from openai import APIConnectionError, APITimeoutError
+
+    for attempt in range(4):  # the judge's server is restarted when its job ends
+        try:
+            r = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                reasoning_effort="low",
+                max_tokens=1500,
+                temperature=0.0,
+            )
+            break
+        except (APIConnectionError, APITimeoutError):
+            if attempt == 3:
+                raise
+            time.sleep(10 * (attempt + 1))
+    a = r.choices[0].message.content or ""
+    got = {k: re.search(rf"{k}\W*?:\W*(YES|NO)", a, re.I) for k in JUDGE_REMARK}
+    return {k: bool(v) and v.group(1).upper() == "YES" for k, v in got.items()}, a
+
+
+def remarks(args) -> None:
+    """The remark checks, one column per run; with ``--judge-url``, the judge's
+    on a sample of ``--judge-n`` remarks per run."""
+    if args.judge_url and args.judge_out:
+        args.judge_out.write_text("")
+    cols, gaps = {}, {}
+    for path in args.rows:
+        c, g, todo = Counter(), [], []
+        for ml in read_lines(path).values():
+            prev, last = [], None
+            for x in sorted(ml, key=lambda x: x["tick"]):
+                if not x.get("heard"):
+                    todo.append((x["line"], x["state"], list(prev)))
+                    f = remark_flags(x["line"], x["state"], prev)
+                    c["remarks"] += 1
+                    c.update(k for k, v in f.items() if v is True)
+                    if f["news"]:
+                        c["with news"] += 1
+                        c[f"news: {f['news']}"] += 1
+                        c[f"about it: {f['news']}"] += f["about news"]
+                    if last is not None:
+                        g.append((x["tick"] - last) / TIC_HZ)
+                    last = x["tick"]
+                prev.append(x["line"])
+        if args.judge_url:
+            from concurrent.futures import ThreadPoolExecutor
+
+            from openai import OpenAI
+
+            client = OpenAI(base_url=args.judge_url, api_key="none", timeout=300)
+            sample = random.Random(args.seed).sample(todo, min(args.judge_n, len(todo)))
+            with ThreadPoolExecutor(8) as pool:
+                got = list(
+                    pool.map(
+                        lambda t: judge_remark(client, args.judge_model, *t), sample
+                    )
+                )
+            c["judged"] = len(got)
+            for (line, _, _), (v, a) in zip(sample, got):
+                c.update(f"judged {k}" for k, ok in v.items() if ok)
+                if args.judge_out:
+                    with open(args.judge_out, "a") as f:
+                        f.write(
+                            json.dumps(
+                                {"run": path.stem, "line": line, **v, "answer": a}
+                            )
+                            + "\n"
+                        )
+        cols[path.stem], gaps[path.stem] = c, sorted(g)
+    names = list(cols)
+
+    def row(label, f):
+        print(f"| {label} | " + " | ".join(f(cols[k], k) for k in names) + " |")
+
+    def share(key, of="remarks"):
+        return lambda c, k: f"{100 * c[key] / max(1, c[of]):.0f}%"
+
+    print("| remarks | " + " | ".join(names) + " |\n|---|" + "---|" * len(names))
+    row("remarks", lambda c, k: str(c["remarks"]))
+    row(
+        "seconds between remarks (median)",
+        lambda c, k: f"{gaps[k][len(gaps[k]) // 2]:.1f}" if gaps[k] else "-",
+    )
+    row("with news just now", share("with news"))
+    row("... about the most salient", share("about news", "with news"))
+    row("... about anything in it", share("about anything new", "with news"))
+    for kind in SALIENCE:
+        if any(c[f"news: {kind}"] >= 5 for c in cols.values()):
+            row(
+                f"... {kind}: about it",
+                lambda c,
+                k,
+                kind=kind: f"{100 * c[f'about it: {kind}'] / max(1, c[f'news: {kind}']):.0f}% of {c[f'news: {kind}']}",
+            )
+    row(f"names a bot with no news for {STALE_S:.0f} s", share("old-news bot"))
+    row(f"a bot-on-bot kill in the last {WAR_S:.0f} s", share("war available"))
+    row("... uses it", share("uses the war", "war available"))
+    row("repeats an opening of his last 8 lines", share("repeats an opening"))
+    row("'still'", share("still"))
+    row("'Even ...' opening", share("'Even' opening"))
+    row("names a weapon", share("names a weapon"))
+    row("claims fail (code)", share("claims fail"))
+    if args.judge_url:
+        row("judged remarks (a sample)", lambda c, k: str(c["judged"]))
+        row(
+            "... true (nothing the state contradicts), judged",
+            share("judged true", "judged"),
+        )
+        row(
+            "... grounded (nothing invented about the bots), judged",
+            share("judged grounded", "judged"),
+        )
+        row("... about the news, judged", share("judged news", "judged"))
+        row("... specific to the moment, judged", share("judged specific", "judged"))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -712,11 +978,30 @@ def main() -> None:
     r.add_argument("--bots", default="default")
     r.add_argument("--seed", type=int, default=100)
     r.add_argument("--gpu-mem", type=float, default=0.6)
+    r.add_argument(
+        "--max-model-len",
+        type=int,
+        default=16384,
+        help="As doom_live.py serve's: room for a long conversation",
+    )
     r.add_argument("--out", type=Path, required=True)
     s = sub.add_parser("score", help="Check every reply")
     s.add_argument("--rows", type=Path, required=True)
     s.add_argument("--judge-url")
     s.add_argument("--judge-model", default="gpt-oss-120b")
+    m = sub.add_parser("remarks", help="Check what he says on his own, run by run")
+    m.add_argument(
+        "--rows",
+        type=Path,
+        nargs="+",
+        required=True,
+        help="Runs here, or live run logs",
+    )
+    m.add_argument("--judge-url", help="With a judge: three questions on a sample")
+    m.add_argument("--judge-model", default="gpt-oss-120b")
+    m.add_argument("--judge-n", type=int, default=150, help="Remarks judged per run")
+    m.add_argument("--judge-out", type=Path, help="Each verdict, with its reasons")
+    m.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
     if args.cmd == "run":
         rows = asyncio.run(run_matches(args))
@@ -724,6 +1009,8 @@ def main() -> None:
         with open(args.out, "w") as f:
             f.writelines(json.dumps(x) + "\n" for x in rows)
         print(f"-> {args.out}")
+    elif args.cmd == "remarks":
+        remarks(args)
     else:
         score(args)
 
