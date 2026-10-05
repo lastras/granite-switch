@@ -16,12 +16,14 @@ when each may be asked (:func:`allowed`), the right answer
   only by saying so.
 * :func:`claims` checks every reply, asked or not: each name, number and
   weapon it states must agree with the state ("MacGyver stole the BFG" is
-  wrong: bots never take weapons; so is a killer the game never named, a
-  victim named at all, a lead he does not have, a number that is not his).
+  wrong: bots never take weapons; so is a killer, a victim or a bot's kill
+  the game never named, a bot on a tear that the storylines do not have, a
+  lead he does not have, a number that is not his).
 
 So answers can be scored in code, the way training with verifiable rewards
-needs: ``partner_ivr.py`` keeps only lines that pass, ``rft.py`` keeps verified
-samples, ``eval_probes.py`` reports accuracy per question type. Pure Python:
+needs: ``narrator_data.py`` keeps only lines that pass (through
+:mod:`checks`), ``rft.py`` keeps verified samples, ``eval_probes.py`` reports
+accuracy per question type (:func:`weights` balances the types). Pure Python:
 the dataset writer runs it in Mellea's environment.
 
     python probes.py check [--moments data/narr/moments_v6_write.jsonl]
@@ -1055,6 +1057,13 @@ def allowed(state: dict) -> list[str]:
     return [t for t in TYPES if ok[t]]
 
 
+def weights(moments: list[dict]) -> dict[str, float]:
+    """Each question type weighted by how rarely a moment allows it, so the
+    types come out about evenly (the rarest at most 6 times a common one)."""
+    n = Counter(t for m in moments for t in allowed(m["tool"]))
+    return {t: min(6.0, len(moments) / max(1, n[t])) for t in TYPES}
+
+
 def _victim_ok(state: dict) -> bool:
     f = state.get("last_frag")
     if f is not None:
@@ -1956,10 +1965,13 @@ def claims(
 ) -> tuple[bool, str]:
     """Whether every fact ``reply`` states agrees with ``state`` (the latest
     tool output), ``past`` (the event lists of the past exchanges' outputs)
-    and ``said`` (what the partner just said); if not, what is wrong. Checked: bots never take weapons; a victim is never
-    named; a killer must be one the game named; who leads, and where he stands
-    against a named bot; every number, by what it counts; the weapons he says
-    he has, and the pickups he says he made; no bot the match does not have."""
+    and ``said`` (what the partner just said); if not, what is wrong. Checked:
+    bots never take weapons; a victim he names must be one the game named, and
+    so must a killer and a bot's kill of a bot (the kill events, the feuds in
+    the storylines); a bot on a tear must be one the storylines have; who
+    leads, and where he stands against a named bot; every number, by what it
+    counts; the weapons he says he has, and the pickups he says he made; no
+    bot the match does not have."""
     you, bd = state["you"], board(state)
     low = reply.lower()
     past_events = [e for evs in past for e in evs]
@@ -1970,12 +1982,21 @@ def claims(
     killers |= {e["killer"] for e in events if e.get("type") == "death"}
     in_match = [n for n in bd if n != "you"]
     # What the game told him: his victims, which bot used which weapon, the
-    # bots' kills (the obituaries; none in the first round's states).
+    # bots' kills (the obituaries; none in the first round's states) and the
+    # storylines made of them.
     victims_cased = {e.get("victim") for e in events if e.get("type") == "frag"}
     if state.get("last_frag"):
         victims_cased.add(state["last_frag"]["victim"])
     victims_cased -= {None, "unknown"}
     victims = {v.lower() for v in victims_cased}
+    war = (state.get("storylines") or {}).get("bots_war") or {}
+    tear = {x["bot"].lower() for x in war.get("on_a_tear", ())}
+    bot_kills = {
+        (e["killer"].lower(), e["victim"].lower())
+        for e in events
+        if e.get("type") == "kill"
+    } | {(x["killer"].lower(), x["victim"].lower()) for x in war.get("feuds", ())}
+    fallen = victims | {v for _, v in bot_kills}  # anyone the game said went down
     used = {
         (e["killer"].lower(), e.get("killer_weapon"))
         for e in events
@@ -2055,7 +2076,7 @@ def claims(
                     "your_weapon is yours."
                 )
                 break
-    # A victim named must be one the game named.
+    # A victim named must be one the game named ("Leone's down": his, or a bot's).
     for s in _sentences(reply):
         v = re.search(
             rf"\b(?:i|i've|we|i just|i finally)\s+(?:\w+\s+)?{_KILL_VERBS}\s+({names_rx})\b"
@@ -2065,7 +2086,7 @@ def claims(
         )
         if v:
             who = next(g for g in v.groups() if g)
-            if who.lower() not in victims:
+            if who.lower() not in (fallen if v.group(3) else victims):
                 known = (
                     "the game did not say whom you fragged"
                     if not victims
@@ -2073,6 +2094,17 @@ def claims(
                 )
                 bad.append(f"You did not frag {who}: {known}.")
                 break
+    # A bot's kill of a bot must be one the game told ("Rambo keeps killing Leone").
+    for m in re.finditer(
+        rf"\b({names_rx})\b(?:'s| has| just| finally| again| keeps| kept| is)*\s+"
+        rf"(?:{_KILL_VERBS}|killing|fragging|picking off|hunting down)\s+({names_rx})\b",
+        reply,
+        re.I,
+    ):
+        a, b = m.group(1), m.group(2)
+        if a.lower() != b.lower() and (a.lower(), b.lower()) not in bot_kills:
+            bad.append(f"The game never said {a} killed {b}.")
+            break
     # A killer must be one the game named.
     for m in re.finditer(
         rf"\b({names_rx})\b(?:'s| has| just| finally| again| really| even)*\s+{_KILL_VERBS}\s+(?:me|us)\b"
@@ -2216,16 +2248,20 @@ def claims(
         who = m.group(1) or m.group(2)
         bad.append(f"Which bot is in view is never known; do not say it is {who}.")
         break
-    # A bot's streak is never reported; a named bot's place must be its place;
-    # "again" in the lead needs a lead taken back.
+    # A bot on a tear: the storylines say so, or two kills of the last 30 s;
+    # a named bot's place must be its place; "again" in the lead needs a lead
+    # taken back.
     for m in re.finditer(
         rf"\b({names_rx})(?:'s| is| has been| has| went)\s+(?:on\s+)?(?:a\s+)?"
         r"(?:streak|roll|tear|rampage|killing spree|hot streak)\b",
         reply,
         re.I,
     ):
-        if recent_kills[m.group(1).lower()] < 2:
-            bad.append(f"{m.group(1)} has no streak: under two kills in the last 30 s.")
+        who = m.group(1).lower()
+        if recent_kills[who] < 2 and who not in tear:
+            bad.append(
+                f"{m.group(1)} is not on a tear: not in the storylines' on_a_tear."
+            )
     places_ = places(state)
     for m in re.finditer(
         rf"\b({names_rx})(?:'s| is)\s+(?:in\s+)?(?:the\s+)?"
@@ -2747,6 +2783,37 @@ def check(moments: Path | None = None) -> None:
         ("I got Rambo. Nice and clean.", False, told),
         ("MacGyver got me with the plasma rifle.", True, told),
         ("MacGyver got me with the chaingun.", False, told),
+    ]
+    # The bots' war: a kill of a bot, a feud and a bot on a tear, in the
+    # recent events and the storylines.
+    war = _state()
+    war["recent_events"] = [
+        *war["recent_events"],
+        {"time": "3:08", "type": "kill", "killer": "Rambo", "victim": "Leone"},
+    ]
+    war["storylines"] = {
+        "bots_war": {
+            "on_a_tear": [{"bot": "Rambo", "kills_last_60s": 4}],
+            "feuds": [
+                {
+                    "killer": "MacGyver",
+                    "victim": "Leone",
+                    "times": 3,
+                    "last_seconds_ago": 40,
+                }
+            ],
+        }
+    }
+    claim_cases += [
+        ("Rambo's on a tear.", False),
+        ("Rambo's on a tear. Somebody should stop him.", True, war),
+        ("Leone's on a tear.", False, war),
+        ("Rambo just killed Leone. Saves me the trip.", True, war),
+        ("Rambo just killed Leone.", False),
+        ("Leone killed Rambo.", False, war),
+        ("MacGyver keeps killing Leone. It's a habit now.", True, war),
+        ("Leone's down. Rambo got him.", True, war),
+        ("Leone's down.", False),
     ]
 
     # The partner's orders: what he says of one, by its status.

@@ -27,10 +27,10 @@ ammo, ...), so the only such numbers in the prompt are the current ones.
 :func:`narrator_ids` renders it with the tokenizer's chat template
 (``tools=[GET_GAME_STATE]``; ``adapter_name`` puts the narrator's control token
 at the last assistant header only, so the tool calls and outputs run on base
-weights). The dataset writer (``partner_ivr.py``), training (``train_alora.py``)
-and live play (``engine.py``, ``record_video.py``) all build it here. This
-module imports nothing from the game: the writer runs in Mellea's environment,
-which has no ViZDoom.
+weights). The dataset writer (``narrator_data.py``), training
+(``train_alora.py``) and live play (``engine.py``, ``record_video.py``) all
+build it here. This module imports nothing from the game: the writer runs in
+Mellea's environment, which has no ViZDoom.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ TIC_HZ = 35  # doom_env.TIC_HZ
 CONV_EXCHANGES = 30
 # A recorded match's moments may come in a few unbroken stretches (talk.py
 # moments --per-match); live, he never stays quiet this long, so in the dataset
-# a gap this long between moments starts a new conversation (partner_ivr.py
+# a gap this long between moments starts a new conversation (narrator_data.py
 # writes it, train_alora.py reads it).
 STRETCH_GAP_S = 30.0
 TOOL_NAME = "get_game_state"
@@ -60,8 +60,10 @@ NARRATOR_SYSTEM_PROMPT = (
     "happened then. When your partner asks about the game, answer first, exactly as "
     "the latest result says (the name, the number, the weapon), then add your angle "
     "if you like; when it does not say, say you don't know. If your partner says "
-    "something about the game that the result contradicts, correct them. Frag "
-    "victims are never reported, so never name a bot you fragged. Bots never take "
+    "something about the game that the result contradicts, correct them. Your "
+    "partner's words come as speech recognition writes them: lower case, no "
+    "punctuation, now and then a word misheard; they are almost always about this "
+    "match, so read them for what they most likely meant. Bots never take "
     "your weapons: when you die, you respawn with a pistol. Say a number only when "
     "your partner asks for one. Your partner can tell you what to do; order says "
     "what you were told and whether you are doing it: never say you are doing "
@@ -91,7 +93,13 @@ GET_GAME_STATE = {
             "last_death: killer (a bot's name, yourself, or unknown), killer_weapon, "
             "your_weapon (yours then), seconds_ago, in_a_row (deaths to that bot in a "
             "row). last_frag: victim, your_weapon, seconds_ago. killed_by: how many "
-            "times each bot has killed you. last_pickup: item, amount, seconds_ago. "
+            "times each bot has killed you. storylines: the match's stories so far, "
+            "from its events: bots_war (on_a_tear: bots with 3 or more kills in the "
+            "last 60 seconds; feuds: a bot that keeps killing the same bot), race "
+            "(leader, chaser, the gap between them, lead_changes: how often you took "
+            "or lost the lead), grudges (nemesis: the bot that has killed you most; "
+            "favorite_victim: the bot you have fragged most), your_play (best_streak "
+            "this match, no_frag_for_s). last_pickup: item, amount, seconds_ago. "
             "recent_events: the last 90 seconds, oldest first: death, frag (your "
             "victim), kill (a bot killing another bot), pickup, lead (who leads "
             "now), close_call, streak, order (told, and its status), order_end (it "

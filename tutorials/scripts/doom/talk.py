@@ -42,7 +42,7 @@ never holds it.
 from __future__ import annotations
 
 import re
-from collections import deque
+from collections import Counter, deque
 
 from conversation import clock
 from doom_env import PLAYER_NAME, TIC_HZ, WEAPON_NAMES
@@ -479,6 +479,114 @@ def standings(
     ]
 
 
+# The match's storylines (:func:`storylines`).
+TEAR_S, TEAR_N = 60, 3  # a bot on a tear: this many kills within TEAR_S
+TEAR_MAX = 2  # ... at most this many bots
+FEUD_N, FEUD_MAX = 3, 2  # a feud: one bot killing the same bot this many times
+GRUDGE_N = 2  # a nemesis, a favorite victim: this many times
+BEST_STREAK_N = STREAK_N
+
+
+def _ranked(counts: Counter, last: dict, least: int) -> list:
+    """The keys counted at least ``least`` times, most first; a tie goes to the
+    latest (``last``: key -> tick), then by name."""
+    keep = [k for k, n in counts.items() if n >= least]
+    return sorted(keep, key=lambda k: (-counts[k], -last[k], str(k)))
+
+
+def storylines(facts: dict, events: list[dict], now: int) -> dict:
+    """The match's stories so far, from its events (each once, as the
+    :class:`EventLog` holds them; later ones are ignored) and the facts:
+
+    * ``bots_war``: the bots ``on_a_tear`` (TEAR_N or more kills in the last
+      TEAR_S, him included; at most TEAR_MAX) and the ``feuds`` (a bot that has
+      killed the same bot FEUD_N or more times this match; the top FEUD_MAX);
+    * ``race``: the leader and the chaser (places 1 and 2; him as "you"), the
+      gap, and how often he took or lost the lead (``lead_changes``);
+    * ``grudges``: his ``nemesis`` (the bot that has killed him most, at least
+      GRUDGE_N times) and his ``favorite_victim`` (the bot he has fragged most,
+      at least GRUDGE_N times);
+    * ``your_play``: his ``best_streak`` this match (at least BEST_STREAK_N)
+      and ``no_frag_for_s`` (a drought of DROUGHT_S or more).
+
+    Ties go to the latest event, then by name; a story with nothing in it is
+    left out."""
+    evs = [e for e in events if e["tick"] <= now]
+    tear = round(TEAR_S * TIC_HZ)
+    kills: Counter = Counter()  # each bot's kills in the last TEAR_S, him included
+    feuds: Counter = Counter()  # (killer, victim) over the match, bots only
+    fell: Counter = Counter()  # whom he fragged, by name
+    killer_of_me: Counter = Counter()
+    last: dict = {}
+    for e in evs:
+        k, t = e["kind"], e["tick"]
+        if k == "kill":
+            pair = (e["killer"], e["victim"])
+            feuds[pair] += 1
+            last[pair] = t
+            who = e["killer"]
+        elif k == "died" and e["by"] not in (None, "yourself"):
+            killer_of_me[e["by"]] += 1
+            last[("me", e["by"])] = t
+            who = e["by"]
+        elif k == "frag" and e.get("victim"):
+            fell[e["victim"]] += 1
+            last[("fell", e["victim"])] = t
+            continue
+        else:
+            continue
+        last[who] = t
+        if now - t <= tear:
+            kills[who] += 1
+    out: dict = {}
+    war: dict = {}
+    on = _ranked(kills, last, TEAR_N)[:TEAR_MAX]
+    if on:
+        war["on_a_tear"] = [{"bot": b, "kills_last_60s": kills[b]} for b in on]
+    top = _ranked(feuds, last, FEUD_N)[:FEUD_MAX]
+    if top:
+        war["feuds"] = [
+            {
+                "killer": a,
+                "victim": b,
+                "times": feuds[(a, b)],
+                "last_seconds_ago": _ago(now, last[(a, b)]),
+            }
+            for a, b in top
+        ]
+    if war:
+        out["bots_war"] = war
+    if facts["board"]:
+        rows = standings(facts["board"], facts["frags"], {}, facts["deaths"])
+        race = {
+            "leader": rows[0]["name"],
+            "chaser": rows[1]["name"],
+            "gap": rows[0]["frags"] - rows[1]["frags"],
+        }
+        changes = sum(e["kind"] in ("took_lead", "lost_lead") for e in evs)
+        if changes:
+            race["lead_changes"] = changes
+        out["race"] = race
+    grudges: dict = {}
+    nem = _ranked(killer_of_me, {b: last[("me", b)] for b in killer_of_me}, GRUDGE_N)
+    if nem:
+        grudges["nemesis"] = {"bot": nem[0], "killed_you": killer_of_me[nem[0]]}
+    fav = _ranked(fell, {b: last[("fell", b)] for b in fell}, GRUDGE_N)
+    if fav:
+        grudges["favorite_victim"] = {"bot": fav[0], "fragged": fell[fav[0]]}
+    if grudges:
+        out["grudges"] = grudges
+    play: dict = {}
+    best = max((e["n"] for e in evs if e["kind"] == "streak"), default=0)
+    if best >= BEST_STREAK_N:
+        play["best_streak"] = best
+    if facts["since_frag"] >= DROUGHT_S:
+        play["no_frag_for_s"] = facts["since_frag"]
+    if play:
+        out["your_play"] = play
+    return out
+
+
 # An order over this long ago leaves the state (its recent_events stay).
 ORDER_KEEP_S = 20
 
@@ -578,6 +686,9 @@ def game_state(
             "seconds_ago": _ago(now, f["tick"]),
         }
     out["killed_by"] = dict(sorted(facts["killed_by"].items(), key=lambda kv: -kv[1]))
+    stories = storylines(facts, events, now)
+    if stories:
+        out["storylines"] = stories
     recent = [e for e in events if now - LOG_S * TIC_HZ < e["tick"] <= now]
     picks = [e for e in recent if e["kind"] in ("weapon", "pickup")]
     if picks:
@@ -1358,6 +1469,69 @@ def check_orders() -> None:
     )
 
 
+def check_storylines() -> None:
+    """The storylines of a scripted minute: two bots on a tear (a tie broken
+    by the latest kill), a feud, the race, a nemesis, a favorite victim, a
+    streak; a drought; and a match with no story yet but the race."""
+    hz = TIC_HZ
+    script = [  # (seconds, kind, fields)
+        (10, "kill", {"killer": "Rambo", "victim": "Leone"}),
+        (20, "kill", {"killer": "Rambo", "victim": "Leone"}),
+        (25, "kill", {"killer": "Machete", "victim": "Leone"}),
+        (30, "died", {"by": "Machete"}),
+        (40, "frag", {"victim": "Leone"}),
+        (41, "took_lead", {}),
+        (44, "frag", {"victim": None}),  # no obituary: no name
+        (45, "frag", {"victim": "Leone"}),
+        (45, "streak", {"n": 3}),
+        (50, "lost_lead", {"by": "Rambo", "tied": False}),
+        (50, "kill", {"killer": "Rambo", "victim": "Leone"}),
+        (58, "died", {"by": "Machete"}),
+        (59, "kill", {"killer": "Plissken", "victim": "Rambo"}),
+        (61, "kill", {"killer": "Rambo", "victim": "Plissken"}),  # after now: ignored
+    ]
+    events = [
+        {"tick": s * hz, "kind": k, "i": i, **kw} for i, (s, k, kw) in enumerate(script)
+    ]
+    facts = {
+        "frags": 3,
+        "deaths": 2,
+        "board": [["Rambo", 4], ["Machete", 3], ["Plissken", 1], ["Leone", 0]],
+        "since_frag": 15,
+    }
+    got = storylines(facts, events, 60 * hz)
+    want = {
+        "bots_war": {
+            # Rambo 3 kills, Machete 3 (one of them, the latest, him): Machete first.
+            "on_a_tear": [
+                {"bot": "Machete", "kills_last_60s": 3},
+                {"bot": "Rambo", "kills_last_60s": 3},
+            ],
+            "feuds": [
+                {
+                    "killer": "Rambo",
+                    "victim": "Leone",
+                    "times": 3,
+                    "last_seconds_ago": 10,
+                }
+            ],
+        },
+        "race": {"leader": "Rambo", "chaser": "you", "gap": 1, "lead_changes": 2},
+        "grudges": {
+            "nemesis": {"bot": "Machete", "killed_you": 2},
+            "favorite_victim": {"bot": "Leone", "fragged": 2},
+        },
+        "your_play": {"best_streak": 3},
+    }
+    assert got == want, f"storylines\n got  {got}\n want {want}"
+    quiet = storylines({**facts, "frags": 0, "since_frag": 52}, events[:1], 52 * hz)
+    assert quiet == {
+        "race": {"leader": "Rambo", "chaser": "Machete", "gap": 1},
+        "your_play": {"no_frag_for_s": 52},
+    }, quiet
+    print(f"OK: storylines of a scripted minute: {got}")
+
+
 def check_parity(seconds: float = 40.0, seed: int = 5) -> None:
     """The dataset path against the live path on one match, with the scripted
     player and a scripted partner's orders. Dataset: collect.py's worker
@@ -1567,6 +1741,7 @@ def main() -> None:
 
     if args.cmd == "check":
         check_tracker()
+        check_storylines()
         if not args.no_parity:
             check_parity(args.seconds)
         return
