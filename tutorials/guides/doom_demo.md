@@ -768,17 +768,29 @@ On an LSF cluster, give every GPU step cores on one host and a thread cap
 
 ### Talking to it live
 
-The player talks (the narrator adapter writes his lines, Chatterbox voices them),
-and you can talk back. The browser handles your microphone (echo cancellation,
-noise suppression, levels) over WebRTC to a small Pipecat app on your laptop; the
-game, the model and the voice run on one GPU node, one websocket away.
+The player talks (the narrator adapter writes his lines, a TTS voices them), and
+you can talk back. The browser handles your microphone (echo cancellation, noise
+suppression, levels) over WebRTC to a small Pipecat app, the page server
+(`doom_pipecat.py`); the game, the model and the voice (`doom_live.py`) are one
+websocket away from it.
+
+As a deployment runs it, all of it is on the GPU node, and the browser opens the
+page there over HTTPS. Only the call crosses the network, as compressed WebRTC
+video and audio. Where the network cuts UDP flows (between a laptop and the
+cluster, a flow stops after a few packets), it lets TLS through: the page server
+tells the browser (`/ice`) to send the call's media through a TURN relay over TLS
+beside it (coturn), and only through it.
 
 ```text
-browser ──WebRTC (your mic in; the game's video and his voice out)── doom_pipecat.py (laptop)
-                                                                          │ websocket over ssh -L
-                         doom_live.py (GPU node): the match at 35 Hz, vLLM (every adapter,
-                         the narrator, the in-model ASR), the voice, the overlay
+browser ──HTTPS: the page, the call's setup──────────── doom_pipecat.py ─┐ GPU node
+        ──TLS: the call's media, via the TURN relay───── coturn ─────────┤
+                                                        doom_live.py ────┘ (local websocket):
+                     the match at 35 Hz, vLLM (every adapter, the narrator, the in-model ASR),
+                     the voice, the overlay
 ```
+
+The page server can also run on a laptop, the GPU side through `ssh -L`; the
+frames then cross the network as JPEG.
 
 What you say is cut into utterances by Pipecat's VAD and sent up as one audio
 segment each; the checkpoint's own ASR transcribes it inside the narrator's
@@ -797,14 +809,26 @@ python build_model.py compose --runs runs/h-alora --router-runs runs/router \
 python doom_live.py serve --model models/doom-narr3-audio --port 8765 \
   --tts-python /path/to/tts-env/bin/python --voice-ref voices/him.wav
 
-# Laptop: a small environment of its own, then open http://localhost:7860/ (the
-# stream full-window; Pipecat's own prebuilt page is at /client)
+# The page server: a small environment of its own (Pipecat's own prebuilt page is
+# at /client)
 uv venv doom-pipecat && uv pip install --python doom-pipecat/bin/python \
   "pipecat-ai[webrtc,silero]" pipecat-ai-small-webrtc-prebuilt aiohttp pillow
+
+# On the GPU node, as deployed: HTTPS (the microphone needs it), the address
+# browsers reach, and the relay over TLS beside it, relaying only to this node.
+# Then open https://<node>:8443/. Browsers check the relay's certificate as well
+# as the page's: a self-signed one has to be trusted, not just accepted.
+turnserver -c turn.conf --tls-listening-port=5349 --no-udp --no-tcp --no-dtls \
+  --listening-ip=<node-ip> --relay-ip=<node-ip> --cert=certs/cert.pem \
+  --pkey=certs/key.pem --realm=doom-live --lt-cred-mech \
+  --denied-peer-ip=0.0.0.0-255.255.255.255 --allowed-peer-ip=<node-ip> &  # turn.conf: user=doom:$TURN_PASS
+TURN_PASS=... doom-pipecat/bin/python doom_pipecat.py --https --port 8443 \
+  --cert-dir certs/ --ice-address <node-ip> --turn "turns:<node>:5349?transport=tcp"
+
+# Or on a laptop, then open http://localhost:7860/ (--https serves it to a browser
+# on another machine, which needs HTTPS for the microphone)
 ssh -N -L 8765:<gpu-node>:8765 <login-node> &
 doom-pipecat/bin/python doom_pipecat.py
-# A browser on another machine needs HTTPS for the microphone: --https serves the
-# page with a self-signed certificate (accept it once), at https://<laptop>:7860/
 ```
 
 `python doom_live.py smoke --questions <dir of q_*.wav>` checks the GPU side

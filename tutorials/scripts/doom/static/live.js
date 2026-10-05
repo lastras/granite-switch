@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-// The live demo's page: the WebRTC call with the laptop app (doom_pipecat.py), and the
+// The live demo's page: the WebRTC call with the page server (doom_pipecat.py), and the
 // dashboard drawn from the telemetry the GPU side sends (doom_live.py's client view),
-// which the laptop forwards over the call's data channel as {"label": "doom", "type": ...}:
+// which the page server forwards over the call's data channel as {"label": "doom", ...}:
 //   hello        the schema: labels, colours, the heatmap's colour stops (overlay.schema)
 //   tics         per-tic columns {k, s, p, c, d, a} for the two maps (doom_live.tic_column)
 //   panel        the panel's fields, five times a second (doom_live.panel_fields)
 //   line         one of his lines, with what you said if he is answering you
 //   match_start, event (died, frag, match_over), quality (the stream stepped), latency
-//   link         the laptop's connection to the GPU side: up or down, its round trip
+//   link         the page server's connection to the GPU side: up or down, its round trip
 // Telemetry runs a little ahead of the video (its jitter buffer, ~50-150 ms).
 "use strict";
 
@@ -35,7 +35,12 @@ async function start(withMic) {
   $("start").disabled = $("watch").disabled = true;
   (withMic ? $("start") : $("watch")).textContent = "Connecting…";
   try {
-    pc = new RTCPeerConnection();
+    // How to reach the call, as the page server says: through its TURN relay over
+    // TLS when the network between us cuts UDP flows, else directly.
+    const ice = await fetch("/ice")
+      .then((r) => r.json())
+      .catch(() => ({ iceServers: [] }));
+    pc = new RTCPeerConnection(ice);
     if (withMic) {
       // The browser's own echo cancellation, noise suppression and gain.
       mic = await navigator.mediaDevices.getUserMedia({
@@ -480,7 +485,7 @@ async function linkStats() {
 setInterval(() => linkStats().catch(() => {}), 1000);
 
 // ── The controls ──────────────────────────────────────────────────────────────
-// Leaving (a reload, a closed tab): end the call now, so the laptop's pipeline ends at
+// Leaving (a reload, a closed tab): end the call now, so the page server's pipeline ends at
 // once and not only when the call times out.
 window.addEventListener("pagehide", () => pc && pc.close());
 $("start").onclick = () => start(true);
@@ -492,7 +497,7 @@ $("mute").onclick = () => {
 };
 $("reset").onclick = () => tell("reset");
 $("sfx").onclick = () => {
-  // the game's sound, mixed under his voice on the laptop
+  // the game's sound, mixed under his voice by the page server
   tell("sfx");
   $("sfx").textContent = $("sfx").textContent.endsWith("on") ? "Game sound: off" : "Game sound: on";
 };

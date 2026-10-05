@@ -1,16 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The live demo's laptop side: a browser call with the Doom player.
+"""The live demo's page and call: a browser call with the Doom player.
 
 Pipecat serves the page and the WebRTC call: the browser sends your microphone
 (its own echo cancellation, noise suppression and gain applied) and plays the
 game's video, his voice and the game's own sound (mixed under his voice, lower
-while he speaks: :class:`GameSound`). Everything else is on the GPU node
-(``doom_live.py serve``), one websocket away through ``ssh -L``, so WebRTC's
-UDP never crosses the cluster network. Pipecat's VAD (Silero) cuts what you say
-into utterances; each one goes up as a single audio segment, which the model's
-own ASR transcribes inside the narrator's request. No speech-to-text, LLM or
-text-to-speech service runs here. When you start talking over him, his line
-stops (an interruption) and the GPU side drops what he had not said yet.
+while he speaks: :class:`GameSound`). The game, the model and his voice are the
+GPU side (``doom_live.py serve``), one websocket away. Pipecat's VAD (Silero)
+cuts what you say into utterances; each one goes up as a single audio segment,
+which the model's own ASR transcribes inside the narrator's request. No
+speech-to-text, LLM or text-to-speech service runs here. When you start talking
+over him, his line stops (an interruption) and the GPU side drops what he had
+not said yet.
 
 The page at ``/`` (``static/live.html``, ``live.js``, ``live.css``) shows the
 game's video with the dashboard around it, drawn in the browser from the
@@ -25,14 +25,27 @@ A small environment of its own (not the vLLM one)::
     uv venv doom-pipecat && uv pip install --python doom-pipecat/bin/python \\
         "pipecat-ai[webrtc,silero]" pipecat-ai-small-webrtc-prebuilt aiohttp pillow
 
+As a deployment would run it: on the GPU node itself, beside the GPU side, so
+only the call crosses the network, compressed (VP8, with the browser's jitter
+buffer and congestion control). Over HTTPS (the microphone needs it), offering
+the one address browsers reach (``--ice-address``), and, where the network cuts
+UDP flows (the one between a laptop and the cluster does: TLS passes), with a
+TURN relay over TLS beside it (coturn) that the browser sends the call's media
+through, and only through it (``/ice`` tells the page)::
+
+    python doom_pipecat.py --https --port 8443 --cert-dir certs/ \\
+        --ice-address <the node's address> --turn "turns:<node>:5349?transport=tcp"
+
+Or on a laptop, the GPU side through ``ssh -L`` (the frames then cross the
+network as JPEG)::
+
     ssh -N -L 8765:<gpu node>:8765 <login node>   # the GPU side
     python doom_pipecat.py                         # open http://localhost:7860/
-    python doom_pipecat.py --https                 # from another machine:
-                                                   # https://<this laptop>:7860/
 
 The browser allows the microphone on ``localhost`` without a certificate; from
-another machine it needs HTTPS, here with a self-signed certificate (made with
-openssl on first use; the browser asks you to accept it once).
+another machine it needs HTTPS, here with a self-signed certificate (in
+``--cert-dir``, made with openssl if there is none; the browser asks you to
+accept it once).
 """
 
 from __future__ import annotations
@@ -42,6 +55,7 @@ import asyncio
 import io
 import ipaddress
 import json
+import os
 import socket
 import subprocess
 import time
@@ -52,7 +66,7 @@ import aiohttp
 import numpy as np
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 from PIL import Image
@@ -535,6 +549,24 @@ def main() -> None:
     )
     ap.add_argument("--fps", type=int, default=20)
     ap.add_argument(
+        "--ice-address",
+        help="Offer the call on this address only: a server with many interfaces "
+        "(a GPU node's InfiniBand, a container bridge) offers the one browsers reach",
+    )
+    ap.add_argument("--ice-log", action="store_true", help="Log the ICE checks")
+    ap.add_argument(
+        "--turn",
+        help="A TURN relay the browser sends the call's media through, and only "
+        "through (turns:<host>:5349?transport=tcp: TLS, which networks that cut "
+        "UDP flows let pass)",
+    )
+    ap.add_argument("--turn-user", default="doom")
+    ap.add_argument(
+        "--turn-pass",
+        default=os.environ.get("TURN_PASS"),
+        help="The relay's password (default: $TURN_PASS)",
+    )
+    ap.add_argument(
         "--stop-secs", type=float, default=0.45, help="Silence that ends an utterance"
     )
     ap.add_argument(
@@ -557,6 +589,16 @@ def main() -> None:
     for codec in (vpx, h264):
         codec.MAX_BITRATE = 1000 * args.video_kbps
         codec.DEFAULT_BITRATE = min(codec.MAX_BITRATE, 1_000_000)
+    if args.ice_address:
+        # aiortc has no setting for it: its ICE (aioice) offers every local address.
+        import aioice.ice
+
+        aioice.ice.get_host_addresses = lambda use_ipv4, use_ipv6: [args.ice_address]
+    if args.ice_log:
+        import logging
+
+        logging.basicConfig(format="%(asctime)s %(name)s %(message)s")
+        logging.getLogger("aioice.ice").setLevel(logging.INFO)
 
     app = FastAPI()
     calls = SmallWebRTCRequestHandler()
@@ -576,6 +618,24 @@ def main() -> None:
     @app.get("/", include_in_schema=False)
     async def root():  # the game and the dashboard, full window
         return FileResponse(static / "live.html")
+
+    @app.get("/ice", include_in_schema=False)
+    async def ice():
+        # How the browser reaches the call: with a relay, through it only (no direct
+        # UDP for a firewall to cut); else directly.
+        config: dict = {"iceServers": []}
+        if args.turn:
+            config = {
+                "iceServers": [
+                    {
+                        "urls": [args.turn],
+                        "username": args.turn_user,
+                        "credential": args.turn_pass,
+                    }
+                ],
+                "iceTransportPolicy": "relay",
+            }
+        return JSONResponse(config, headers={"Cache-Control": "no-store"})
 
     @app.post("/start")
     async def start(_request: Request):

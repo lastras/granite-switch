@@ -2,10 +2,11 @@
 """The live demo's GPU side: one match in real time that you watch and talk to.
 
 The game, the speech-enabled checkpoint (vLLM ``AsyncLLM``: every game adapter,
-the narrator, the ASR cascade) and the player's voice run on one GPU node; a
-laptop (``doom_pipecat.py``) connects over one websocket, carried by ``ssh -L``,
-and turns it into WebRTC for the browser. What you say arrives as one audio
-segment per utterance (the laptop's VAD cuts them); the model's ASR transcribes
+the narrator, the ASR cascade) and the player's voice run on one GPU node; the
+page server (``doom_pipecat.py``: on this node, as deployed, or on a laptop
+through ``ssh -L``) connects over one websocket and turns it into WebRTC for the
+browser. What you say arrives as one audio segment per utterance (the page
+server's VAD cuts them); the model's ASR transcribes
 it inside the orders adapter's request (:meth:`engine.Game.player_said`): an
 order (stop, turn, ram the wall, switch guns, play it safe, ...: :mod:`orders`)
 goes to the game at once, and the panel shows it; then the narrator answers,
