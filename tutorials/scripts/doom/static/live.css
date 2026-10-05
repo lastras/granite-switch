@@ -27,11 +27,6 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospac
         container-type: inline-size; overflow: hidden; }
 #game video { display: block; width: 100%; height: 100%; object-fit: contain; background: #000; }
 #game video.pixelated { image-rendering: pixelated; }
-#caps { position: absolute; left: 0; right: 0; bottom: 0; padding: 1.1cqi 2.4cqi 1.4cqi;
-        font-size: 2.5cqi; line-height: 1.4; background: rgba(10, 12, 16, 0.82); }
-#caps:empty { display: none; }
-#caps .you { color: var(--amber); }
-#caps .him { color: var(--teal); }
 #linkdown { position: absolute; top: 1.5cqi; left: 50%; transform: translateX(-50%);
             padding: 0.4em 1em; border-radius: 6px; font-size: 2cqi;
             background: rgba(10, 12, 16, 0.85); color: var(--amber); }
@@ -125,8 +120,7 @@ section { margin-top: 0.85em; }
 }
 
 /* ── The GPU side drew it all into the video (its wide or classic view) ── */
-body.composited #maps, body.composited #panel, body.composited #conv,
-body.composited #caps { display: none !important; }
+body.composited #maps, body.composited #panel, body.composited #conv { display: none !important; }
 body.composited #stage { width: 100vw; height: 100vh; }
 body.composited #game { height: 100%; aspect-ratio: auto; }
 body.composited #side { position: fixed; left: 12px; bottom: 12px; height: auto; width: auto;

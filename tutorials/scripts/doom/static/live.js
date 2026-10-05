@@ -12,7 +12,6 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const CAPTION_S = 6; // a spoken line stays over the game this long
 const WINDOW_TICS = 350; // the maps show about this many tics (10 s)
 const HISTORY = 6000; // tic columns kept, to draw again on a resize
 // The heatmap's bands, in units (an action row is 2): behavior, gap, the actions, gap,
@@ -184,8 +183,6 @@ function colormap(stops) {
 function newMatch(why) {
   hist.length = 0;
   maps.forEach((s) => s.repaint());
-  shown.length = 0;
-  captions();
   note(why);
 }
 
@@ -409,9 +406,7 @@ function panel(m) {
   put("foot", `tic ${m.tick}  ·  ${S.gpu}`);
 }
 
-// ── His lines: the conversation, and captions over the game ───────────────────
-const shown = []; // [time, who, text], for the captions
-
+// ── The conversation: your words and his lines (nothing over the game) ────────
 function entry(cls, label, text) {
   const e = document.createElement("div");
   e.className = cls;
@@ -435,23 +430,10 @@ function append(e) {
 function said(who, text) {
   text = text.replace(/\[[a-z ]+\]\s*/g, "").trim(); // sound tags are voiced, not shown
   if (!text) return;
-  const label = who === "you" ? "YOU" : "GRANITE";
-  append(entry(who, label, text));
-  shown.push([performance.now(), who, text]);
-  if (shown.length > 10) shown.shift();
-  captions();
+  append(entry(who, who === "you" ? "YOU" : "GRANITE", text));
 }
 
 const note = (text) => append(entry("note", "", text));
-
-function captions() {
-  const now = performance.now();
-  const recent = shown.filter(([t]) => now - t < 1000 * CAPTION_S).slice(-2);
-  $("caps").replaceChildren(
-    ...recent.map(([, who, text]) => entry(who, who === "you" ? "YOU:" : "GRANITE:", ` ${text}`)),
-  );
-}
-setInterval(captions, 500);
 
 // ── The link: the call's round trip and bitrate, and the GPU side's ───────────
 const link = { gpu: null, q: null, reply: null, prev: null };
@@ -462,7 +444,8 @@ async function linkStats() {
   let rtt = null,
     bytes = 0,
     ts = 0,
-    fps = null;
+    fps = null,
+    abytes = 0;
   (await pc.getStats()).forEach((s) => {
     if (s.type === "candidate-pair" && s.nominated && s.state === "succeeded" && s.currentRoundTripTime != null)
       rtt = 1000 * s.currentRoundTripTime;
@@ -471,22 +454,26 @@ async function linkStats() {
       ts = s.timestamp;
       fps = s.framesPerSecond;
     }
+    if (s.type === "inbound-rtp" && s.kind === "audio") abytes = s.bytesReceived; // his voice, the game's sound
   });
-  const kbps = link.prev && ts > link.prev.ts ? (8 * (bytes - link.prev.bytes)) / (ts - link.prev.ts) : null;
-  link.prev = { bytes, ts };
+  const per = (b, prev) => (link.prev && ts > link.prev.ts ? (8 * (b - prev)) / (ts - link.prev.ts) : null);
+  const kbps = per(bytes, link.prev && link.prev.bytes),
+    akbps = per(abytes, link.prev && link.prev.abytes);
+  link.prev = { bytes, abytes, ts };
   const g = link.gpu,
     q = link.q;
   const parts = [
     `call ${rtt == null ? "–" : Math.round(rtt)} ms`,
     kbps == null ? "" : `${(kbps / 1000).toFixed(2)} Mbps`,
     fps == null ? "" : `${Math.round(fps)} fps`,
+    akbps == null ? "" : `audio ${Math.round(akbps)} kbps`, // 0: no sound is reaching the page
     "│",
     !g || g.state !== "up" ? `GPU ${g ? g.state : "–"}` : `GPU ${g.rtt == null ? "–" : g.rtt} ms`,
     q ? `q${q.q}/${q.fps}` : "",
     link.reply == null ? "" : `· reply ${(link.reply / 1000).toFixed(1)} s`,
   ];
   $("link").lastChild.textContent = parts.filter(Boolean).join(" ");
-  const slow = (rtt != null && rtt > 250) || (g && g.rtt > 250) || (q && q.level > 0);
+  const slow = (rtt != null && rtt > 250) || (g && g.rtt > 250) || (q && q.level > 0) || akbps === 0;
   const state = !g || g.state !== "up" ? "red" : slow ? "amber" : "green";
   $("link").firstChild.style.background = `var(--${state})`;
 }

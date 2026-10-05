@@ -127,6 +127,7 @@ class GameSound(BaseAudioMixer):
         self.buf = bytearray()
         self.primed = False
         self.resampler = create_stream_resampler()
+        self.out_bytes = 0  # the call's audio written through here (DoomLink logs it)
 
     async def start(self, sample_rate: int):
         self.rate = sample_rate
@@ -149,6 +150,7 @@ class GameSound(BaseAudioMixer):
 
     async def mix(self, audio: bytes) -> bytes:
         n = len(audio)
+        self.out_bytes += n
         if not self.on or not n:
             return audio
         if not self.primed:
@@ -193,6 +195,7 @@ class DoomLink(FrameProcessor):
         self._last_line = 0
         self._dropped_upto = 0  # lines talked over: their late audio is dropped
         self._rtt: list[float] = []  # the link's round trips (ping, pong), ms
+        self._voice_bytes = 0  # his voice pushed into the call since the last log
         self._hello: dict | None = None  # the GPU side's latest, for the page
         self._replaced = False  # a newer call took the GPU side: do not reconnect
         self._link: dict = {"type": "link", "state": "connecting"}
@@ -329,16 +332,26 @@ class DoomLink(FrameProcessor):
     async def _ping(self, every_s: float = 1.0) -> None:
         """A ping a second, on the stream the frames and his voice come down; its
         round trip (to the page with each pong; logged every 10) is how far
-        behind the link runs."""
+        behind the link runs. With it, every 10, the call's audio: what was
+        written into it (none: the call's audio stopped here) and his voice."""
+        t0 = time.perf_counter()
         while True:
             await asyncio.sleep(every_s)
             await self._send({"type": "ping", "t": time.perf_counter()})
             if len(self._rtt) >= 10:
                 r = sorted(self._rtt)
+                dt, t0 = time.perf_counter() - t0, time.perf_counter()
+                out = ""
+                if self.sound is not None:
+                    out = (
+                        f"call audio out {self.sound.out_bytes / 1024 / dt:.0f} KB/s, "
+                    )
+                    self.sound.out_bytes = 0
                 logger.info(
-                    f"link round trip p50 {r[len(r) // 2]:.0f} ms, max {r[-1]:.0f} ms"
+                    f"link round trip p50 {r[len(r) // 2]:.0f} ms, max {r[-1]:.0f} ms | "
+                    f"{out}his voice in {self._voice_bytes / 1024 / dt:.0f} KB/s"
                 )
-                self._rtt = []
+                self._rtt, self._voice_bytes = [], 0
 
     async def _close(self) -> None:
         if self._pinger is not None:
@@ -370,6 +383,7 @@ class DoomLink(FrameProcessor):
                 elif kind == b"A":
                     lid = int.from_bytes(data[:4], "big")
                     if lid > self._dropped_upto:
+                        self._voice_bytes += len(data) - 4
                         await self.push_frame(
                             TTSAudioRawFrame(
                                 audio=data[4:],
@@ -549,6 +563,15 @@ def main() -> None:
     app.mount("/client", SmallWebRTCPrebuiltUI)  # Pipecat's own page, a small tile
     static = Path(__file__).resolve().parent / "static"
     app.mount("/static", StaticFiles(directory=static))  # the page's script, styles
+
+    @app.middleware("http")
+    async def no_stale_page(request: Request, call_next):
+        # The browser checks with us on every load (a 304 if unchanged), so an
+        # updated page is never run from its cache.
+        response = await call_next(request)
+        if request.url.path == "/" or request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
     @app.get("/", include_in_schema=False)
     async def root():  # the game and the dashboard, full window

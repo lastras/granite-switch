@@ -2,8 +2,8 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- The live demo's page (doom_pipecat.py serves it at /): the game's video,
      and around it the dashboard, drawn here from the telemetry (live.js):
-     the panel, which model runs, the action heatmap, captions and the
-     conversation. Your microphone goes up, his voice comes down. -->
+     the panel, which model runs, the action heatmap and the conversation
+     (nothing over the game itself). Your microphone goes up, his voice comes down. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -17,7 +17,6 @@
   <div id="stage">
     <div id="game">
       <video id="screen" autoplay playsinline></video><!-- his voice too -->
-      <div id="caps"></div>
       <div id="linkdown" hidden>Reconnecting to the game…</div>
     </div>
     <div id="maps">
@@ -96,7 +95,7 @@
       <button id="reset">New match</button>
       <button id="pixels" title="Nearest-neighbour scaling of the game">Pixels: smooth</button>
       <button id="full">Full screen</button>
-      <span id="link" title="call: the browser's round trip, the video's bitrate and frame rate; GPU: the laptop's round trip to the GPU side, the stream's JPEG quality and fps"></span>
+      <span id="link" title="call: the browser's round trip, the video's bitrate and frame rate, the audio's bitrate (0: no sound reaching the page); GPU: the laptop's round trip to the GPU side, the stream's JPEG quality and fps"></span>
       <span id="status"></span>
     </div>
   </div>

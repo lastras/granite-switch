@@ -559,14 +559,15 @@ WIDE_PANEL_K, WIDE_PANEL_H = 1.5, 720
 
 
 class Overlay:
-    """One whole frame: the game with captions, the panel, the activity map
-    and the heatmap. Push each tic's columns (:attr:`act`, :attr:`heat`), then
+    """One whole frame: the game (with captions in the classic view), the
+    panel, the activity map and the heatmap. Push each tic's columns (:attr:`act`, :attr:`heat`), then
     :meth:`draw`.
 
     ``view``: ``classic`` (1000 x 898: the game at its own size, the panel
     beside it, the maps below; the videos) or ``wide`` (16:9, 1920 x 1080: the
-    game 1.62x with large captions, the maps below it; on the right, the panel
-    1.5x and the conversation so far; the live demo in full screen)."""
+    game 1.62x, the maps below it; on the right, the panel 1.5x and the
+    conversation so far, no captions over the game; the live demo in full
+    screen)."""
 
     def __init__(self, models: list[str], view: str = "classic"):
         if view not in VIEWS:
@@ -595,8 +596,9 @@ class Overlay:
         if self.view == "wide":
             img.paste(game.resize((self.gw, self.gh), Image.BILINEAR), (0, 0))
             w, h = self.size
+            # No captions: the conversation beside the game has every line, and
+            # over the game they would hide its status bar.
             self.panel.draw(img, info, x0=self.gw, w=w - self.gw, h=WIDE_PANEL_H)
-            draw_captions(img, caps, now, self.gw, self.gh, size=26)
             self.act.draw(img, self.gh)
             self.heat.draw(img, self.gh + self.act.height)
             draw_conversation(img, caps, (self.gw, WIDE_PANEL_H, w, h), WIDE_PANEL_K)
