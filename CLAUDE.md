@@ -193,9 +193,11 @@ watching and takes their orders. Everything in the demo serves that claim:
 
 It must be possible for a person reading the repo to reconstruct all of the training data
 from the IVR loop, so that they can modify it if they want. The loop is the writer, its
-checks (in code and by the judge) and its repairs: `partner_ivr.py`, `narrate_ivr.py`,
-`orders_data.py`, `router_data.py`, `rft.py`. It is fed by `collect.py` (the matches) and
-`talk.py` (the speaking moments).
+checks (in code and by the judge) and its repairs, on Mellea: `narrator_data.py` (the
+narrator's lines), `narrator_prompts.py` (every word its writer sees), `checks.py` (every
+rule a line must pass, and the judge's questions), `orders_data.py`, `router_data.py`,
+`rft.py`. It is fed by `collect.py` (the matches) and `talk.py` (the speaking moments).
+The recipe is `recipe.sh`, documented in `docs/DOOM_RECIPE.md`.
 
 The data itself may or may not be committed. What the repo must hold is the recipe: the
 commands that recreate every dataset an adapter trains on, in order, from the matches to the

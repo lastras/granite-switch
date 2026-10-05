@@ -818,11 +818,13 @@ WebRTC's buffering), and the stream runs at 20 fps (about 75 KB per frame at
 800x718). `record_video.py --talk --partner-events` records a match with a
 watcher who reacts to what happens (who got you, after a death).
 
-The narrator's data (`partner_ivr.py write`) keeps a line only if it is about its
-moment: the brief's headline is checked by the judge, factual answers in code (the
+The round-3 narrator's data (written then by `partner_ivr.py`, since replaced by
+`narrator_data.py`; the recipe that rebuilds today's data is
+[DOOM_RECIPE.md](../../docs/DOOM_RECIPE.md)) kept a line only if it was about its
+moment: the brief's headline was checked by the judge, factual answers in code (the
 killer named, the score right), and a contrast margin from a scoring model's
-log-probabilities must show the line fits its own moment better than six others
-of another kind. On 400 held-out moments the narrator trained on it (narr3) beats
+log-probabilities had to show the line fits its own moment better than six others
+of another kind. On 400 held-out moments the narrator trained on it (narr3) beat
 the one before (narr2) and the base model:
 
 | | narr3 | narr2 | base |
