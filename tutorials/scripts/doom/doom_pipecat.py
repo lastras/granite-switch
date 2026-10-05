@@ -131,12 +131,19 @@ class GameSound(BaseAudioMixer):
     rate and kept in a small jitter buffer: playback starts once ``PRIME_S`` is
     buffered (again after running dry), and anything past ``MAX_S`` is dropped
     from the old end, so it stays within about a tenth of a second of the
-    picture. While he speaks it plays at ``duck`` times its gain."""
+    picture. While he speaks it plays at ``duck`` times its gain; while you
+    speak (``you_speak``, set by the VAD) at ``you_duck`` times it, so the
+    browser's echo canceller has little of it left to take out of your
+    microphone (loud, sudden game sound is what it removes worst, and what the
+    model's ASR then hears). The gain moves smoothly across each chunk, no
+    clicks."""
 
     PRIME_S, MAX_S = 0.1, 0.3
 
-    def __init__(self, gain: float = 0.18, duck: float = 0.3):
-        self.gain, self.duck, self.on = gain, duck, gain > 0
+    def __init__(self, gain: float = 0.18, duck: float = 0.3, you_duck: float = 0.1):
+        self.gain, self.duck, self.you_duck, self.on = gain, duck, you_duck, gain > 0
+        self.you_speak = False
+        self._g = gain  # the gain the last chunk ended at
         self.rate = 0
         self.buf = bytearray()
         self.primed = False
@@ -177,9 +184,15 @@ class GameSound(BaseAudioMixer):
             self.primed = False
             take += b"\x00" * (n - len(take))
         voice = not is_silence(audio)
-        g = self.gain * (self.duck if voice else 1.0)
+        g = (
+            self.gain
+            * (self.duck if voice else 1.0)
+            * (self.you_duck if self.you_speak else 1.0)
+        )
+        ramp = np.linspace(self._g, g, n // 2, dtype=np.float32)
+        self._g = g
         out = np.frombuffer(audio, np.int16).astype(np.int32)
-        out += (np.frombuffer(take, np.int16) * g).astype(np.int32)
+        out += (np.frombuffer(take, np.int16) * ramp).astype(np.int32)
         return np.clip(out, -32768, 32767).astype(np.int16).tobytes()
 
 
@@ -255,12 +268,16 @@ class DoomLink(FrameProcessor):
             return
         if isinstance(frame, VADUserStartedSpeakingFrame):
             self._speaking, self._utt, self._pre = True, list(self._pre), []
+            if self.sound is not None:
+                self.sound.you_speak = True
             self._dropped_upto = self._last_line
             await self._send({"type": "speaking"})
             if self._bot_speaking:
                 await self.broadcast_interruption()
         elif isinstance(frame, VADUserStoppedSpeakingFrame):
             self._speaking = False
+            if self.sound is not None:
+                self.sound.you_speak = False
             pcm, self._utt = b"".join(self._utt), []
             if await self._send(b"U" + pcm):
                 logger.info(f"utterance sent: {len(pcm) / (2 * MIC_HZ):.1f} s")
@@ -460,7 +477,11 @@ async def stream_size(args) -> tuple[int, int]:
 
 
 async def run_call(conn: SmallWebRTCConnection, args) -> None:
-    sound = GameSound(args.sfx_gain, args.sfx_duck) if args.sfx_gain > 0 else None
+    sound = (
+        GameSound(args.sfx_gain, args.sfx_duck, args.sfx_duck_you)
+        if args.sfx_gain > 0
+        else None
+    )
     width, height = await stream_size(args)
     logger.info(f"video {width}x{height}")
     transport = SmallWebRTCTransport(
@@ -577,6 +598,13 @@ def main() -> None:
     )
     ap.add_argument(
         "--sfx-duck", type=float, default=0.3, help="... times this while he speaks"
+    )
+    ap.add_argument(
+        "--sfx-duck-you",
+        type=float,
+        default=0.1,
+        help="... times this while you speak (-20 dB: less for the browser's echo "
+        "canceller to remove, less game noise in what the ASR hears)",
     )
     args = ap.parse_args()
     host = args.host or ("0.0.0.0" if args.https else "localhost")

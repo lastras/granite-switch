@@ -795,7 +795,9 @@ frames then cross the network as JPEG.
 What you say is cut into utterances by Pipecat's VAD and sent up as one audio
 segment each; the checkpoint's own ASR transcribes it inside the narrator's
 request (the prompt carries `<|audio|>` where your words go), so there is no
-separate speech-to-text step. Without you, he speaks soon after a salient event
+separate speech-to-text step. While you speak, the game's own sound drops to a
+tenth in the call (`--sfx-duck-you`): loud, sudden game sound is what the
+browser's echo canceller removes worst, and what the ASR then mishears. Without you, he speaks soon after a salient event
 or after a silence (`talk.TalkClock`), from a brief rendered in code from a match
 tracker (`talk.Tracker`: who killed him, the score race, streaks, close calls).
 
