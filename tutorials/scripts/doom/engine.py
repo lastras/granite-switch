@@ -692,7 +692,7 @@ class Game:
         if player is not None:
             cue = "partner"  # the watcher spoke: whatever woke it, this is a reply
         if self.clock is not None:
-            self.clock.said(tick)
+            self.clock.said(tick, reply=player is not None)
         t0 = time.perf_counter()
         gs = game_state(state, self.facts, self.log.events, self.style)
         moment = moment_events(self.log.since(self.last_ex, tick))
@@ -704,7 +704,10 @@ class Game:
             )
             line, heard = "", player if isinstance(player, str) else None
         ms = int((time.perf_counter() - t0) * 1000)
-        if line and not (self.hushed and player is None):  # a remark talked over
+        spoken = line and not (self.hushed and player is None)  # a remark talked over
+        if self.clock is not None:  # he talks until it is said (none: he does not)
+            self.clock.said(tick, line if spoken else "", reply=player is not None)
+        if spoken:
             self.conv.add(Exchange(tick, moment, heard, line))
             self.last_ex = tick
             self.lines.append((round(tick / TIC_HZ, 1), line, ms, heard))

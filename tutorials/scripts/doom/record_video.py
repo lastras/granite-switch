@@ -238,7 +238,7 @@ def main() -> None:
                         conv.add(Exchange(obs.tick, moment, player, line))
                         last_ex = obs.tick
                     if clock is not None:
-                        clock.said(obs.tick)
+                        clock.said(obs.tick, line, reply=player is not None)
                     if player:
                         caps.append((now, "player", player))
                     caps.append((now, "bot", voiced))

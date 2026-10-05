@@ -802,8 +802,12 @@ def sound_tag(brief_text: str, rng) -> str:
 
 
 # ── When to speak ──────────────────────────────────────────────────────────────
-# Events the player speaks soon after; a plain frag only after a longer silence
-# (a strong player frags every few seconds).
+# He speaks on his own when there is news worth a word: these events, soon after
+# he last stopped talking; a plain frag only after a longer silence (a strong
+# player frags every few seconds); a pickup, never (it is in his state when he
+# does speak). Every gap counts from when he stopped talking, not started: a
+# line takes a few seconds to say, and back-to-back lines leave his partner no
+# room.
 MAJOR = (
     "died",
     "took_lead",
@@ -811,7 +815,6 @@ MAJOR = (
     "streak",
     "close_call",
     "drought_ended",
-    "weapon",
     # The partner's order: it hurts him while he obeys ("Really? I'm getting
     # clobbered here."), or it ends in a way worth a word (the bonk, a stop
     # that ran out, quitting halfway).
@@ -821,13 +824,23 @@ MAJOR = (
 # A streak is news only as it grows past these (a strong player is on one most
 # of the time).
 STREAK_LEVELS = (3, 5, 8, 12, 20)
-MIN_GAP_S = 3.0
-FRAG_GAP_S = 8.0
-IDLE_S = 12.0
-HOLD_S = 1.5  # an event not yet spoken to stays a reason to speak this long
+MIN_GAP_S = 4.0  # quiet after a line before news makes him speak again
+FRAG_GAP_S = 8.0  # ... before a plain frag does
+IDLE_S = 12.0  # ... before he speaks with no news
+REPLY_ROOM_S = 6.0  # after answering his partner: room for them to go on
+HOLD_S = 3.0  # an event not yet spoken to stays a reason to speak this long
 # ... an order's, longer: it often comes right after his reply to the order.
-ORDER_HOLD_S = 5.0
+ORDER_HOLD_S = 10.0
 ORDER_CUES = ("order_hurts", "order_done")
+# How long a line takes to say (his voice, about 180 words a minute); a line not
+# written yet (the dataset's moments) takes SPEAK_S, a typical one's.
+WORD_S = 0.33
+SPEAK_S = 3.0
+
+
+def speak_s(line: str | None) -> float:
+    """How long saying ``line`` takes, in seconds."""
+    return SPEAK_S if line is None else 0.3 + WORD_S * len(line.split())
 
 
 class TalkClock:
@@ -838,7 +851,10 @@ class TalkClock:
 
     def __init__(self, idle_s: float = IDLE_S):
         self.idle_s = idle_s
-        self.last = 0  # tick of the last line; the match start counts as one
+        # When he last stopped talking (tick); the match start counts as a line.
+        self.last = 0
+        self.started = -1  # tick the last line started
+        self.room = 0.0  # after a reply, at least this much quiet first
         self.pending: list[tuple[int, str]] = []
 
     def event(self, events: list[dict]) -> None:
@@ -860,19 +876,24 @@ class TalkClock:
             for t, k in self.pending
             if tick - t <= (ORDER_HOLD_S if k in ORDER_CUES else HOLD_S) * TIC_HZ
         ]
-        since = (tick - self.last) / TIC_HZ
+        quiet = (tick - self.last) / TIC_HZ  # since he stopped talking
         kinds = sorted({k for _, k in self.pending})
-        if (since >= MIN_GAP_S and any(k in MAJOR for k in kinds)) or (
-            since >= FRAG_GAP_S and "frag" in kinds
+        if (quiet >= max(MIN_GAP_S, self.room) and any(k in MAJOR for k in kinds)) or (
+            quiet >= max(FRAG_GAP_S, self.room) and "frag" in kinds
         ):
             return {"cue": "event", "events": kinds}
-        if since >= self.idle_s:
+        if quiet >= max(self.idle_s, self.room):
             return {"cue": "idle", "events": kinds}
         return None
 
-    def said(self, tick: int) -> None:
-        self.last = tick
-        self.pending = []
+    def said(self, tick: int, line: str | None = None, reply: bool = False) -> None:
+        """A line started at ``tick``: he talks until it is said (:func:`speak_s`;
+        call again with the line once it is written), and after a ``reply``
+        leaves his partner room."""
+        if tick != self.started:  # a new line: what was pending, it speaks to
+            self.started, self.pending = tick, []
+        self.last = tick + round(speak_s(line) * TIC_HZ)
+        self.room = REPLY_ROOM_S if reply else 0.0
 
 
 class EventPartner:
@@ -995,7 +1016,7 @@ def match_moments(
                 "recent": [e.strip() for e in entries[max(0, n - 3) : n]],
             }
         )
-        talk.said(r["t"])
+        talk.said(r["t"], reply=cue["cue"] == "partner")  # its line: not written yet
         last = r["t"]
         if limit and len(out) >= limit:
             break
@@ -1253,7 +1274,7 @@ def check_orders() -> None:
     for _ in range(100):
         tic()
     assert "order" not in tr.facts(), "no order yet: the facts as before"
-    clock.said(s["tick"])
+    clock.said(s["tick"], reply=True)  # his reply to the order below
     s["front"] = 4.0
     assert orders.give("ram", None, "ram the wall", obs()) == "doing"
     played, fired = [], []
@@ -1290,8 +1311,10 @@ def check_orders() -> None:
             "hit_wall": True,
         },
     ], rec
-    # The bonk, 1.2 s after his reply: still a cue once MIN_GAP_S has passed.
-    cue = clock.due(s["tick"] + TIC_HZ)
+    # The bonk, right after his reply: not while he is still talking, nor in the
+    # room his partner gets after it; still a cue once that has passed.
+    assert clock.due(s["tick"] + TIC_HZ) is None
+    cue = clock.due(s["tick"] + 7 * TIC_HZ)
     assert cue and cue["cue"] == "event" and "order_done" in cue["events"], cue
     clock.said(s["tick"])
     # Stopped under fire: it hurts (a cue), he quits at 25 (a cue); the style.
@@ -1306,7 +1329,8 @@ def check_orders() -> None:
         ("order_hurts", None),
         ("order_end", "refused"),
     ], kinds
-    cue = clock.due(s["tick"] + 3 * TIC_HZ)
+    assert clock.due(s["tick"] + 2 * TIC_HZ) is None  # within MIN_GAP_S of his line
+    cue = clock.due(s["tick"] + 6 * TIC_HZ)
     assert cue and {"order_hurts", "order_done"} <= set(cue["events"]), cue
     past = moment_events(log.since(99, s["tick"]))
     assert [e["type"] for e in past] == [
@@ -1439,7 +1463,7 @@ def check_parity(seconds: float = 40.0, seed: int = 5) -> None:
             live.append(
                 (tick, cue["cue"], brief(hist, state, facts), tool, past, order)
             )
-            talk.said(tick)
+            talk.said(tick, reply=cue["cue"] == "partner")  # as match_moments does
             last = tick
     proc.join(10)
     bad = [r["t"] for r in rows if got.get(r["t"]) != (r["state"], r["facts"])]
