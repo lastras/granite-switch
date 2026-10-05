@@ -166,6 +166,49 @@ debugging, or exploratory scripts in `tests/`. Use `scratch/` instead (it is git
 - **Documentation**: `UPPER_CASE.md`
 - **Scripts**: `snake_case.py`
 
+## The Doom Demo (`tutorials/scripts/doom/`)
+
+### Its goal
+
+The demo is not about playing Doom. It shows that one language model (one Granite Switch
+checkpoint) can do high-quality language-model work and, at the same time, make decisions
+fast enough to drive a high-performance environment. Its game adapters choose an action
+every tic (35 a second) while its narrator talks about the match, answers the person
+watching and takes their orders. Everything in the demo serves that claim:
+
+- **The narration is the evidence.** It is how the audience sees that the model understands
+  the game: what he says must be true by the game state, about what is happening, and
+  varied. Repetitive, generic or invented lines undercut the claim.
+- **Quality comes from the models and their training data,** not from decoding rules or
+  runtime filters that hide what the model does (banned words, repetition penalties,
+  rewriting its output). Those read as hacks to make the game work, not as the model
+  deciding.
+- **Calibrated models.** A model's probabilities should mean what they say: an order read
+  at p = 0.9 should be right about 90% of the time.
+- **Readable.** The code will be released as open source, to be read. Anything that makes
+  it hard to see what drives the model's behavior weakens the demo: keep the mechanisms
+  few, explicit and in the repo.
+
+### Restriction: the training data must be reconstructible
+
+It must be possible for a person reading the repo to reconstruct all of the training data
+from the IVR loop, so that they can modify it if they want. The loop is the writer, its
+checks (in code and by the judge) and its repairs: `partner_ivr.py`, `narrate_ivr.py`,
+`orders_data.py`, `router_data.py`, `rft.py`. It is fed by `collect.py` (the matches) and
+`talk.py` (the speaking moments).
+
+The data itself may or may not be committed. What the repo must hold is the recipe: the
+commands that recreate every dataset an adapter trains on, in order, from the matches to the
+composed checkpoint. In practice:
+
+- The recipe lives in the repo: each step's command, its inputs and outputs, and the
+  writer and judge models, seeds and settings it uses. Not only in job scripts outside it,
+  such as `scratch/`, which is gitignored.
+- Every rule that shapes the data lives in the repo's code: writer prompts and moves,
+  code checks, judge questions, filters. No hand-edited or out-of-band data.
+- A change to the data is a change to that code or to the recipe, never to the data files
+  directly.
+
 ## Development Commands
 
 ### Composing Models
