@@ -281,19 +281,17 @@ class Heatmap:
         self.row = row
         self.height = 82 + row * len(DISPLAY_ORDER)
         self.win = (width - HEAT_GUTTER - 18) // HEAT_PX
-        # rows: behavior, the actions, danger, fresh-decision mark
-        self.buf = np.empty((len(DISPLAY_ORDER) + 3, self.win, 3), np.uint8)
+        # rows: the actions, danger, fresh-decision mark (the behavior is its
+        # row in the activity map)
+        self.buf = np.empty((len(DISPLAY_ORDER) + 2, self.win, 3), np.uint8)
         self.buf[:] = BG
         self.count = 0
         self.f = font(10, mono=True)
         self.f_small = font(11)
 
-    def push(
-        self, probs: dict[str, float], adapter: str, decided: bool, critic: dict
-    ) -> None:
+    def push(self, probs: dict[str, float], decided: bool, critic: dict) -> None:
         col = np.empty((self.buf.shape[0], 3), np.uint8)
-        col[0] = COLORS.get(adapter, TEXT)
-        col[1:-2] = cmap(np.array([probs.get(a, 0.0) for a in DISPLAY_ORDER]))
+        col[:-2] = cmap(np.array([probs.get(a, 0.0) for a in DISPLAY_ORDER]))
         pm, ph = critic.get("mid", 0.0), critic.get("high", 0.0)
         bg, am, rd = np.array(BG), np.array(AMBER), np.array(RED)
         col[-2] = np.clip(bg + pm * (am - bg) + ph * (rd - bg), 0, 255)
@@ -311,28 +309,25 @@ class Heatmap:
         d.text((18, y0 + 8), "ACTION PROBABILITIES", font=self.f_small, fill=HELP)
         d.text(
             (170, y0 + 8),
-            "one column per tic, newest at the right  ·  top strip: active behavior  "
-            "·  danger: critic P(mid) amber, P(high) red  ·  marks: fresh decisions",
+            "one column per tic, newest at the right  ·  danger: critic P(mid) amber, "
+            "P(high) red  ·  marks: fresh decisions",
             font=self.f_small,
             fill=HELP,
         )
         gap = np.empty((3, self.win, 3), np.uint8)
         gap[:] = BG
-        rows = [np.repeat(self.buf[0:1], 6, axis=0), gap]
-        rows += [
-            np.repeat(self.buf[i : i + 1], self.row, axis=0) for i in range(1, n + 1)
-        ]
-        rows += [gap, np.repeat(self.buf[n + 1 : n + 2], 8, axis=0)]
-        rows += [gap, np.repeat(self.buf[n + 2 : n + 3], 4, axis=0)]
+        rows = [np.repeat(self.buf[i : i + 1], self.row, axis=0) for i in range(n)]
+        rows += [gap, np.repeat(self.buf[n : n + 1], 8, axis=0)]
+        rows += [gap, np.repeat(self.buf[n + 1 : n + 2], 4, axis=0)]
         arr = np.repeat(np.concatenate(rows, axis=0), HEAT_PX, axis=1)
-        top = y0 + 28
+        top = y0 + 37
         img.paste(Image.fromarray(arr), (HEAT_GUTTER, top))
         every = -(-11 // self.row)  # rows too thin for a label each: every few
         for i, a in enumerate(DISPLAY_ORDER):
             if i % every == 0:
-                y = top + 9 + self.row * i - 1
+                y = top + self.row * i - 1
                 d.text((18, y), SHORT_LABELS[a], font=self.f, fill=TEXT2)
-        d.text((18, top + 9 + self.row * n + 3), "danger", font=self.f, fill=HELP)
+        d.text((18, top + self.row * n + 3), "danger", font=self.f, fill=HELP)
         yb = top + arr.shape[0] + 4
         d.text(
             (HEAT_GUTTER, yb),

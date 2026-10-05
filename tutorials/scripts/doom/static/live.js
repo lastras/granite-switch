@@ -3,7 +3,7 @@
 // dashboard drawn from the telemetry the GPU side sends (doom_live.py's client view),
 // which the page server forwards over the call's data channel as {"label": "doom", ...}:
 //   hello        the schema: labels, colours, the heatmap's colour stops (overlay.schema)
-//   tics         per-tic columns {k, s, p, c, d, a} for the two maps (doom_live.tic_column)
+//   tics         per-tic columns {k, p, c, d, a} for the two maps (doom_live.tic_column)
 //   panel        the panel's fields, five times a second (doom_live.panel_fields)
 //   line         one of his lines, with what you said if he is answering you
 //   match_start, event (died, frag, match_over), quality (the stream stepped), latency
@@ -14,9 +14,9 @@
 const $ = (id) => document.getElementById(id);
 const WINDOW_TICS = 350; // the maps show about this many tics (10 s)
 const HISTORY = 6000; // tic columns kept, to draw again on a resize
-// The heatmap's bands, in units (an action row is 2): behavior, gap, the actions, gap,
-// danger, gap, the fresh-decision marks. The activity map: one row per model.
-const HEAT_SPEC = (n) => [[3, 1], [1, 0], ...Array(n).fill([2, 1]), [1, 0], [3, 1], [1, 0], [1.5, 1]];
+// The heatmap's bands, in units (an action row is 2): the actions, gap, danger, gap, the
+// fresh-decision marks. The activity map: one row per model (the behavior is its row there).
+const HEAT_SPEC = (n) => [...Array(n).fill([2, 1]), [1, 0], [3, 1], [1, 0], [1.5, 1]];
 
 let pc, mic, channel;
 let S = null; // the hello
@@ -219,7 +219,6 @@ function heatFills(col) {
     ph = col.c[2] / 255;
   const danger = bg.map((b, k) => Math.max(0, Math.min(255, Math.round(b + pm * (am[k] - b) + ph * (rd[k] - b)))));
   return [
-    S.colors[col.s] || P.text,
     ...(col.p ? col.p.map((v) => LUT[v]) : Array(n).fill(LUT[0])),
     css(danger),
     col.d ? P.text : P.bg,
@@ -336,19 +335,17 @@ class Strip {
       fit = (this.gx / d - 12) / (11 * 0.62); // 11 characters in the gutter
     const mid = ([y0, y1]) => (y0 + y1) / 2;
     if (this.kind === "heat") {
-      const [r0, r1] = this.bands[1],
+      const [r0, r1] = this.bands[0],
         row = (r1 - r0) / d;
       const size = Math.min(fit, Math.max(9, Math.min(13, 1.15 * row)));
       const every = Math.ceil((1.1 * size) / row); // rows too thin for a label each
       c.font = `${size * d}px ui-monospace, SFMono-Regular, Menlo, monospace`;
       c.fillStyle = P.text2;
       S.display_order.forEach((a, i) => {
-        if (i % every === 0) c.fillText(S.short_labels[a], x, mid(this.bands[i + 1]));
+        if (i % every === 0) c.fillText(S.short_labels[a], x, mid(this.bands[i]));
       });
       c.fillStyle = P.help;
-      const n = S.display_order.length;
-      c.fillText("danger", x, mid(this.bands[n + 1]));
-      if ((this.bands[0][1] - this.bands[0][0]) / d >= 8) c.fillText("behavior", x, mid(this.bands[0]));
+      c.fillText("danger", x, mid(this.bands[S.display_order.length]));
       return;
     }
     const row = this.cv.height / d / S.models.length;

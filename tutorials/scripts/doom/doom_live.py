@@ -129,19 +129,16 @@ def stream_size(view: str, scale: float) -> tuple[int, int]:
     return round(w * scale) // 2 * 2, round(h * scale) // 2 * 2
 
 
-def tic_column(
-    tick: int, style: str, probs: dict, critic: dict, decided: bool, ran: set
-) -> dict:
-    """One tic of the maps, for the client view's page: ``s`` the behavior,
-    ``p`` the action probabilities in ``DISPLAY_ORDER`` (0-255; None on a tic
-    with no decision), ``c`` the critic's low/mid/high (0-255), ``d`` a fresh
+def tic_column(tick: int, probs: dict, critic: dict, decided: bool, ran: set) -> dict:
+    """One tic of the maps, for the client view's page: ``p`` the action
+    probabilities in ``DISPLAY_ORDER`` (0-255; None on a tic with no
+    decision), ``c`` the critic's low/mid/high (0-255), ``d`` a fresh
     decision, ``a`` the models that ran (bit i: ``MODELS[i]``)."""
     from doom_env import DISPLAY_ORDER
     from policy import DANGER_LEVELS
 
     return {
         "k": tick,
-        "s": style,
         "p": [round(255 * probs.get(a, 0.0)) for a in DISPLAY_ORDER]
         if decided
         else None,
@@ -190,11 +187,11 @@ def render_loop(frames_name: str, inbox, out, opts: dict) -> None:
         "gpu": opts["gpu"],
     }
 
-    def push(t: int, probs: dict, style: str, decided: bool, crit: dict, ran: set):
+    def push(t: int, probs: dict, decided: bool, crit: dict, ran: set):
         if client:
-            cols.append(tic_column(t, style, probs, crit, decided, ran))
+            cols.append(tic_column(t, probs, crit, decided, ran))
         else:
-            view.heat.push(probs, style, decided, crit)
+            view.heat.push(probs, decided, crit)
             view.act.push(ran)
 
     def tell(kind: bytes, msg: dict) -> None:
@@ -243,11 +240,11 @@ def render_loop(frames_name: str, inbox, out, opts: dict) -> None:
                 )
 
             for t in range(last_tick + 1, tick):  # tics with no decision (dead, busy)
-                push(t, {}, style, False, info["critic"], ran(t, set()))
+                push(t, {}, False, info["critic"], ran(t, set()))
             last_tick = tick
             probs = d[style][1]
             critic = d[CRITIC][1] if CRITIC in d else {}
-            push(tick, probs, style, True, critic, ran(tick, set(d)))
+            push(tick, probs, True, critic, ran(tick, set(d)))
             read_at = {t for t in read_at if t > tick}
             info["order"] = order
             lat.append(ms)

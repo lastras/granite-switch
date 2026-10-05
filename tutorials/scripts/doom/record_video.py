@@ -195,7 +195,7 @@ def main() -> None:
             if partner is not None:
                 partner.event(fired)
             if obs.dead:  # respawning: nothing to decide
-                view.heat.push({}, adapter, False, critic)
+                view.heat.push({}, False, critic)
             else:
                 want = [adapter] if args.no_critic else [adapter, CRITIC]
                 if obs.tick % PLAN_EVERY_TICS == 0:
@@ -209,7 +209,7 @@ def main() -> None:
                 if ARMS in decs:
                     weapon = int(decs[ARMS].action)
                     plan = {"slot": weapon, "probs": decs[ARMS].probs}
-                view.heat.push(d.probs, adapter, True, critic)
+                view.heat.push(d.probs, True, critic)
                 last_second.append(d.ms)
                 lat.append(d.ms)
                 all_ms.append(d.ms)
