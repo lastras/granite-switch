@@ -2,50 +2,57 @@
 """Orders data: what the partner might say, labeled with the order it gives.
 
 The orders adapter (``policy.ORDERS``) reads the partner's words, as the demo's
-speech recognition writes them, and answers one token (:data:`orders.ORDERS`).
-Its rows ``{"text", "label", "ep"}``:
+speech recognition writes them, and answers one token (:data:`orders.ORDERS`);
+its probability should mean what it says (an order read at p = 0.9 right about
+90% of the time). Its rows ``{"text", "label", "ep", "source"}``, all in ASR form
+(``probes.heard``):
 
-* each order: hand-written seeds (:data:`SEEDS`) and paraphrases written by
-  Granite 4.2 30B on an OpenAI-compatible server (``--base-url``), told what
-  the order means and shown a few seeds; each paraphrase is confirmed by a
-  judge (gpt-oss-120b, ``--judge-url``), asked which order the line gives with
-  no hint, and kept only if it agrees;
-* ``none``: everything else the partner says, so a question never stops him.
-  The battery's questions (``probes.PHRASINGS`` and probe_phrasings.json,
-  their train split), the partner's other lines in the narrator's data
-  (``--partner-rows``: praise, teasing, small talk, ...; not the backseat
-  driving or the requests, which are orders now or close to them), things he
-  cannot be told to do (:data:`IMPOSSIBLE`: jump, go after Rambo, fly) and talk
-  about an order that gives none ("why did you stop", "nice turn"),
-  :data:`NONE_SEEDS` and their paraphrases;
-* every line in ASR form (``probes.heard``), and ``--mishear`` of the written
-  ones with one word misheard (the order stays: the adapter should get it
-  anyway).
+* **each order:** the hand-written :data:`SEEDS`, and paraphrases the writer
+  (Granite 4.2 30B) gives for what the order means (:func:`paraphrase_order`,
+  shown a few seeds), each confirmed blind by the judge (gpt-oss-120b,
+  :func:`read_order`: which order do these words give?) and kept only if it
+  agrees; ``--mishear`` of them again with one word misheard
+  (``narrator_data.mishear``: the order stays);
+* **none:** everything else the partner says, so talk never moves him: the
+  battery's questions (``probes.phrasings``, the train split), the partner's
+  chatter (``narrator_data.partner_says``: praise, teasing, worry, small talk,
+  ...; not the backseat driving or the requests, which are orders or close),
+  :data:`NONE_SEEDS` and their paraphrases, :data:`IMPOSSIBLE` (what no order
+  can do), and the hard negatives, about a quarter of the none rows:
+  :data:`FILLERS`, :data:`FRAGMENTS`, :data:`ASR_GARBAGE`, the
+  :data:`LIVE_MISFIRES`;
+* **negations** (:data:`NEGATIONS`: "don't stop", "never mind"): labeled by
+  the judge, blind, whatever it reads.
 
-The hand-written held-out set (:data:`HELDOUT`, never shown to the writer) is
-the eval, ``heldout.jsonl``; ``heldout_none.jsonl`` holds the battery's test
-phrasings and :data:`HELDOUT_NONE`, for the rate at which talk is read as no
-order (an order the partner did not give is worse than a missed one)::
+Held out, hand-written and never shown to the writer: ``heldout.jsonl`` (each
+order, :data:`HELDOUT`, and :data:`HELDOUT_NONE`), ``heldout_none.jsonl`` (the
+battery's test phrasings and :data:`HELDOUT_NONE`) and ``heldout_hard.jsonl``
+(:data:`HELDOUT_HARD`: fillers, fragments, ASR noise, misheard orders)::
 
-    python orders_data.py write --base-url http://WRITER:PORT/v1 --per-order 300 --out data/orders
-    python orders_data.py write --offline --out data/orders_offline   # seeds only, no model
-    python orders_data.py eval --model models/doom26-narr7-orders --data data/orders
+    python orders_data.py write --writer-url http://WRITER:PORT/v1 \\
+        --judge-url http://JUDGE:PORT/v1 --per-order 300 --out data/r9/orders
+    python orders_data.py write --offline --out data/orders_offline   # no model
+    python orders_data.py eval --model models/doom26-r9 --data data/r9/orders
 
-``eval``: the composed checkpoint's orders adapter on both held-out sets, by
-order, with what each miss was read as.
+``eval``: the composed checkpoint's orders adapter on the held-out sets, by
+order, with what each miss was read as; its calibration (reliability by
+confidence, ECE, Brier, none read as an order at p >= 0.9); and its read of
+each live misfire. ``write`` needs Mellea (``pip install mellea==0.7.0``),
+``eval`` the demo's environment.
 """
 
-from __future__ import annotations
-
 import argparse
+import functools
 import json
 import os
 import random
 import re
 import sys
+import zlib
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Literal
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -603,19 +610,68 @@ HELDOUT_NONE = (
     "what was that",
 )
 
-GEN_PROMPT = """Your friend is playing a Doom deathmatch against bots, and you sit \
-next to him and tell him what to do, out loud. Write {n} different things you might \
-say to him that all mean: {meaning}. Vary the wording, the length (1 to 12 words), \
-the tone and the slang: some short and urgent, some bossy, some polite, some joking. \
-Spoken English, as you would say it. One per line, nothing else.
-Examples:
-{examples}"""
-GEN_NONE = """Your friend is playing a Doom deathmatch against bots, and you sit next \
-to him, talking. Write {n} different things you might say to him that do not tell him \
-to do anything right now: {what}. Vary the wording, the length (1 to 12 words) and the \
-tone. Spoken English, as you would say it. One per line, nothing else.
-Examples:
-{examples}"""
+# ── Hard negatives: none of them gives an order ────────────────────────────────
+# Fillers and reactions.
+FILLERS = (
+    *("no", "yes", "yeah", "yep", "nope", "okay", "ok", "okay okay", "thanks"),
+    *("thank you", "thank", "awesome", "cool", "nice", "wow", "great", "sure"),
+    *("fine", "uh huh", "hmm", "um", "uh", "oh", "ah", "huh", "really", "seriously"),
+    *("lol", "haha", "oh no", "oh wow", "yikes", "dang", "sweet", "perfect", "good"),
+    *("whatever", "alright", "got it", "i see", "oh okay", "no no", "yes yes"),
+    *("ok cool", "no way", "yeah yeah", "sure thing", "of course", "makes sense"),
+)
+# Pieces of a sentence, as speech recognition cuts them off.
+FRAGMENTS = (
+    *("it", "one", "0", "for it", "y it", "the", "a", "to", "and", "so", "that"),
+    *("this one", "that one", "for", "at", "in", "of", "1", "2", "3", "7", "10"),
+    *("100", "zero", "two", "it is", "is it", "to it", "the the", "and then"),
+    *("so the", "but the", "with the", "for the", "on the", "in the"),
+)
+# What speech recognition makes of noise, a cough, the game's sound.
+ASR_GARBAGE = (
+    *("we get the solar community", "the bus is the", "and the then", "so the the"),
+    *("uh the a", "is it the", "what the one", "mm hmm yeah", "the war of"),
+    *("at the at the", "by the way the", "so so so", "it was the", "i i i"),
+    *("okay so the", "the sun of", "and a half", "when the a", "it is a the"),
+    *("you know the", "that is the the", "for a for a", "the other the"),
+)
+# Heard live and read as an order when none was given (the live logs of the
+# narr7-orders3 sessions): in the training data, and eval reads each again.
+LIVE_MISFIRES = (
+    *("no", "0", "it", "one", "for it", "y it", "thank"),
+    *("we get the solar community", "doing nothing"),
+)
+# Talk with a "not" or a "never mind" in it: the judge reads each, blind.
+NEGATIONS = (
+    *("do not stop", "don't stop", "do not turn", "don't shoot", "do not shoot"),
+    *("don't go", "do not go", "no don't", "never mind", "do not do that"),
+    *("do not ram the wall", "don't back up", "no not that way", "don't switch"),
+    *("do not pick that up", "don't go after him", "never mind that", "forget it"),
+    *("cancel that", "no wait", "not now", "don't do it", "do not move yet"),
+    *("never mind the gun", "no do not turn around", "stop stopping"),
+)
+# Hard cases held out (never written for training): fillers, fragments and
+# noise unlike the lists above, and orders with a misleading or misheard word.
+HELDOUT_HARD = {
+    "none": (
+        *("nah", "yes please", "uh huh sure", "okie dokie", "thanks man"),
+        *("that is awesome", "cool cool", "oh nice one", "oops", "aw man"),
+        *("it it", "the one", "and it", "4", "twelve", "a one", "so it is"),
+        *("the solar is", "so then we had the", "and the uh", "it is the thing"),
+        *("hello hello", "is this on", "testing testing", "my bad"),
+        *("you are doing nothing", "right on time", "left it there", "go figure"),
+    ),
+    "stop": ("stop right now", "wait wait wait", "hold it right there"),
+    "left": ("turn left right now", "go left go left"),
+    "right": ("right right right", "turn right now"),
+    "fetch": ("go get the rocket lunch", "get some health right now"),
+    "ram": ("ram the mall", "go ram it"),
+    "weapon": ("use the shot gun", "switch to your fist"),
+    "around": ("turn a round", "look behind you right now"),
+    "back": ("back it up back it up", "back up right now"),
+    "go": ("ok ok go", "go go"),
+}
+
 NONE_KINDS = (
     "comments on what he just did (a turn, a stop, a shot, running into a wall, "
     "switching guns), without telling him to do it again",
@@ -625,125 +681,200 @@ NONE_KINDS = (
     "asking for things he cannot just be told to do: jump, crouch, open doors, "
     "reload, look up or down, go to a particular place or room",
 )
-CONFIRM = """Your friend is playing a Doom deathmatch against bots; you sit next to \
-him. You say: "{x}"
-Which of these are you telling him to do right now? stop (stand still), go (carry on, \
-he can move again), left (turn left), right (turn right), around (turn around), back \
-(move backwards), ram (run into the wall), fire (shoot), weapon (switch guns), \
-fighter (play aggressively from now on), cautious (play it safe from now on), \
-collector (collect everything from now on), fetch (go get one thing he lacks: a gun, \
-health, armor, ammo), hunt (go after the bots, or one of them, to kill one), explore \
-(go look around somewhere), or none (not one of these: a question, a comment, going to \
-a particular place, or something else). Answer with the one word only."""
-MISHEAR = """A speech recognizer heard this sentence and got exactly one word wrong: \
-it swapped it for a similar-sounding real word, and the sentence came out a little \
-funny. For example, "go get the rocket launcher" heard as "go get the rocket lunch".
-"{x}"
-Write the sentence as it was heard, with the same number of words. Output only the \
-sentence."""
+
+# What the judge is told each order means, to read the partner's words blind.
+READ = {
+    **MEANING,
+    "none": "not one of these: a question, a comment, going to a "
+    "particular place, something he cannot do, or anything else",
+}
+# The partner's chatter (narrator_data.partner_says): not the backseat driving
+# or the requests, which are orders or close to them.
+CHATTER_KINDS = (
+    "praise",
+    "tease",
+    "worry",
+    "what_happened",
+    "greeting",
+    "identity",
+    "odd",
+    "smalltalk",
+)
+HARD_SHARE = 0.25  # the hard negatives' share of the none rows
 
 
-def clean(line: str) -> str | None:
-    t = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", line).strip().strip('"').strip()
-    n = len(t.split())
-    if not t or n > 15 or len(t) > 100 or ":" in t or probes._META.search(t.lower()):
+# ── The writer and the judge: Mellea generative stubs ──────────────────────────
+def paraphrase_order(order: str, meaning: str, examples: list[str]) -> list[str]:
+    """Twenty-five different things a person might say out loud to a friend
+    who is playing a Doom deathmatch against bots, sitting next to him, that
+    all mean: ``meaning``. Like ``examples``: spoken English, 1 to 12 words
+    each, varied in wording, length, tone and slang (some short and urgent,
+    some bossy, some polite, some joking)."""
+
+
+def read_order(words: str, orders: dict[str, str]) -> Literal[ORDER_WORDS]:
+    """What a friend playing a Doom deathmatch against bots would understand
+    he was told to do, when the person sitting next to him says ``words`` (as
+    speech recognition wrote them).
+
+    ``orders`` maps each order's name to what it means. Read the words for
+    their meaning, as a person would, whatever the wording: synonyms, slang,
+    a joke, a word misheard ("freeze" and "halt" mean stop, "light it up"
+    means fire). Return the name of the order they give, or "none" when they
+    give none of them (a question, a comment, going to a particular place,
+    something he cannot do)."""
+
+
+@functools.cache
+def stubs():
+    """:func:`paraphrase_order` and :func:`read_order` as Mellea generative
+    stubs (Mellea imported here: ``eval`` runs without it)."""
+    from mellea import generative
+
+    return generative(paraphrase_order), generative(read_order)
+
+
+def ask(fn, session, seed: int, **kw):
+    """One stub call (its answer, or None if it was not the JSON asked for)."""
+    from mellea.backends import ModelOption
+
+    opts = {ModelOption.TEMPERATURE: 1.0, ModelOption.MAX_NEW_TOKENS: 1500}
+    if fn.__name__ == "read_order":  # the judge: reasons, then answers
+        opts = {
+            ModelOption.THINKING: "low",
+            ModelOption.TEMPERATURE: 0.0,
+            ModelOption.MAX_NEW_TOKENS: 2000,
+        }
+    try:
+        return fn(session, model_options={**opts, ModelOption.SEED: seed}, **kw)
+    except ValueError:
         return None
-    return t
 
 
-class Writer:
-    """The writer (Granite) and the judge (gpt-oss), OpenAI-compatible servers:
-    the paraphrases and mishearings, and their confirmation."""
-
-    def __init__(self, url: str, model: str, judge_url: str, judge_model: str):
-        from openai import OpenAI
-
-        self.client = OpenAI(base_url=url, api_key="none", timeout=300)
-        self.judge = OpenAI(base_url=judge_url, api_key="none", timeout=300)
-        self.model, self.judge_model = model, judge_model
-
-    def ask(self, prompt: str, temperature: float, max_tokens: int) -> str:
-        """The writer's answer: at "low" effort Granite 4.2 reasons briefly and
-        closes </think>; an answer without it is all reasoning (cut short)."""
-        r = self.client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=temperature,
-            max_tokens=max_tokens,
-            reasoning_effort="low",
-        )
-        text = r.choices[0].message.content or ""
-        return text.split("</think>", 1)[1] if "</think>" in text else ""
-
-    def lines(self, prompt: str) -> list[str]:
-        return [t for x in self.ask(prompt, 1.0, 1500).splitlines() if (t := clean(x))]
-
-    def label(self, x: str) -> str:
-        r = self.judge.chat.completions.create(
-            model=self.judge_model,
-            messages=[{"role": "user", "content": CONFIRM.format(x=x)}],
-            reasoning_effort="low",
-            max_tokens=600,
-            temperature=0.0,
-        )
-        words = re.findall(r"[a-z]+", (r.choices[0].message.content or "").lower())
-        return words[-1] if words else ""
-
-    def mishear(self, x: str) -> str | None:
-        lines = self.ask(MISHEAR.format(x=x), 0.8, 800).strip().splitlines()
-        a = heard(lines[-1].strip('"')) if lines else ""
-        p, q = x.split(), a.split()
-        return (
-            a if len(p) == len(q) and sum(u != v for u, v in zip(p, q)) == 1 else None
-        )
+def zlib_seed(key) -> int:
+    """A request's seed, from what it asks."""
+    return zlib.crc32(repr(key).encode())
 
 
-def write(w: Writer, rng: random.Random, per: int, rounds: int, workers: int):
-    """Paraphrases per order and of the none talk, confirmed."""
-    held = {heard(t) for ts in HELDOUT.values() for t in ts} | set(
-        map(heard, HELDOUT_NONE)
+def ok_text(t: str) -> bool:
+    """A paraphrase worth keeping: short, one utterance, no writer's notes."""
+    return (
+        0 < len(t.split()) <= 15
+        and len(t) <= 100
+        and ":" not in t
+        and not probes._META.search(t)
     )
-    jobs: dict[str, set[str]] = {k: set() for k in (*SEEDS, "none")}
-    with ThreadPoolExecutor(workers) as ex:
-        for r in range(rounds):
-            prompts, which = [], []
-            for k in jobs:
-                if len(jobs[k]) >= per:
-                    continue
-                for _ in range(4):
-                    if k == "none":
-                        what = rng.choice(NONE_KINDS)
-                        ex_ = rng.sample((*NONE_SEEDS, *IMPOSSIBLE), 5)
-                        prompts.append(
-                            GEN_NONE.format(n=25, what=what, examples="\n".join(ex_))
-                        )
-                    else:
-                        ex_ = rng.sample(SEEDS[k], 5)
-                        prompts.append(
-                            GEN_PROMPT.format(
-                                n=25, meaning=MEANING[k], examples="\n".join(ex_)
-                            )
-                        )
-                    which.append(k)
-            if not prompts:
-                break
-            got = list(ex.map(w.lines, prompts))
-            cands = [(k, heard(t)) for k, ts in zip(which, got) for t in ts]
-            cands = [(k, t) for k, t in dict.fromkeys(cands) if t and t not in held]
-            labels = list(ex.map(w.label, [t for _, t in cands]))
-            for (k, t), lab in zip(cands, labels):
-                if lab == k:  # the writer, asked blind, gives the same order
-                    jobs[k].add(t)
-            kept = sum(lab == k for (k, _), lab in zip(cands, labels))
-            print(
-                f"round {r}: {kept} of {len(cands)} confirmed; "
-                + ", ".join(f"{k} {len(v)}" for k, v in jobs.items()),
-                flush=True,
-            )
-            if r == 0:  # what the judge read differently, for a look
-                off = [(k, t, lab) for (k, t), lab in zip(cands, labels) if lab != k]
-                print(f"  e.g. not confirmed: {off[:12]}", flush=True)
-    return {k: sorted(v) for k, v in jobs.items()}
+
+
+def write(args, rng: random.Random, held: set[str]) -> list[tuple[str, str, str]]:
+    """The written rows, as (text, label, source): paraphrases per order and
+    of the none talk, each confirmed blind by the judge; the partner's
+    chatter; the negations, as the judge reads them; mishearings."""
+    import narrator_prompts as P
+    from mellea import start_session
+    from narrator_data import mishear, one_word_off, partner_says
+
+    paraphrase, read = stubs()
+    first = lambda urls: urls.split(",")[0]  # noqa: E731 (one server of each is enough)
+    writer = start_session(
+        "openai",
+        model_id=args.writer_model,
+        base_url=first(args.writer_url),
+        api_key="none",
+    )
+    judge = start_session(
+        "openai",
+        model_id=args.judge_model,
+        base_url=first(args.judge_url),
+        api_key="none",
+    )
+    pool = ThreadPoolExecutor(args.workers)
+    kept: dict[str, set[str]] = {k: set() for k in (*SEEDS, "none")}
+    for r in range(args.rounds):
+        jobs = []
+        for k in kept:
+            if len(kept[k]) >= args.per_order:
+                continue
+            for j in range(4):
+                if k == "none":
+                    meaning = "nothing he is told to do right now: " + rng.choice(
+                        NONE_KINDS
+                    )
+                    shown = rng.sample((*NONE_SEEDS, *IMPOSSIBLE), 5)
+                else:
+                    meaning, shown = MEANING[k], rng.sample(SEEDS[k], 5)
+                jobs.append(
+                    (
+                        k,
+                        dict(order=k, meaning=meaning, examples=shown),
+                        (r, k, j, args.seed),
+                    )
+                )
+        if not jobs:
+            break
+        got = pool.map(
+            lambda jb: ask(paraphrase, writer, zlib_seed(jb[2]), **jb[1]) or [], jobs
+        )
+        cands = [
+            (k, heard(t)) for (k, _, _), ts in zip(jobs, got) for t in ts if ok_text(t)
+        ]
+        cands = [(k, t) for k, t in dict.fromkeys(cands) if t and t not in held]
+        labels = list(
+            pool.map(lambda kt: ask(read, judge, 0, words=kt[1], orders=READ), cands)
+        )
+        for (k, t), lab in zip(cands, labels):
+            if lab == k:  # the judge, reading blind, gives the same order
+                kept[k].add(t)
+        print(
+            f"round {r}: {sum(lab == k for (k, _), lab in zip(cands, labels))} of "
+            f"{len(cands)} confirmed; "
+            + ", ".join(f"{k} {len(v)}" for k, v in kept.items()),
+            flush=True,
+        )
+        if r == 0:
+            off = [(k, t, lab) for (k, t), lab in zip(cands, labels) if lab != k]
+            print(f"  e.g. read otherwise: {off[:12]}", flush=True)
+    rows = [
+        (t, k, "paraphrase")
+        for k, ts in kept.items()
+        for t in sorted(ts)[: args.per_order]
+    ]
+    # The partner's chatter: none.
+    jobs = [(kind, i) for kind in CHATTER_KINDS for i in range(args.chatter)]
+    said = pool.map(
+        lambda ki: ask(
+            partner_says,
+            writer,
+            zlib_seed((*ki, args.seed)),
+            kind=ki[0],
+            how=P.UTTERANCES[ki[0]][1],
+            game_state="(the match on his screen)",
+            conversation="(nothing yet)",
+        )
+        or [],
+        jobs,
+    )
+    rows += [(heard(t), "none", "chatter") for ts in said for t in ts if ok_text(t)]
+    # The negations: as the judge reads them.
+    labels = pool.map(
+        lambda t: ask(read, judge, 0, words=heard(t), orders=READ), NEGATIONS
+    )
+    rows += [(heard(t), lab, "negation") for t, lab in zip(NEGATIONS, labels) if lab]
+    # Mishearings of the orders' words: the order stays.
+    orders_ = [(t, k) for t, k, _ in rows if k != "none"] + [
+        (heard(t), k) for k, ts in SEEDS.items() for t in ts
+    ]
+    picks = [(t, k) for t, k in orders_ if rng.random() < args.mishear]
+    mis = pool.map(
+        lambda tk: ask(mishear, writer, zlib_seed((tk[0], args.seed)), sentence=tk[0]),
+        picks,
+    )
+    rows += [
+        (heard(m), k, "misheard")
+        for m, (t, k) in zip(mis, picks)
+        if m and one_word_off(t, heard(m))
+    ]
+    return rows
 
 
 def fill(phrasing: str, rng: random.Random) -> str:
@@ -759,33 +890,58 @@ def fill(phrasing: str, rng: random.Random) -> str:
     return re.sub(r"\{(\w+)\}", lambda m: slots[m.group(1)](), phrasing)
 
 
-def partner_none(paths: list[Path]) -> list[str]:
-    """The partner's other lines in the narrator's data (not the backseat
-    driving or the requests, which give orders or come close)."""
-    out = []
-    for p in paths:
-        for x in open(p):
-            r = json.loads(x)
-            if r.get("player") and r.get("utype") not in (
-                None,
-                "probe",
-                "backseat",
-                "request",
-            ):
-                out.append(heard(r["player"]))
-    return list(dict.fromkeys(out))
+# ── Eval: the composed checkpoint on the held-out sets ─────────────────────────
+HELD = ("heldout", "heldout_none", "heldout_hard")
+BINS = 10  # reliability bins, by the confidence of the read
+
+
+def calibration(reads: list[tuple[str, object]]) -> dict:
+    """Reliability by confidence, ECE and Brier over (label, read) pairs; and
+    how often talk (label none) is read as an order at p >= 0.9."""
+    bins = [[0, 0, 0.0] for _ in range(BINS)]  # n, right, sum of p
+    brier = 0.0
+    for label, o in reads:
+        b = bins[min(BINS - 1, int(o.prob * BINS))]
+        b[0] += 1
+        b[1] += o.kind == label
+        b[2] += o.prob
+        brier += sum((o.probs.get(c, 0.0) - (c == label)) ** 2 for c in ORDER_WORDS)
+    n = max(1, len(reads))
+    ece = sum(abs(b[1] - b[2]) for b in bins) / n
+    talk = [o for label, o in reads if label == "none"]
+    loud = sum(o.kind != "none" and o.prob >= 0.9 for o in talk)
+    return {
+        "n": len(reads),
+        "ece": round(ece, 4),
+        "brier": round(brier / n, 4),
+        "none_as_order_p90": round(loud / max(1, len(talk)), 4),
+        "bins": [
+            {
+                "p": f"{i / BINS:.1f}-{(i + 1) / BINS:.1f}",
+                "n": b[0],
+                "acc": round(b[1] / b[0], 3) if b[0] else None,
+                "mean_p": round(b[2] / b[0], 3) if b[0] else None,
+            }
+            for i, b in enumerate(bins)
+        ],
+    }
 
 
 def evaluate(args) -> None:
-    """The composed checkpoint's orders adapter on heldout.jsonl (each order,
-    hand-written) and heldout_none.jsonl (questions and talk: no order)."""
+    """The orders adapter of a composed checkpoint on heldout.jsonl,
+    heldout_none.jsonl and heldout_hard.jsonl: accuracy by order, what each
+    miss was read as, the calibration, and its read of each live misfire."""
     from policy import VLLMPolicy
 
     pol = VLLMPolicy(args.model, warmup=2, max_model_len=4096)
-    report = {}
-    for name in ("heldout", "heldout_none"):
-        rows = [json.loads(x) for x in open(args.data / f"{name}.jsonl")]
+    report, reads = {}, []
+    for name in HELD:
+        path = args.data / f"{name}.jsonl"
+        if not path.exists():
+            continue
+        rows = [json.loads(x) for x in open(path)]
         got = [pol.order(r["text"]) for r in rows]
+        reads += [(r["label"], o) for r, o in zip(rows, got)]
         per: dict = {}
         for r, o in zip(rows, got):
             c = per.setdefault(r["label"], Counter())
@@ -801,10 +957,11 @@ def evaluate(args) -> None:
             "ms_p50": round(ms[len(ms) // 2], 2),
             "per": {k: dict(c) for k, c in per.items()},
             "misses": [
-                (r["text"], r["label"], o.kind)
+                (r["text"], r["label"], o.kind, round(o.prob, 3))
                 for r, o in zip(rows, got)
                 if o.kind != r["label"]
             ][:40],
+            "calibration": calibration([(r["label"], o) for r, o in zip(rows, got)]),
         }
         print(
             f"{name}: {right}/{len(rows)} right ({100 * right / len(rows):.1f}%), "
@@ -814,8 +971,28 @@ def evaluate(args) -> None:
         for k, c in sorted(per.items()):
             miss = {m: v for m, v in c.items() if m.startswith("as ")}
             print(f"  {k:<10} {c['right']}/{c['n']} {miss or ''}")
-        for t, want, kind in report[name]["misses"][:15]:
-            print(f"    {t!r}: {want}, read {kind}")
+        for t, want, kind, p in report[name]["misses"][:15]:
+            print(f"    {t!r}: {want}, read {kind} (p {p})")
+    cal = report["all"] = calibration(reads)
+    print(
+        f"\ncalibration over every held-out row (n={cal['n']}): ECE {cal['ece']}, "
+        f"Brier {cal['brier']}, talk read as an order at p >= 0.9: "
+        f"{100 * cal['none_as_order_p90']:.1f}%"
+    )
+    print(
+        "  "
+        + "  ".join(
+            f"{b['p']}: {b['n']} at {b['acc']} (p {b['mean_p']})"
+            for b in cal["bins"]
+            if b["n"]
+        )
+    )
+    live = [(t, pol.order(heard(t))) for t in LIVE_MISFIRES]
+    report["live_misfires"] = [(t, o.kind, round(o.prob, 3)) for t, o in live]
+    print(
+        "live misfires, read again: "
+        + "; ".join(f"{t!r} {o.kind} p {o.prob:.2f}" for t, o in live)
+    )
     (args.data / f"eval_{Path(args.model).name}.json").write_text(
         json.dumps(report, indent=1)
     )
@@ -828,89 +1005,89 @@ def main() -> None:
     ev.add_argument("--model", required=True)
     ev.add_argument("--data", type=Path, required=True)
     ap = sub.add_parser("write", help="Write the dataset")
-    ap.add_argument("--base-url", help="The writer: an OpenAI-compatible server")
-    ap.add_argument("--model", default="granite-4.2-30b")
+    ap.add_argument("--writer-url", help="The writer: an OpenAI-compatible server")
+    ap.add_argument("--writer-model", default="granite-4.2-30b")
     ap.add_argument("--judge-url", help="The judge: an OpenAI-compatible server")
     ap.add_argument("--judge-model", default="gpt-oss-120b")
-    ap.add_argument("--per-order", type=int, default=300)
-    ap.add_argument("--rounds", type=int, default=8)
-    ap.add_argument("--workers", type=int, default=16)
     ap.add_argument(
-        "--partner-rows", type=Path, nargs="*", default=[], help="partner_ivr.py rows"
+        "--per-order", type=int, default=300, help="Paraphrases kept per order"
     )
-    ap.add_argument("--max-partner", type=int, default=800)
-    ap.add_argument("--mishear", type=float, default=0.1, help="Share misheard")
-    ap.add_argument("--offline", action="store_true", help="Seeds only, no model")
+    ap.add_argument(
+        "--rounds", type=int, default=8, help="At most so many rounds of them"
+    )
+    ap.add_argument("--chatter", type=int, default=30, help="Chatter requests per kind")
+    ap.add_argument(
+        "--mishear", type=float, default=0.1, help="Share of order lines misheard"
+    )
+    ap.add_argument("--workers", type=int, default=32, help="Requests in flight")
+    ap.add_argument(
+        "--offline", action="store_true", help="Hand-written lists only, no model"
+    )
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", type=Path, required=True)
     args = top.parse_args()
     if args.cmd == "eval":
         evaluate(args)
         return
+    if not args.offline:
+        from mellea.core import MelleaLogger
 
+        MelleaLogger.get_logger().setLevel("WARNING")
     rng = random.Random(args.seed)
-    w = (
-        None
-        if args.offline
-        else Writer(args.base_url, args.model, args.judge_url, args.judge_model)
-    )
-    gen = (
-        {k: [] for k in (*SEEDS, "none")}
-        if w is None
-        else write(w, rng, args.per_order, args.rounds, args.workers)
-    )
-    rows = [(heard(t), k) for k, ts in SEEDS.items() for t in ts]
-    rows += [(t, k) for k, ts in gen.items() for t in ts[: args.per_order]]
-    if w is not None and args.mishear:
-        picks = [r for r in rows if rng.random() < args.mishear]
-        with ThreadPoolExecutor(args.workers) as ex:
-            mis = list(ex.map(w.mishear, [t for t, _ in picks]))
-        rows += [(m, k) for m, (_, k) in zip(mis, picks) if m]
-    # No order: the battery's questions (train split), the partner's other
-    # lines, the impossible, the talk about orders.
-    asks = [p for t in probes.TYPES if t != "challenge" for p in probes.phrasings(t)]
-    asks += [p for f in probes.CHALLENGES for p in probes.phrasings("challenge", f)]
-    asks = [fill(p, rng) for p in asks]
-    mates = partner_none(args.partner_rows)
-    rng.shuffle(mates)
-    rows += [(t, "none") for t in (*asks, *mates[: args.max_partner])]
-    rows += [(heard(t), "none") for t in (*IMPOSSIBLE, *NONE_SEEDS)]
-    test_asks = [heard(p) for ts in HELDOUT.values() for p in ts]
+    # Held out: never in training (the writer's paraphrases that match are dropped).
+    test_orders = [(heard(t), k) for k, ts in HELDOUT.items() for t in ts]
+    test_orders += [(heard(t), "none") for t in HELDOUT_NONE]
     test_none = [heard(t) for t in HELDOUT_NONE]
     for t in probes.TYPES:
-        if t == "challenge":
-            continue
-        for p in probes.phrasings(t, split="test"):
-            test_none.append(fill(p, rng))
+        if t != "challenge":
+            test_none += [fill(p, rng) for p in probes.phrasings(t, split="test")]
     test_none = list(dict.fromkeys(test_none))
-    held = set(test_asks) | set(test_none)
-    rows = [(t, k) for t, k in dict.fromkeys(rows) if t not in held]
+    test_hard = [(heard(t), k) for k, ts in HELDOUT_HARD.items() for t in ts]
+    held = {t for t, _ in test_orders} | set(test_none) | {t for t, _ in test_hard}
+    rows = [(heard(t), k, "seed") for k, ts in SEEDS.items() for t in ts]
+    if not args.offline:
+        rows += write(args, rng, held)
+    # None: the battery's questions (train split), the impossible, the talk.
+    asks = [p for t in probes.TYPES if t != "challenge" for p in probes.phrasings(t)]
+    asks += [p for f in probes.CHALLENGES for p in probes.phrasings("challenge", f)]
+    rows += [(fill(p, rng), "none", "battery") for p in asks]
+    rows += [(heard(t), "none", "seed") for t in (*IMPOSSIBLE, *NONE_SEEDS)]
+    rows = [r for r in dict.fromkeys(rows) if r[0] not in held and r[0]]
+    seen: set = set()
+    rows = [
+        r for r in rows if not (r[0] in seen or seen.add(r[0]))
+    ]  # one label per text
+    # The hard negatives, repeated to a quarter of the none rows.
+    hard = list(
+        dict.fromkeys(
+            heard(t) for t in (*FILLERS, *FRAGMENTS, *ASR_GARBAGE, *LIVE_MISFIRES)
+        )
+    )
+    hard = [t for t in hard if t not in held and t not in seen]
+    n_none = sum(k == "none" for _, k, _ in rows)
+    times = max(1, round(HARD_SHARE * n_none / ((1 - HARD_SHARE) * max(1, len(hard)))))
+    rows += [(t, "none", "hard") for t in hard] * times
     rng.shuffle(rows)
     args.out.mkdir(parents=True, exist_ok=True)
-    with open(args.out / "train.jsonl", "w") as f:
-        for i, (t, k) in enumerate(rows):
-            f.write(json.dumps({"text": t, "label": k, "ep": i}) + "\n")
-    with open(args.out / "heldout.jsonl", "w") as f:
-        i = 0
-        for k, ts in HELDOUT.items():
-            for t in ts:
-                f.write(
-                    json.dumps({"text": heard(t), "label": k, "ep": 10_000 + i}) + "\n"
-                )
-                i += 1
-        for t in HELDOUT_NONE:
-            f.write(
-                json.dumps({"text": heard(t), "label": "none", "ep": 10_000 + i}) + "\n"
-            )
-            i += 1
-    with open(args.out / "heldout_none.jsonl", "w") as f:
-        for j, t in enumerate(test_none):
-            f.write(json.dumps({"text": t, "label": "none", "ep": 20_000 + j}) + "\n")
-    counts = Counter(k for _, k in rows)
+
+    def dump(name: str, items) -> None:
+        with open(args.out / f"{name}.jsonl", "w") as f:
+            for i, (t, k, *src) in enumerate(items):
+                row = {"text": t, "label": k, "ep": i}
+                if src:
+                    row["source"] = src[0]
+                f.write(json.dumps(row) + "\n")
+
+    dump("train", rows)
+    dump("heldout", test_orders)
+    dump("heldout_none", [(t, "none") for t in test_none])
+    dump("heldout_hard", test_hard)
+    counts = Counter(k for _, k, _ in rows)
     assert set(counts) <= set(ORDER_WORDS), counts
     print(
-        f"train {len(rows)} {dict(counts)}; held-out {sum(map(len, HELDOUT.values())) + len(HELDOUT_NONE)} "
-        f"hand-written, {len(test_none)} questions and talk (none) -> {args.out}"
+        f"train {len(rows)} {dict(counts)}, by source {dict(Counter(s for *_, s in rows))}; "
+        f"held out {len(test_orders)} orders and talk, {len(test_none)} questions and talk, "
+        f"{len(test_hard)} hard -> {args.out}"
     )
 
 
