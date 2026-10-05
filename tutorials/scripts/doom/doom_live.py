@@ -27,6 +27,10 @@ the frame as the videos do (:mod:`overlay`). Drawing stays off the decision
 loop. The stream's quality and frame rate follow the link
 (:class:`LinkGovernor`).
 
+A match runs while someone watches. ``GRACE_S`` after the last client leaves,
+it is replaced by a fresh one, held until the next client connects: opening
+the page starts a match; a reload or a reconnect sooner picks it up.
+
 The websocket, at ``/ws`` (one client at a time; a new one replaces the old,
 told ``{"type": "replaced"}`` and closed with code ``REPLACED``, so it does not
 reconnect):
@@ -98,6 +102,9 @@ from talk import sound_tag
 TTS_AUTHKEY = b"granite-switch-doom-tts"  # voice_video.TTS_AUTHKEY
 MODELS = ["base", *BEHAVIORS, ARMS, CRITIC, ORDERS, NARRATOR]
 ORDER_SHOWN_S = 4.0  # an order over stays on the panel this long
+# Nobody watching this long: the match is replaced by a fresh one, held for the
+# next client. Coming back sooner (a reload, the tunnel blipping) picks it up.
+GRACE_S = 20.0
 # Frames sent and not yet acked, at most (a client that acks): 20 fps up to a 150 ms
 # round trip; 1 at the governor's lowest step (a frame takes long to cross there).
 IN_FLIGHT = 3
@@ -500,6 +507,7 @@ class Live:
         self.n = {"frames": 0, "frame_kb": 0, "tele_b": 0, "voiced": 0, "heard": 0}
         self.ms: list[float] = []
         self._tasks: set[asyncio.Task] = set()
+        self._left = 0  # how many times the last client has left
         self.log = None  # this run's lines and matches, as JSON rows
         if args.log_dir:
             args.log_dir.mkdir(parents=True, exist_ok=True)
@@ -890,7 +898,21 @@ class Live:
         print("client gone", flush=True)
         if ws is self.ws:
             self.ws = None
+            self._left += 1
+            self.spawn(self._when_left(self.game, self._left))
         return ws
+
+    async def _when_left(self, g: Game | None, left: int) -> None:
+        """The last client left (the ``left``-th time): unless one comes back
+        within ``GRACE_S``, the match ends and a fresh one is loaded, held until
+        the next client: who opens the page starts a match, not joins one played
+        to nobody. A match still held is fresh already."""
+        await asyncio.sleep(GRACE_S)
+        if left != self._left or self.watched():  # came back (and maybe left again)
+            return
+        if g is not None and g is self.game and not g.done and g.autostart:
+            print(f"nobody watching for {GRACE_S:.0f} s: a fresh match", flush=True)
+            await self.new_game(start=False)
 
 
 async def serve(args) -> None:
