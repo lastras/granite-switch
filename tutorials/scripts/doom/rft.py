@@ -6,29 +6,22 @@ the pool), each match is played in order as the demo serves it (the composed
 checkpoint, the live prompt and sampling), with the scripted partner of
 :mod:`eval_probes` (a probe of the game state at about 55% of moments, small
 talk at 15%). At every moment the narrator samples ``--n`` replies; each is
-checked in code: a probe's answer (:func:`probes.verify`), every line's claims
-(:func:`probes.claims`), and the dataset's code checks (length, numbers only
-where asked, no stock phrase, calm, mild, not a film line, not a repeat:
-:func:`partner_ivr.code_fns`). Up to ``--keep`` verified replies per prompt
-are kept, the most distinct from his recent lines first (the judge's "voice"
-verdict breaks ties, with ``--judge-url``). The conversation goes on with the
-first one kept (or, if none passed, the first sample, as live would say it),
-so the prompts are the narrator's own.
+checked by the dataset's code checks (:func:`checks.failures`: a probe's
+answer, every line's claims, its form and its variety against his recent
+lines). Up to ``--keep`` verified replies per prompt are kept, the most
+distinct from his recent lines first (the judge's "voice" verdict breaks ties,
+with ``--judge-url``).
 
 The kept replies are partner rows (``train_alora.py --extra-rows``). With
 ``--pairs``, each prompt with a passing and a failing sample gives a DPO pair, by
 this criterion (:data:`REJECT_ORDER`):
 
-* chosen: a sample that passes every check, the one with the fewest of his
-  habits (``partner_ivr.HABITS``: "still", "the bots still think", ...), then the
-  least like his recent lines, then the judge's voice;
-* rejected: the failing sample whose failure ranks first: repetition (a word
-  stem recurring in 3+ of his last 8 lines, a near-copy of a recent line), then
-  an invention (the claims check: a bot named in view, a weapon, victim, streak,
-  place or number the state does not have), then a wrong answer, then form (a
-  score dump, "unknown" or a disclaimer, a status list, himself as "you", numbers
-  not asked for); if none fails, a passing sample with habits, against a chosen
-  one without.
+* chosen: a sample that passes every check, the least like his recent
+  lines, then the judge's voice;
+* rejected: the failing sample whose failure ranks first: repetition (an
+  opening he used, a word in 3+ of his last 8 lines, a near-copy, "Even with
+  X, I'm still Y", a weapon again), then an invention (a claim the state does
+  not have, a bot nothing happened to), then a wrong answer, then form.
 
 The conversation goes on with the first sample, as live play would say it, so
 the prompts hold his own repetitions (the exposure DPO corrects).
@@ -52,61 +45,59 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import checks
 import probes
 from conversation import Conversation, Exchange, narrator_ids
-from eval_probes import Partner, clean_line, jaccard
-from partner_ivr import JUDGE_ALL, code_fns, habits, probe_weights
+from eval_probes import Partner, clean_line
 
-# What a rejected sample failed, most important first (check descriptions).
+# What a rejected sample failed, most important first (checks.py's checks).
 REJECT_ORDER = (
-    ("repetition", ("No recurring motif", "Not a repeat of recent lines")),
-    ("invention", ("claims",)),
-    ("wrong answer", ("verify: wrong", "verify: abstained")),
     (
-        "form",
+        "repetition",
         (
-            "Not a status list",
-            "No 'unknown', no disclaimers",
-            "Speaks as himself (I, me)",
-            "No numbers",
-            "No status-report opening",
+            "fresh_opening",
+            "no_motif",
+            "not_repeat",
+            "even_still",
+            "still_again",
+            "weapon_again",
         ),
     ),
+    ("invention", ("claims", "stale_bot")),
+    ("wrong answer", ("answer",)),
+    ("form", tuple(f.__name__ for f in checks.CASES)),  # any other check
 )
 
 
 def reject_rank(fails: list[str]) -> tuple[int, str] | None:
     """(rank, category) of a failing sample's most important failure."""
-    for i, (cat, marks) in enumerate(REJECT_ORDER):
-        if any(f.startswith(m) for f in fails for m in marks):
+    for i, (cat, names) in enumerate(REJECT_ORDER):
+        if any(f in names for f in fails):
             return i, cat
     return None
 
 
 VOICE_Q = (
     "A calm, dry player in a Doom deathmatch says this to his partner, who sits next "
-    'to him:\n"{line}"\n\n' + JUDGE_ALL["voice"] + " Answer YES or NO."
+    'to him:\n"{line}"\n\n' + checks.JUDGE["voice"][1] + " Answer YES or NO."
 )
 
 
-def checks(
+def check(
     line: str, m: dict, probe, player, past, prev
 ) -> tuple[str | None, bool, list[str]]:
-    """A probe's verdict (None if none), whether the line passes every check,
-    and what failed."""
-    fails = []
-    verdict = None
-    if probe is not None:
-        verdict, why = probes.verify(probe, line, m["tool"])
-        if verdict != probes.CORRECT:
-            fails.append(f"verify: {verdict}")
-    ok, why = probes.claims(line, m["tool"], past, player or "")
-    if not ok:
-        fails.append("claims")
-    kind = "reply" if player else "remark"
-    for d, f in code_fns(kind, prev, player, (), probe):
-        if not f(line)[0]:
-            fails.append(d)
+    """A probe's verdict (None if none), whether the line passes every code
+    check, and the names of those it fails."""
+    verdict = probes.verify(probe, line, m["tool"])[0] if probe else None
+    turn = checks.Turn(
+        state=m["tool"],
+        prev=prev,
+        past=past,
+        player=player,
+        utype="probe" if probe else None,
+        probe=probe,
+    )
+    fails = [name for name, _ in checks.failures(line, turn)]
     return verdict, bool(line) and not fails, fails
 
 
@@ -138,11 +129,11 @@ def main() -> None:
     from policy import NARRATOR, VLLMPolicy
 
     matches = [json.loads(x) for x in open(args.moments)][: args.matches or None]
-    weights = probe_weights([m for mt in matches for m in mt["moments"]])
+    weights = probes.weights([m for mt in matches for m in mt["moments"]])
     pol = VLLMPolicy(
         args.model,
         layout="chat",
-        max_model_len=8192,
+        max_model_len=16384,  # as live (doom_live.py serve): whole matches run long
         max_num_seqs=256,
         warmup=0,
         gpu_memory_utilization=args.gpu_mem,
@@ -225,7 +216,7 @@ def main() -> None:
             cands = list(dict.fromkeys(clean_line(c.text) for c in o.outputs))
             judged, failed = [], []
             for line in cands:
-                verdict, ok, fails = checks(line, m, probe, player, past, run["prev"])
+                verdict, ok, fails = check(line, m, probe, player, past, run["prev"])
                 if not ok and line and (rk := reject_rank(fails)):
                     failed.append((rk, line))
                 if probe is not None:
@@ -234,24 +225,18 @@ def main() -> None:
                 per_kind[kind]["passed" if ok else "failed"] += 1
                 if ok:
                     near = max(
-                        (jaccard(line, b) for b in run["prev"][-8:]), default=0.0
+                        (checks.jaccard(line, b) for b in run["prev"][-8:]),
+                        default=0.0,
                     )
                     judged.append((line, near))
             voices = list(pool.map(voice, [x for x, _ in judged])) if judged else []
-            best = sorted(
-                zip(judged, voices), key=lambda jv: (habits(jv[0][0]), jv[0][1], -jv[1])
-            )
+            best = sorted(zip(judged, voices), key=lambda jv: (jv[0][1], -jv[1]))
             keep = [line for (line, _), _ in best[: args.keep]]
             for line in keep:
                 kept_rows.append(kept_row(run, m, conv, probe, player, line))
-            if args.pairs and best:
+            if args.pairs and best and failed:
                 chosen = best[0][0][0]
-                rejected, why = None, None
-                if failed:
-                    (_, why), rejected = min(failed, key=lambda f: f[0][0])
-                elif habits(chosen) == 0:
-                    worse = [x for (x, _), _ in best if habits(x) > 0]
-                    rejected, why = (worse[0], "habit") if worse else (None, None)
+                (_, why), rejected = min(failed, key=lambda f: f[0][0])
                 if rejected:
                     pairs.append(
                         {

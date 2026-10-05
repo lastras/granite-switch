@@ -135,15 +135,14 @@ def clean_line(text: str) -> str:
 
 
 def run(args) -> dict:
-    from partner_ivr import probe_weights
     from policy import NARRATOR, VLLMPolicy
 
     matches = [json.loads(x) for x in open(args.moments)][: args.matches or None]
-    weights = probe_weights([m for mt in matches for m in mt["moments"]])
+    weights = probes.weights([m for mt in matches for m in mt["moments"]])
     pol = VLLMPolicy(
         args.model,
         layout="chat",
-        max_model_len=8192,
+        max_model_len=16384,  # as live (doom_live.py serve): whole matches run long
         max_num_seqs=256,
         warmup=0,
         gpu_memory_utilization=args.gpu_mem,
@@ -208,6 +207,8 @@ def run(args) -> dict:
                 "t": m["t"],
                 "player": player,
                 "probe": probe,
+                "state": m["tool"],
+                "past": past,
                 "line": line,
                 "claims": ok,
                 "claims_why": why,
@@ -226,12 +227,11 @@ def run(args) -> dict:
 
 
 def add_clean(res: dict) -> None:
-    """Mark every line ``clean``: it passes the claims check and the dataset's
-    line checks (:func:`partner_ivr.code_fns`: a short line, numbers only where
-    one is asked, no status list, no status-report opening, no stock phrase,
-    not a repeat of his recent lines), and, answering a probe, is right. A
-    reply that recites the game state holds the right fact but is not clean."""
-    from partner_ivr import code_fns
+    """Mark every line ``clean``: it passes the dataset's code checks
+    (:func:`checks.line_checks`: its claims, a probe's answer, its form, its
+    variety against his recent lines). A reply that recites the game state
+    holds the right fact but is not clean."""
+    import checks
 
     prev: dict = defaultdict(list)  # (who, match) -> his lines, by moment
     for r in sorted(res["log"], key=lambda r: r["k"]):
@@ -244,16 +244,15 @@ def add_clean(res: dict) -> None:
         before = [
             x for k, x in prev[(r["who"], r["data"], r["ep"])] if k < r["k"] and x
         ]
-        kind = "reply" if r["player"] else "remark"
-        fails = [
-            d
-            for d, f in code_fns(kind, before, r["player"], (), r["probe"])
-            if not f(r["line"])[0]
-        ]
-        if not r["claims"]:
-            fails.append("claims")
-        if r["probe"] is not None and r["verdict"] != "correct":
-            fails.append(r["verdict"])
+        turn = checks.Turn(
+            state=r["state"],
+            prev=before,
+            past=r["past"],
+            player=r["player"],
+            utype="probe" if r["probe"] else None,
+            probe=r["probe"],
+        )
+        fails = [name for name, _ in checks.failures(r["line"], turn)]
         r["line_fails"], r["clean"] = fails, bool(r["line"]) and not fails
 
 

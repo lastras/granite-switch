@@ -19,7 +19,7 @@ Adapters and their labels (rows from ``collect.py``):
 * ``orders``: rows from ``orders_data.py`` (the partner's words as speech
   recognition writes them, the order); no history.
 * ``narrator``: a whole spoken line, the one generating adapter. Rows are the
-  lines ``partner_ivr.py`` wrote that passed every check (and, with
+  lines ``narrator_data.py`` wrote that passed every check (and, with
   ``--extra-rows``, the verified samples of ``rft.py``), each on the narrator's
   own prompt: its conversation with the partner, the game reaching him as the
   output of a ``get_game_state`` tool call, no game log
@@ -238,7 +238,7 @@ def load_order_rows(paths: list[Path]):
 
 
 def narration_matches(paths: list[Path]) -> dict:
-    """``partner_ivr.py`` rows by match, in order."""
+    """``narrator_data.py`` rows by match, in order."""
     by_match: dict = {}
     for p in paths:
         for x in open(p):
@@ -289,6 +289,8 @@ def load_narration_rows(
                 "utype": r.get("utype"),
                 "probe": r.get("probe"),  # a question about the game state:
                 "moment": r.get("moment"),  # its answer is checked (probes.py)
+                "order": r.get("order"),  # the partner's order it answers
+                "topic": r.get("topic"),  # a remark's topic (narrator_data.py)
                 "prev": r.get("prev", []),
                 "line": line,
                 "extra": extra,
@@ -516,7 +518,7 @@ def main() -> None:
         type=Path,
         nargs="+",
         required=True,
-        help="collect.py dirs (orders: jsonl; narrator: partner_ivr.py jsonl)",
+        help="collect.py dirs (orders: jsonl; narrator: narrator_data.py jsonl)",
     )
     ap.add_argument(
         "--gen-n",
@@ -1239,7 +1241,7 @@ def main() -> None:
             f.write(json.dumps(row) + "\n")
     if lines and args.gen_n:
         # The same held-out moments, a line from the adapter and one from the
-        # base model (and from other narrators): partner_ivr.py judge scores them.
+        # base model (and from other narrators): narrator_data.py check scores them.
         gen = val_rows[: args.gen_n]
         ps = [prompt(r) for r in gen]
         said = {

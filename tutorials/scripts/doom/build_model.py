@@ -303,8 +303,8 @@ def verify(
 
     # The demo's own engine settings: the FA3 schedule fault showed only with
     # the default max_num_seqs (16), not with 64.
-    # Room for the narrator's 30-exchange conversation.
-    pol = VLLMPolicy(model, warmup=5, layout=layout, max_model_len=8192)
+    # Room for the narrator's 30-exchange conversation, as live (doom_live.py serve).
+    pol = VLLMPolicy(model, warmup=5, layout=layout, max_model_len=16384)
     report = {}
     if narrator is not None:
         rows = [json.loads(x) for x in open(narrator / "heldout_preds.jsonl")]
