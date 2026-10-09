@@ -264,13 +264,17 @@ What changed, and where it lives:
   Orders are never branched (the recording did not play them out). Round 10,
   without branches, trained on 930 answers to game questions against round
   9's 3,528, and its question battery fell from 90.2% to 81.3%.
-- **Preference pairs for his mistakes** (`narrator_v10.py pairs`, the
-  `pairs10` step; trained by DPO beside the lines, `train_alora.py --pairs`).
-  Each kept line is paired with a copy broken in code by swapping one name,
-  kept only if the copy fails the check it targets: one of the cast's thing
-  given to another (`checks.right_person`), a bot named that the game said
-  nothing about lately (`checks.stale_bot`), and an introduction said again to
-  someone already introduced in the conversation. A held-out match's pairs are
+- **Other completions of his calls, for preferences** (`narrator_v10.alternatives`,
+  run by Mellea's `emulate` as each match ends; trained by DPO beside his
+  lines, `train_alora.py --record-pairs`). A record holds every completion of
+  its call, each scored and noted: the line he said, and copies of it made in
+  code by swapping one name, kept only if the copy fails the check it targets
+  and the line passed it: one of the cast's thing given to another
+  (`checks.right_person`), a bot named that the game said nothing about lately
+  (`checks.stale_bot`), and an introduction said again to someone already
+  introduced in the conversation. The scorer scores them from the call and the
+  line alone (every code check); each kept completion is trained against the
+  call's others, on the record's own prompt. A held-out match's pairs are
   never trained on.
 - **Connected, by construction and by check.** When a turn is about someone he
   has talked about tonight, 60% of the time it is given his earlier line about
@@ -322,8 +326,7 @@ venv10/bin/pip install -e "mellea[hooks]" vizdoom==1.3.1 transformers==5.17.0
 | `serve_base` | `vllm serve $BASE` (eval_style's baseline only) | the base model | a server |
 | `check10` | `narrator_v10.py selfcheck`, `checks.py check`, `narrator_v10.py parity --n 500` (the compiled view of round 9's rows against the live prompt) | the code, round 9's rows | (pass or fail) |
 | `narrator10_text` | `narrator_v10.py write --shard k/$SHARDS --seed 0`, then `parity --n 500` (the records' prompts against the live prompt, and the training ids of both loaders) and `report` (`MATCHES=4`: a dry run) | round 9's matches and split (renamed after the cast), writer, judge | `$DATA/narrator/shard_*.jsonl`, `report.md` |
-| `pairs10` | `narrator_v10.py pairs` | the v10 records kept | `$DATA/narrator/pairs.jsonl`, `pairs.md` |
-| `train_narrator10` | `train_alora.py --adapter narrator --records --pairs` (round 9's settings; each record on its own prompt; the pairs by DPO) | the v10 records kept, the pairs | `$RUNS/narrator/` |
+| `train_narrator10` | `train_alora.py --adapter narrator --records --record-pairs` (round 9's settings; each record on its own prompt; its completions kept against not by DPO) | the v10 records | `$RUNS/narrator/` |
 | `compose10` | `build_model.py compose`, `policy.py --check-template`, `build_model.py verify` | `$GAME_RUNS`, round 9's orders adapter, the v10 narrator | `$MODEL` |
 | `eval`, `eval_style` | round 9's eval; `style_eval.py rollout`, `metrics`, `acts`, `truth`, `pairwise` | `$MODEL`, the rows, the judge | `$RUNS/eval/` |
 

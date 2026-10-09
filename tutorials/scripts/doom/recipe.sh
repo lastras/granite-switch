@@ -13,7 +13,7 @@
 #
 # Round 10, the narrator's data rewritten (narrator_v10.py) on round 9's matches
 # and split (R9), its bots renamed after the cast (conversation.CAST): serve_base |
-# check10 narrator10_text pairs10 train_narrator10 compose10 eval_style; recipe.sh v10 runs them in order (the
+# check10 narrator10_text train_narrator10 compose10 eval_style; recipe.sh v10 runs them in order (the
 # servers apart).
 #
 # Settings (environment variables; paths are relative to this directory):
@@ -218,17 +218,11 @@ step_narrator10_text() {  # his turns at every moment of round 9's matches, SHAR
     | tee $DATA/narrator/report.md
 }
 
-step_pairs10() {  # preference pairs: each kept line against its mistakes, made in code
-  [ -f $DATA/narrator/pairs.jsonl ] && return
-  $DATA_PY10 narrator_v10.py pairs --rows $DATA/narrator/shard_*.jsonl \
-    --out $DATA/narrator/pairs.jsonl | tee $DATA/narrator/pairs.md
-}
-
-step_train_narrator10() {  # the narrator adapter on the v10 turns kept (SFT) and the pairs (DPO)
+step_train_narrator10() {  # the narrator: his kept lines (SFT), against his calls' other completions (DPO)
   [ -f $RUNS/narrator/metrics.json ] && return
   $PY -m torch.distributed.run --standalone --nproc_per_node $NGPU train_alora.py \
     --adapter narrator --kind alora --records --data $DATA/narrator/shard_*.jsonl --base $BASE \
-    --pairs $DATA/narrator/pairs.jsonl \
+    --record-pairs \
     --epochs 2 --keep-best --batch 16 --micro 2 --eval-every 100 --eval-n 200 \
     --max-heldout 600 --gen-n 200 --ckpt-every 200 --seed 0 --out $RUNS/narrator
 }
@@ -274,7 +268,7 @@ step_eval_style() {  # how he talks: the baselines, round 9 and v10's data and s
 }
 
 STEPS=(check orders_text collect moments narrator_text train_narrator train_orders compose eval)
-STEPS10=(check10 narrator10_text pairs10 train_narrator10 compose10 eval)
+STEPS10=(check10 narrator10_text train_narrator10 compose10 eval)
 [ $# -gt 0 ] || { sed -n 3,37p "$0"; exit 1; }
 [ "$1" = all ] && set -- "${STEPS[@]}"
 # Round 10 is evaluated on round 9's held-out sets, live against the cast.

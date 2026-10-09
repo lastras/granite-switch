@@ -350,6 +350,41 @@ def load_record_rows(paths: list[Path], tok) -> list:
     return out
 
 
+def load_record_pairs(paths: list[Path], tok) -> list:
+    """DPO pairs from compile records' completions (``narrator_v10.py``'s rows,
+    ``--record-pairs``): each kept completion of a call against each of its
+    others, as Mellea's ``preference_rows`` pairs them, on the record's own
+    prompt (the chat template on its ``prompt``, as :func:`load_record_rows`).
+    As :func:`load_pairs`' tuples; ``why``: what the other completion's
+    ``meta`` says made it."""
+    eot = tok.encode(_EOT, add_special_tokens=False)
+    out = []
+    for p in paths:
+        for x in open(p):
+            r = json.loads(x)
+            cs = r.get("completions") or []
+            good = [c for c in cs if c["score"]["keep"]]
+            bad = [c for c in cs if not c["score"]["keep"]]
+            if not (good and bad):
+                continue
+            text = tok.apply_chat_template(
+                r["prompt"]["messages"],
+                tools=r["prompt"]["tools"],
+                add_generation_prompt=True,
+                tokenize=False,
+            )
+            ids = tok(text, add_special_tokens=False).input_ids
+            key = (r["data"], r["style"], r["ep"])
+            for g in good:
+                for b in bad:
+                    chosen = tok.encode(g["completion"], add_special_tokens=False) + eot
+                    rejected = (
+                        tok.encode(b["completion"], add_special_tokens=False) + eot
+                    )
+                    out.append((ids, chosen, rejected, b["meta"].get("made"), key))
+    return out
+
+
 def split_by_episode(rows: list, val_frac: float, seed: int) -> tuple[list, list]:
     """Hold out whole matches: consecutive tics are near-duplicates."""
     eps = sorted({r[4] for r in rows})
@@ -627,6 +662,12 @@ def main() -> None:
         type=int,
         default=CONV_EXCHANGES,
         help="Narrator: exchanges its conversation keeps (as doom_live.py serves it)",
+    )
+    ap.add_argument(
+        "--record-pairs",
+        action="store_true",
+        help="Narrator, with --records: DPO pairs from the records' completions too "
+        "(load_record_pairs: each kept completion of a call against its others)",
     )
     ap.add_argument(
         "--records",
@@ -1020,6 +1061,8 @@ def main() -> None:
     pairs = (
         load_pairs(args.pairs, tok, args.conv_exchanges) if lines and args.pairs else []
     )
+    if lines and args.record_pairs:  # the records' own completions, kept against not
+        pairs += load_record_pairs(args.data, tok)
     held = {r[4] for r in val_rows}
     pairs = [p for p in pairs if p[4] not in held]  # a held-out match: never trained on
     dpo_ref = None

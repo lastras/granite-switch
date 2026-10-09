@@ -107,6 +107,7 @@ from conversation import (
 from mellea import generative
 from mellea.backends import ModelOption
 from mellea.stdlib.compile import (
+    Completion,
     Record,
     Score,
     TraceRecorder,
@@ -642,6 +643,31 @@ class TurnFacts:
     branch: bool = False
 
 
+def turn_of(
+    chat: ChatContext, turn: TurnFacts, plan: dict | None = None
+) -> checks.Turn:
+    """The turn the checks read: from the chat (as the student reads it) and
+    the facts; with the plan the body noted (``act``, ``rib``, ``thread``,
+    ``alone``), as its checks applied to the line."""
+    _, conv, player, state = conversation.read(openai_messages(chat))
+    t = checks.Turn(
+        state=state,
+        prev=[ex.line for ex in conv],
+        past=[ex.events for ex in conv],
+        player=player,
+        utype=turn.utype,
+        probe=turn.probe,
+        order=state.get("order") if turn.utype == "order" else None,
+        conversation=checks.conversation_text(conv),
+        topic=checks.news(state),
+        about=turn.about,
+    )
+    for k in ("act", "rib", "thread", "alone"):
+        if plan and k in plan:
+            setattr(t, k, plan[k])
+    return t
+
+
 class Narrator:
     """Granite in one match, as the teacher writes him: the teacher's sessions
     (the writer, in a chat; the judge and the second judge) and what he carries
@@ -679,19 +705,8 @@ class Narrator:
         seed = seed_of(*self.key, turn.t, self.args.seed, *("branch",) * turn.branch)
         rng = random.Random(seed)
         # The turn, read from the chat as the student reads it, and the facts.
-        _, conv, player, state = conversation.read(openai_messages(chat))
-        t = checks.Turn(
-            state=state,
-            prev=[ex.line for ex in conv],
-            past=[ex.events for ex in conv],
-            player=player,
-            utype=turn.utype,
-            probe=turn.probe,
-            order=state.get("order") if turn.utype == "order" else None,
-            conversation=checks.conversation_text(conv),
-            topic=checks.news(state),
-            about=turn.about,
-        )
+        _, conv, _, state = conversation.read(openai_messages(chat))
+        t = turn_of(chat, turn)
         b = bucket(t, turn.events)
         resting = {
             n for n, at in self.ribbed_at.items() if (turn.t - at) / TIC_HZ < RIB_REST_S
@@ -739,6 +754,7 @@ class Narrator:
             rib=rib,
             ribbed_before=self.ribbed[rib] if rib else None,
             thread=t.thread,
+            alone=t.alone,
             bit=bit,
             temper=turn.temper,
             topic=t.topic,
@@ -795,26 +811,34 @@ class Narrator:
             self.prev.append(line)
 
 
-def score(record: Record, episode: list[Record]) -> Score:
-    """A written line's score: kept if the teacher's own loop passed it (its
-    trace, the body's IVR verdict); its parts, the judge's verdicts and the
-    checks it failed (the body's notes). A teacher's record only: a student's
-    line has no loop of its own to read."""
-    return Score(
-        parts={"judge": record.meta["judge"], "failed": record.meta["failed"]},
-        keep=record.inner[-1].success,
-    )
+def score(record: Record, completion: Completion, episode: list[Record]) -> Score:
+    """A completion's score. The line the call returned: kept if the teacher's
+    own loop passed it (its trace, the body's IVR verdict), its parts the
+    judge's verdicts and the checks it failed (the body's notes). Any other
+    (:func:`alternatives`): from the call and the line alone, every code check
+    of the turn (:func:`checks.failures_v10`), as the body applied them."""
+    if completion is record.completions[0]:
+        return Score(
+            parts={"judge": record.meta["judge"], "failed": record.meta["failed"]},
+            keep=record.inner[-1].success,
+        )
+    t = turn_of(record.args["chat"], record.privileged["turn"], record.meta)
+    failed = [n for n, _ in checks.failures_v10(completion.text(), t)]
+    return Score(parts={"failed": failed}, keep=not failed)
 
 
 def row_of(record: Record) -> dict:
     """A record as ``train_alora.py``'s narrator row: the body's notes (the
-    match, the moment, the turn, the line), whether it was kept (``ok``) and
-    every try; beside them, the record's standard fields (the ``prompt`` the
-    student reads, the ``completion``, the ``score``)."""
+    match, the moment, the turn, the line), whether the line was kept
+    (``ok``) and every try; beside them, the record's standard fields (the
+    ``prompt`` the student reads, its ``completions``: the line, then any
+    :func:`alternatives`, each scored), and the line's own completion and
+    score again at the top, as the readers of these rows read them."""
     trace = record.inner[-1]
+    said = record.completions[0]
     return {
         **record.meta,
-        "ok": record.score.keep,
+        "ok": said.score.keep,
         "attempts": len(trace.attempts),
         "tries": [checks.clean(a.text) for a in trace.attempts],
         "trace": {
@@ -824,6 +848,7 @@ def row_of(record: Record) -> dict:
                 {
                     "text": a.text,
                     "failed": [v.requirement for v in a.verdicts if not v.passed],
+                    "reasons": [v.reason for v in a.verdicts if not v.passed],
                 }
                 for a in trace.attempts
             ],
@@ -833,8 +858,9 @@ def row_of(record: Record) -> dict:
         "view": record.view,
         "call_id": record.call_id,
         "prompt": record.prompt,
-        "completion": record.completion_text(),
-        "score": dataclasses.asdict(record.score),
+        "completion": said.text(),
+        "score": dataclasses.asdict(said.score),
+        "completions": [c.to_json() for c in record.completions],
     }
 
 
@@ -1115,11 +1141,15 @@ def write_file(args) -> None:
         entries, rows = raw[(match["data"], match["ep"])]
         return lambda: episode(match, entries, rows, args, weights)
 
+    settings = ("seed", "loop_budget", "idle_s", "branch_rate", "branch_talk")
+    settings += ("probe_rate", "reply_rate", "follow_rate", "mishear", "temperature")
     summary = emulate(
         [(json.dumps([m["data"], m["ep"]]), run(m)) for m in mine],
         args.out,
         score=score,
+        alternatives=alternatives,
         record=row_of,
+        meta={"code": code_version(), **{k: getattr(args, k) for k in settings}},
         log=lambda s: print(s, flush=True),
     )
     print(f"done: {summary}")
@@ -1127,111 +1157,109 @@ def write_file(args) -> None:
         raise SystemExit(f"{len(summary['failed'])} matches failed; run again")
 
 
-# ── Preference pairs: his mistakes, made in code ───────────────────────────────
-PAIR_KINDS = ("person", "news", "intro")
-
-
+# ── Other completions of a call: his mistakes, made in code ───────────────────
 def named_cast(line: str) -> list[str]:
     return [n for n in CAST if re.search(rf"\b{n}\b", line)]
 
 
-def broken_copies(r: dict, rng) -> list[tuple[str, str, str]]:
-    """A kept line's broken copies, ``(kind, rejected, why)``, each made by
-    swapping one name and kept only if the check it is meant to break now
-    fails (and passed before):
+def alternatives(record: Record, episode: list[Record]) -> list[Completion]:
+    """Other completions of a call, for preferences against the line he said
+    (``emulate``'s ``alternatives``): the mistakes a live session showed, each
+    made by swapping one name in his line (or by saying an earlier line
+    again), and kept only if the check it targets now fails and passed
+    before. Their ``meta``: ``made`` (which mistake), ``why`` (the check's
+    word). Seeded from the call.
 
     * ``person``: a line on one of the cast's own thing, given to another of
       them (Milo's case of beer, said of Nora): :func:`checks.right_person`;
     * ``news``: a line naming a bot the game just told him about, naming
       instead one of the cast it has said nothing about lately (Hank fragged,
-      when it was Lou): :func:`checks.stale_bot`."""
-    t = checks.turn_of(r)
-    line, out = r["line"], []
+      when it was Lou): :func:`checks.stale_bot`;
+    * ``intro``: his introduction of someone he has already introduced in this
+      conversation, said again (Milo's three times in 40 seconds)."""
+    said = record.completions[0]
+    if not (record.meta and record.inner and record.inner[-1].success):
+        return []  # only against a line his own loop passed
+    line = said.text()
+    t = turn_of(record.args["chat"], record.privileged["turn"], record.meta)
+    rng = random.Random(seed_of(record.call_id, "alternatives"))
     swap = lambda a, b: re.sub(rf"\b{a}\b", b, line)  # noqa: E731
+    out = []
     named = named_cast(line)
-    words = checks._cast_words()
-    if len(named) == 1 and checks.stems(line) & words[named[0]]:
-        n = named[0]
-        others = [m for m in CAST if m != n]
-        bad = swap(n, rng.choice(others))
+    if len(named) == 1 and checks.stems(line) & checks._cast_words()[named[0]]:
+        bad = swap(named[0], rng.choice([m for m in CAST if m != named[0]]))
         if checks.right_person(line, t)[0] and not checks.right_person(bad, t)[0]:
-            out.append(("person", bad, checks.right_person(bad, t)[1]))
+            out.append(
+                Completion(
+                    bad, {"made": "person", "why": checks.right_person(bad, t)[1]}
+                )
+            )
     known = checks.known_bots(t)
     news = sorted(set(named) & known)
     if news and checks.stale_bot(line, t)[0]:
-        quiet = [m for m in probes.board(t.state) if m in CAST and m not in known]
-        quiet = [m for m in quiet if m not in named]
+        quiet = [
+            m
+            for m in probes.board(t.state)
+            if m in CAST and m not in known | set(named)
+        ]
         if quiet:
             bad = swap(rng.choice(news), rng.choice(quiet))
             if not checks.stale_bot(bad, t)[0]:
-                out.append(("news", bad, checks.stale_bot(bad, t)[1]))
-    return out
-
-
-def reintroductions(rows: list[dict]) -> list[tuple[dict, str, str]]:
-    """``intro`` pairs: a later turn about someone he has already introduced in
-    the conversation (his introduction still in it), against saying that
-    introduction again. ``(row, rejected, why)``."""
-    by: dict = defaultdict(list)
-    for r in rows:
-        by[(r["data"], r["ep"])].append(r)
-    out = []
-    for match in by.values():
-        intros = [
-            (r["rib"], r["line"])
-            for r in match
-            if r.get("act") == "setup" and r.get("rib")
-        ]
-        for r in match:
-            if r.get("act") == "setup" or not r.get("rib"):
-                continue
-            said = {ex["line"] for ex in r.get("conv") or []}
-            for who, intro in intros:
-                if who == r["rib"] and intro in said and intro != r["line"]:
-                    why = f"He introduced {who} already, earlier in this conversation."
-                    out.append((r, intro, why))
-                    break
-    return out
-
-
-def write_pairs(args) -> None:
-    """``pairs``: DPO pairs from written rows (``train_alora.py --pairs``): each
-    kept line against its broken copies (:func:`broken_copies`) and against
-    a re-introduction (:func:`reintroductions`); the prompt is the row's own.
-    Seeded; at most ``--max-per-kind`` of each kind (0: all)."""
-    rng = random.Random(args.seed)
-    rows = [json.loads(x) for p in args.rows for x in open(p)]
-    rows = [r for r in rows if r.get("ok") and r.get("line") and r.get("tool")]
-    found: dict[str, list] = {k: [] for k in PAIR_KINDS}
-    for r in rows:
-        for kind, bad, why in broken_copies(r, rng):
-            found[kind].append((r, bad, why))
-    found["intro"] = reintroductions(rows)
-    keep = ("data", "style", "ep", "t", "conv", "tool", "player", "system", "branch")
-    out = []
-    for kind, items in found.items():
-        rng.shuffle(items)
-        for r, bad, why in items[: args.max_per_kind or None]:
-            out.append(
-                {
-                    **{k: r.get(k) for k in keep},
-                    "chosen": r["line"],
-                    "rejected": bad,
-                    "why": kind,  # what train_alora.py counts the pairs by
-                    "reason": why,
-                }
-            )
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text("".join(json.dumps(x) + "\n" for x in out))
-    print(
-        f"{len(rows)} kept lines -> {len(out)} pairs: "
-        + ", ".join(
-            f"{k} {min(len(v), args.max_per_kind or len(v))}" for k, v in found.items()
+                out.append(
+                    Completion(
+                        bad, {"made": "news", "why": checks.stale_bot(bad, t)[1]}
+                    )
+                )
+    rib = record.meta.get("rib")
+    if rib and record.meta.get("act") != "setup":
+        before = {
+            m["content"]
+            for m in record.prompt["messages"]
+            if m["role"] == "assistant" and m.get("content")
+        }
+        intro = next(
+            (
+                r.completions[0].text()
+                for r in episode
+                if r.call < record.call
+                and r.meta.get("act") == "setup"
+                and r.meta.get("rib") == rib
+                and r.completions[0].text() in before
+            ),
+            None,
         )
-    )
-    for kind, items in found.items():
-        for r, bad, why in items[:2]:
-            print(f"  [{kind}] {r['line']!r}\n      not {bad!r} ({why})")
+        if intro and intro != line:
+            why = f"He introduced {rib} already, earlier in this conversation."
+            out.append(Completion(intro, {"made": "intro", "why": why}))
+    return out
+
+
+def code_version() -> dict:
+    """The code that writes the data: ``VERSION`` beside this script (the
+    commits it was copied from, written by whoever copied it), else the
+    commits of this checkout and of the Mellea it imports, ``+dirty`` if
+    either has changes not committed."""
+    import subprocess
+
+    import mellea
+
+    here = Path(__file__).resolve().parent
+    if (here / "VERSION").exists():
+        return json.loads((here / "VERSION").read_text())
+
+    def rev(where: Path) -> str | None:
+        def git(*a):
+            return subprocess.run(
+                ["git", *a], cwd=where, capture_output=True, text=True
+            ).stdout.strip()
+
+        head = git("rev-parse", "HEAD")
+        return head and head + ("+dirty" if git("status", "--porcelain") else "")
+
+    return {
+        "granite-switch": rev(here),
+        "mellea": rev(Path(mellea.__file__).resolve().parent),
+    }
 
 
 # ── Lines written elsewhere: the same requirements, once ───────────────────────
@@ -1502,10 +1530,30 @@ def selfcheck(args) -> None:
     assert "clarify" not in utterance_kinds({"events": []}, quiet)
     asked = Conversation([Exchange(70, [], "who got you", "Gwen did.")])
     assert "clarify" in utterance_kinds({"events": []}, asked)
-    # A broken copy breaks its check, and the kept line did not.
-    row = {"line": "Milo still owes me that case of beer.", "tool": st, "conv": []}
-    kinds = [k for k, _, _ in broken_copies(row, random.Random(0))]
-    assert "person" in kinds, kinds
+    # Another completion of a call: Milo's thing given to someone else, which
+    # the scorer, reading the call and the line alone, does not keep.
+    from mellea.stdlib.compile.trace import Trace
+
+    chat = chat_of(Conversation(), checks._STATE, None)
+    said = Completion("Milo still owes me that case of beer.")
+    rec = Record(
+        function="Narrator.line",
+        interface=Narrator.line.interface,
+        view=1,
+        episode="e",
+        call=0,
+        call_id="e#0",
+        parent=None,
+        args={"chat": chat},
+        privileged={"turn": TurnFacts(t=0)},
+        prompt=compiled_view(Narrator.line, {"chat": chat}),
+        completions=[said],
+        inner=[Trace("narrator_turn", {}, {}, [], said.value, True)],
+        meta={"act": "react"},
+    )
+    alts = alternatives(rec, [rec])
+    assert [c.meta["made"] for c in alts] == ["person"], alts
+    assert not score(rec, alts[0], [rec]).keep, alts[0]
     # The teacher reads the turn back from the chat the student reads.
     conv = Conversation(
         [
@@ -1539,13 +1587,6 @@ def main() -> None:
     r = sub.add_parser("report", help="What written rows hold")
     pa = sub.add_parser("parity", help="The student's rendering against the prompt")
     sub.add_parser("selfcheck", help="The prompts keep their own rules")
-    pr = sub.add_parser(
-        "pairs", help="DPO pairs from written rows: his mistakes, made in code"
-    )
-    pr.add_argument("--rows", type=Path, nargs="+", required=True)
-    pr.add_argument("--out", type=Path, required=True)
-    pr.add_argument("--max-per-kind", type=int, default=0)
-    pr.add_argument("--seed", type=int, default=0)
     ca = sub.add_parser("cast", help="People to name the bots after, by an open model")
     ca.add_argument("--out", type=Path, required=True)
     ca.add_argument("--storyteller-url", required=True)
@@ -1611,7 +1652,6 @@ def main() -> None:
         "report": report,
         "parity": parity,
         "selfcheck": selfcheck,
-        "pairs": write_pairs,
         "cast": write_cast,
     }[args.cmd](args)
 
