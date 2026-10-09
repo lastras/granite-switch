@@ -125,6 +125,34 @@ def shaped_reward(prev: Observation, obs: Observation, w: Shaping) -> float:
     return r
 
 
+# ── Tasks ──────────────────────────────────────────────────────────────────────
+@dataclass(frozen=True)
+class Task:
+    """What a run trains on: its env worker (one process's envs, the
+    ``_env_worker`` protocol), the actor's and the critic's input sizes, and
+    its evaluation (``eval_tasks(ckpt, cfg)`` -> args for ``play``, one per
+    match; ``summarize(rows)``). ``rl_writer.py`` adds ``writer``."""
+
+    worker: object
+    obs_dim: int
+    priv_dim: int
+    eval_tasks: object
+    play: object
+    summarize: object
+
+
+TASKS: dict[str, Task] = {}
+
+
+def task(name: str) -> Task:
+    """The task ``name``; ``rl_<name>.py`` registers it when imported."""
+    if name not in TASKS:
+        import importlib
+
+        importlib.import_module(f"rl_{name}")
+    return TASKS[name]
+
+
 # ── Environment side ───────────────────────────────────────────────────────────
 @dataclass
 class Config:
@@ -170,6 +198,7 @@ class Config:
     eval_workers: int = 8
     eval_seconds: float = MATCH_TICS / TIC_HZ
     seed: int = 0
+    task: str = "deathmatch"  # TASKS: the deathmatch, or rl_writer.py's writer
 
 
 def obs_vector(obs: Observation, style: str) -> np.ndarray:
@@ -324,10 +353,12 @@ class _Slot:
         )
 
 
-def _env_worker(conn, cfg: Config, seeds: list[int]) -> None:
+def _env_worker(conn, cfg: Config, seeds: list[int], slot=None) -> None:
+    """One process's envs (``slot``: their class, ``_Slot`` by default), stepped
+    on the learner's messages."""
     isolate_workdir()
     ks = _KSTeacher(cfg.ks_teacher) if cfg.ks_teacher else None
-    slots = [_Slot(cfg, s, ks) for s in seeds]
+    slots = [(slot or _Slot)(cfg, s, ks) for s in seeds]
     rounds = 0  # lockstep rounds; global steps = rounds * cfg.envs
 
     def gather():
@@ -374,7 +405,8 @@ def _env_worker(conn, cfg: Config, seeds: list[int]) -> None:
 
 
 class VecEnv:
-    """``cfg.envs`` envs across ``cfg.workers`` processes, stepped in lockstep."""
+    """``cfg.envs`` envs across ``cfg.workers`` processes, stepped in lockstep
+    (each process runs the task's worker)."""
 
     def __init__(self, cfg: Config):
         ctx = mp.get_context("spawn")
@@ -390,7 +422,8 @@ class VecEnv:
             parent, child = ctx.Pipe()
             seeds = list(range(seed, seed + n))
             seed += n
-            p = ctx.Process(target=_env_worker, args=(child, cfg, seeds), daemon=True)
+            worker = task(cfg.task).worker
+            p = ctx.Process(target=worker, args=(child, cfg, seeds), daemon=True)
             p.start()
             self.conns.append(parent)
             self.procs.append(p)
@@ -428,14 +461,19 @@ def _torch():
     return torch, nn
 
 
-def build_agent(hidden: int = 256, width: int = 256):
+def build_agent(
+    hidden: int = 256,
+    width: int = 256,
+    obs_dim: int = OBS_DIM,
+    priv_dim: int = PRIV_DIM,
+):
     torch, nn = _torch()
 
     class Agent(nn.Module):
         def __init__(self) -> None:
             super().__init__()
             self.enc = nn.Sequential(
-                nn.Linear(OBS_DIM, width),
+                nn.Linear(obs_dim, width),
                 nn.ReLU(),
                 nn.Linear(width, width),
                 nn.ReLU(),
@@ -444,7 +482,7 @@ def build_agent(hidden: int = 256, width: int = 256):
             self.pi_move = nn.Linear(hidden, N_MOVE)
             self.pi_weapon = nn.Linear(hidden, N_WEAPON)
             self.v = nn.Sequential(
-                nn.Linear(hidden + PRIV_DIM, width), nn.ReLU(), nn.Linear(width, 1)
+                nn.Linear(hidden + priv_dim, width), nn.ReLU(), nn.Linear(width, 1)
             )
             for m in (self.pi_move, self.pi_weapon):
                 nn.init.orthogonal_(m.weight, 0.01)
@@ -496,7 +534,8 @@ def load(path: str | Path, device: str = "cpu"):
     torch, _ = _torch()
     ck = torch.load(str(path), map_location=device, weights_only=False)
     cfg = Config(**ck["config"])
-    agent = build_agent(cfg.hidden, cfg.width).to(device)
+    t = task(cfg.task)
+    agent = build_agent(cfg.hidden, cfg.width, t.obs_dim, t.priv_dim).to(device)
     agent.load_state_dict(ck["state_dict"])
     agent.eval()
     return agent, cfg, ck
@@ -606,7 +645,9 @@ def train(cfg: Config, out: Path, device: str, resume: Path | None) -> None:
         torch.set_num_threads(4)  # leave the cores to the env workers
     out.mkdir(parents=True, exist_ok=True)
     (out / "config.json").write_text(json.dumps(asdict(cfg), indent=1))
-    agent = build_agent(cfg.hidden, cfg.width).to(device)
+    tk = task(cfg.task)
+    obs_dim, priv_dim = tk.obs_dim, tk.priv_dim
+    agent = build_agent(cfg.hidden, cfg.width, obs_dim, priv_dim).to(device)
     opt = torch.optim.Adam(agent.parameters(), lr=cfg.lr, eps=1e-5)
     update, steps = 0, 0
     if resume is not None:
@@ -617,7 +658,7 @@ def train(cfg: Config, out: Path, device: str, resume: Path | None) -> None:
             opt.load_state_dict(ck["opt"])
     elif cfg.init:  # weights only: a fine-tune with its own optimizer and schedule
         ck = torch.load(cfg.init, map_location=device, weights_only=False)
-        agent.load_state_dict(ck["state_dict"])
+        agent.load_state_dict(widened(ck["state_dict"], agent.state_dict(), cfg.hidden))
     log = open(out / "train.jsonl", "a")
     evlog = open(out / "eval.jsonl", "a")
     eval_pool = mp.get_context("spawn").Pool(cfg.eval_workers)
@@ -633,8 +674,8 @@ def train(cfg: Config, out: Path, device: str, resume: Path | None) -> None:
     next_start = torch.ones(B, device=device)
     h = agent.initial_state(B, device)
 
-    obs_b = torch.zeros(T, B, OBS_DIM, device=device)
-    priv_b = torch.zeros(T, B, PRIV_DIM, device=device)
+    obs_b = torch.zeros(T, B, obs_dim, device=device)
+    priv_b = torch.zeros(T, B, priv_dim, device=device)
     move_b = torch.zeros(T, B, dtype=torch.long, device=device)
     weap_b = torch.zeros(T, B, dtype=torch.long, device=device)
     exm_b = torch.zeros(T, B, N_MOVE, device=device)  # kickstart targets
@@ -784,21 +825,16 @@ def train(cfg: Config, out: Path, device: str, resume: Path | None) -> None:
             **{k: round(v / n_mb, 5) for k, v in stats.items()},
         }
         if episodes:
-            for st in STYLES:
+            for st in sorted({e["style"] for e in episodes}):
                 es = [e for e in episodes if e["style"] == st]
-                if es:
-                    rec[f"{st}_return"] = round(
-                        float(np.mean([e["return"] for e in es])), 3
-                    )
-                    rec[f"{st}_frags"] = round(
-                        float(np.mean([e["frags"] for e in es])), 2
-                    )
-                    rec[f"{st}_deaths"] = round(
-                        float(np.mean([e["deaths"] for e in es])), 2
-                    )
+                # The return, frags, deaths and any task's own numbers (atoms).
+                keys = [k for k, v in es[0].items() if isinstance(v, int | float)]
+                for k in keys:
+                    rec[f"{st}_{k}"] = round(float(np.mean([e[k] for e in es])), 3)
             rec["episodes"] = len(episodes)
-            rec["margin"] = round(float(np.mean([e["margin"] for e in episodes])), 2)
-            rec["top"] = round(float(np.mean([e["top"] for e in episodes])), 3)
+            for k, nd in (("margin", 2), ("top", 3)):  # the deathmatch's
+                if all(k in e for e in episodes):
+                    rec[k] = round(float(np.mean([e[k] for e in episodes])), nd)
             episodes = []
         log.write(json.dumps(rec) + "\n")
         log.flush()
@@ -813,22 +849,13 @@ def train(cfg: Config, out: Path, device: str, resume: Path | None) -> None:
                 out / "latest.pt",
                 {"update": update, "steps": steps, "opt": opt.state_dict()},
             )
-            tasks = eval_tasks(
-                ck,
-                cfg.eval_matches,
-                ("fighter",),
-                "default",
-                cfg.eval_seconds,
-                777,
-                respawn_s=cfg.respawn_s,
-                item_rules=cfg.item_rules,
-            )
-            pending_evals.append((update, eval_pool.map_async(play_match, tasks)))
+            tasks = tk.eval_tasks(ck, cfg)
+            pending_evals.append((update, eval_pool.map_async(tk.play, tasks)))
         for u, res in list(pending_evals):
             if res.ready():
                 pending_evals.remove((u, res))
                 rows = res.get()
-                summary = summarize_eval(rows)
+                summary = tk.summarize(rows)
                 evlog.write(
                     json.dumps({"update": u, **summary, "matches": rows}) + "\n"
                 )
@@ -838,11 +865,49 @@ def train(cfg: Config, out: Path, device: str, resume: Path | None) -> None:
     for u, res in pending_evals:
         rows = res.get()
         evlog.write(
-            json.dumps({"update": u, **summarize_eval(rows), "matches": rows}) + "\n"
+            json.dumps({"update": u, **tk.summarize(rows), "matches": rows}) + "\n"
         )
     eval_pool.close()
     log.close()
     evlog.close()
+
+
+def widened(old: dict, new: dict, hidden: int) -> dict:
+    """``old``'s weights in ``new``'s shapes: where an input layer has grown
+    (a task with more inputs), the old columns are copied and the new ones are
+    zero, so the network starts out acting exactly as ``old`` did. The critic's
+    first layer reads the GRU output (``hidden`` columns) then the privileged
+    inputs, and grows at the end of each part."""
+    out = {}
+    for k, w in new.items():
+        o = old[k]
+        if o.shape == w.shape:
+            out[k] = o
+            continue
+        if k == "enc.0.weight":
+            out[k] = w.new_zeros(w.shape)
+            out[k][:, : o.shape[1]] = o
+        elif k == "v.0.weight":
+            out[k] = w.new_zeros(w.shape)
+            out[k][:, :hidden] = o[:, :hidden]
+            out[k][:, hidden : o.shape[1]] = o[:, hidden:]
+        else:
+            raise ValueError(f"{k}: {tuple(o.shape)} cannot grow to {tuple(w.shape)}")
+    return out
+
+
+def _deathmatch_eval(ckpt, cfg: Config) -> list[tuple]:
+    """The deathmatch's evaluation: fighter matches against the default bots."""
+    return eval_tasks(
+        ckpt,
+        cfg.eval_matches,
+        ("fighter",),
+        "default",
+        cfg.eval_seconds,
+        777,
+        respawn_s=cfg.respawn_s,
+        item_rules=cfg.item_rules,
+    )
 
 
 def summarize_eval(rows: list[dict]) -> dict:
@@ -854,6 +919,11 @@ def summarize_eval(rows: list[dict]) -> dict:
         "margin": round(float(np.mean([r["margin"] for r in rows])), 2),
         "top": round(float(np.mean([r["top"] for r in rows])), 3),
     }
+
+
+TASKS["deathmatch"] = Task(
+    _env_worker, OBS_DIM, PRIV_DIM, _deathmatch_eval, play_match, summarize_eval
+)
 
 
 def main() -> None:
