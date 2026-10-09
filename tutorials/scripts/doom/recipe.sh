@@ -11,11 +11,18 @@
 # narrator_text train_narrator train_orders compose eval. Each skips work whose
 # output exists, so running it again goes on where it stopped.
 #
+# Round 10, the narrator's data rewritten (narrator_v10.py) on round 9's matches
+# and split (R9), its bots renamed after the cast (conversation.CAST): serve_base |
+# check10 narrator10_text pairs10 train_narrator10 compose10 eval_style; recipe.sh v10 runs them in order (the
+# servers apart).
+#
 # Settings (environment variables; paths are relative to this directory):
-#   WRITER_URL, JUDGE_URL  the writer (granite-4.2-30b) and the judge
-#                          (gpt-oss-120b), OpenAI-compatible (serve_writer and
-#                          serve_judge start them); several of each, comma-
-#                          separated, share narrator_text's matches
+#   WRITER_URL, JUDGE_URL  the writer (granite-4.2-30b; round 10's, gpt-oss-120b)
+#                          and the judge (gpt-oss-120b), OpenAI-compatible
+#                          (serve_writer and serve_judge start them); several of
+#                          each, comma-separated, share the writers' matches
+#   WRITER_MODEL  the writer serve_writer serves and the writers ask
+#                 (granite-4.2-30b; round 10 runs with gpt-oss-120b)
 #   BASE       the base model                     (ibm-granite/granite-4.1-3b)
 #   TEACHER    the RL teacher that plays          (runs/teacher_rl0_706M.pt)
 #   GAME_RUNS  the game adapters' training runs   (runs/field-h-alora)
@@ -25,6 +32,13 @@
 #   WORKERS    collection workers per part (32); PART: one part of collect
 #   PY         the demo's Python (vLLM, transformers, granite_switch, ViZDoom)
 #   DATA_PY    the data writers' Python (pip install mellea==0.7.0)
+#   DATA_PY10  round 10's: the Mellea fork (feat/compile) installed editable with
+#              its hooks extra, ViZDoom and transformers (docs/DOOM_RECIPE.md)
+#   R9, R9_RUNS  round 9's data and runs, which round 10 reuses (data/r9, runs/r9)
+#   MATCHES    narrator10_text: the first so many matches only (a dry run; 0: all)
+#   BASE_URL   eval_style: the base model's server (serve_base), for its baseline
+#   EVAL_DATA, BOTS  eval: the held-out sets' data dir ($DATA) and the bots live
+#              (default; round 10: $R9 and cast)
 #   PORT       serve_writer / serve_judge: the port to serve on (8000)
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -40,6 +54,10 @@ NGPU=${NGPU:-2}
 WORKERS=${WORKERS:-32}
 PY=${PY:-python}
 DATA_PY=${DATA_PY:-python}
+DATA_PY10=${DATA_PY10:-python}
+WRITER_MODEL=${WRITER_MODEL:-granite-4.2-30b}
+R9=${R9:-data/r9}
+R9_RUNS=${R9_RUNS:-runs/r9}
 WRITER="--writer-url ${WRITER_URL:-} --judge-url ${JUDGE_URL:-}"
 ASR=ibm-granite/granite-speech-5.0-470m-turboctc
 # The matches: 4 parts of 50, two with the default bots, two with a random tier
@@ -56,13 +74,30 @@ part() {
 say() { echo "== $(date -u +%H:%M) UTC: $*"; }
 
 step_serve_writer() {  # one GPU, until stopped
+  if [ "$WRITER_MODEL" = gpt-oss-120b ]; then  # round 10's writer: as the judge serves
+    vllm serve openai/gpt-oss-120b --served-model-name gpt-oss-120b \
+      --max-model-len 16384 --port "${PORT:-8000}"
+    return
+  fi
+  # Granite 4.2's own reasoning parser (it ships with the model): the reasoning
+  # never reaches the message content, and a JSON format (a generative
+  # function's result) applies from the end of the reasoning on.
+  local parser
+  parser=$($PY -c "from huggingface_hub import hf_hub_download as get; \
+print(get('ibm-granite/granite-4.2-30b', 'granite_thinking_parser.py'))")
   vllm serve ibm-granite/granite-4.2-30b --served-model-name granite-4.2-30b \
-    --max-model-len 16384 --port "${PORT:-8000}"
+    --max-model-len 16384 --port "${PORT:-8000}" \
+    --reasoning-parser granite_thinking_parser --reasoning-parser-plugin "$parser"
 }
 
 step_serve_judge() {  # one GPU, until stopped
   vllm serve openai/gpt-oss-120b --served-model-name gpt-oss-120b \
     --max-model-len 16384 --port "${PORT:-8000}"
+}
+
+step_serve_base() {  # one GPU, until stopped: the base model, for eval_style's baseline
+  vllm serve $BASE --served-model-name granite-4.1-3b --max-model-len 16384 \
+    --port "${PORT:-8000}"
 }
 
 step_check() {  # the tracker and its live parity, the probes, the data's checks
@@ -139,16 +174,16 @@ step_compose() {  # the game adapters, the narrator, the orders adapter, the ASR
 }
 
 step_eval() {  # the checkpoint: orders, the question battery, real-time matches, remarks
-  local O=$RUNS/eval/$(basename $MODEL)
+  local O=$RUNS/eval/$(basename $MODEL) D=${EVAL_DATA:-$DATA}
   mkdir -p $O
-  [ -f $DATA/orders/eval_$(basename $MODEL).json ] ||
-    $PY orders_data.py eval --model $MODEL --data $DATA/orders | tee $O/orders.md
+  [ -f $D/orders/eval_$(basename $MODEL).json ] ||
+    $PY orders_data.py eval --model $MODEL --data $D/orders | tee $O/orders.md
   [ -f $O/probes.json ] ||
-    $PY eval_probes.py --model $MODEL --moments $DATA/moments_heldout.jsonl \
+    $PY eval_probes.py --model $MODEL --moments $D/moments_heldout.jsonl \
       --talkers narrator --out $O/probes.json
   [ -f $O/tp.jsonl ] ||
     VLLM_ENABLE_V1_MULTIPROCESSING=1 $PY test_partner.py run --model $MODEL --games 4 \
-      --out $O/tp.jsonl
+      --bots ${BOTS:-default} --out $O/tp.jsonl
   [ -s $O/tp_score.md ] ||
     $PY test_partner.py score --rows $O/tp.jsonl --judge-url ${JUDGE_URL%%,*} > $O/tp_score.md
   [ -s $O/remarks.md ] ||
@@ -156,9 +191,94 @@ step_eval() {  # the checkpoint: orders, the question battery, real-time matches
       --judge-out $O/remarks_judged.jsonl > $O/remarks.md
 }
 
+# ── Round 10: the narrator's data from a compilable function ───────────────────
+step_check10() {  # v10's prompts keep their rules; the student's view is the live prompt
+  $DATA_PY10 narrator_v10.py selfcheck
+  $DATA_PY10 checks.py check
+  $DATA_PY10 narrator_v10.py parity --rows $R9/narrator/shard_{0,1,2}.jsonl --n 500 \
+    --tokenizer $BASE
+}
+
+step_narrator10_text() {  # his turns at every moment of round 9's matches, SHARDS writers
+  [ -f $DATA/narrator/report.md ] && return
+  mkdir -p $DATA/narrator
+  local pids=() k
+  for k in $(seq 0 $((SHARDS - 1))); do
+    $DATA_PY10 narrator_v10.py write --moments $R9/moments_write.jsonl $WRITER \
+      --writer-model $WRITER_MODEL --matches ${MATCHES:-0} --shard $k/$SHARDS --seed 0 \
+      --out $DATA/narrator/shard_$k.jsonl > $DATA/narrator/log_$k.txt 2>&1 &
+    pids+=($!)
+  done
+  local failed=0
+  for k in "${!pids[@]}"; do wait ${pids[$k]} || { say "shard $k failed"; failed=1; }; done
+  [ $failed = 0 ] || { say "a shard failed (see its log); run the step again"; exit 1; }
+  $DATA_PY10 narrator_v10.py parity --rows $DATA/narrator/shard_*.jsonl --n 500 \
+    --tokenizer $BASE
+  $DATA_PY10 narrator_v10.py report --rows $DATA/narrator/shard_*.jsonl \
+    | tee $DATA/narrator/report.md
+}
+
+step_pairs10() {  # preference pairs: each kept line against its mistakes, made in code
+  [ -f $DATA/narrator/pairs.jsonl ] && return
+  $DATA_PY10 narrator_v10.py pairs --rows $DATA/narrator/shard_*.jsonl \
+    --out $DATA/narrator/pairs.jsonl | tee $DATA/narrator/pairs.md
+}
+
+step_train_narrator10() {  # the narrator adapter on the v10 turns kept (SFT) and the pairs (DPO)
+  [ -f $RUNS/narrator/metrics.json ] && return
+  $PY -m torch.distributed.run --standalone --nproc_per_node $NGPU train_alora.py \
+    --adapter narrator --kind alora --records --data $DATA/narrator/shard_*.jsonl --base $BASE \
+    --pairs $DATA/narrator/pairs.jsonl \
+    --epochs 2 --keep-best --batch 16 --micro 2 --eval-every 100 --eval-n 200 \
+    --max-heldout 600 --gen-n 200 --ckpt-every 200 --seed 0 --out $RUNS/narrator
+}
+
+step_compose10() {  # the game adapters, round 9's orders adapter, the v10 narrator, the ASR
+  local G="--runs $GAME_RUNS --orders-runs $R9_RUNS --narrator $RUNS/narrator"
+  if [ ! -f $MODEL/config.json ]; then
+    rm -rf $MODEL.part
+    $PY build_model.py compose --kind alora $G --base $BASE --out $MODEL.part \
+      --asr-model $ASR --asr-device cuda:0
+    mv $MODEL.part $MODEL
+  fi
+  $PY policy.py --check-template $MODEL --layout chat
+  [ -f $MODEL/verify.json ] || $PY build_model.py verify $G --model $MODEL \
+    --limit 300 --layout chat --json $MODEL/verify.json
+}
+
+step_eval_style() {  # how he talks: the baselines, round 9 and v10's data and student
+  local O=$RUNS/eval/style J="--judge-url ${JUDGE_URL%%,*}"
+  mkdir -p $O
+  cat $R9/narrator/shard_{0,1,2,3}.jsonl > $O/r9_rows.jsonl
+  [ -s $O/teacher_v10.jsonl ] || $DATA_PY10 style_eval.py rollout \
+    --rows $O/r9_rows.jsonl --matches 8 --url ${WRITER_URL%%,*} --model $WRITER_MODEL \
+    --system v10 --reasoning low --max-tokens 1600 --temperature 0.9 --out $O/teacher_v10.jsonl
+  [ -s $O/base_v10.jsonl ] || [ -z "${BASE_URL:-}" ] || $DATA_PY10 style_eval.py rollout \
+    --rows $O/r9_rows.jsonl --matches 8 --url $BASE_URL --model granite-4.1-3b \
+    --system v10 --out $O/base_v10.jsonl
+  local runs="r9_rows=$O/r9_rows.jsonl teacher_v10=$O/teacher_v10.jsonl"
+  [ -s $O/base_v10.jsonl ] && runs="$runs base_v10=$O/base_v10.jsonl"
+  [ -d $DATA/narrator ] && cat $DATA/narrator/shard_*.jsonl > $O/v10_rows.jsonl &&
+    runs="$runs v10_rows=$O/v10_rows.jsonl"
+  for x in ${STYLE_RUNS:-}; do runs="$runs $x"; done  # e.g. r9_live=out/live.jsonl
+  $DATA_PY10 style_eval.py metrics --runs $runs | tee $O/metrics.md
+  [ -s $O/acts.md ] || $DATA_PY10 style_eval.py acts --runs $runs $J --n 40 \
+    --out $O/acts.jsonl | tee $O/acts.md
+  [ -s $O/truth.md ] || $DATA_PY10 style_eval.py truth --runs $runs $J --n 300 \
+    | tee $O/truth.md
+  if [ -s $O/v10_rows.jsonl ]; then
+    [ -s $O/pairwise_rows.md ] || $DATA_PY10 style_eval.py pairwise \
+      --runs v10_rows=$O/v10_rows.jsonl r9_rows=$O/r9_rows.jsonl $J --n 60 \
+      --out $O/pairwise_rows.jsonl | tee $O/pairwise_rows.md
+  fi
+}
+
 STEPS=(check orders_text collect moments narrator_text train_narrator train_orders compose eval)
-[ $# -gt 0 ] || { sed -n 3,27p "$0"; exit 1; }
+STEPS10=(check10 narrator10_text pairs10 train_narrator10 compose10 eval)
+[ $# -gt 0 ] || { sed -n 3,37p "$0"; exit 1; }
 [ "$1" = all ] && set -- "${STEPS[@]}"
+# Round 10 is evaluated on round 9's held-out sets, live against the cast.
+[ "$1" = v10 ] && set -- "${STEPS10[@]}" eval_style && export EVAL_DATA=${EVAL_DATA:-$R9} BOTS=${BOTS:-cast}
 for s in "$@"; do
   declare -F "step_$s" > /dev/null || { echo "no step $s"; exit 1; }
   say "$s"

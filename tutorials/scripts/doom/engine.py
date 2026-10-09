@@ -48,7 +48,14 @@ from collections import Counter
 from pathlib import Path
 
 import numpy as np
-from conversation import CONV_EXCHANGES, Conversation, Exchange, narrator_ids
+from conversation import (
+    CONV_EXCHANGES,
+    Conversation,
+    Exchange,
+    idle_of,
+    narrator_ids,
+    system_of,
+)
 from doom_env import AUDIO_HZ as GAME_HZ
 from doom_env import TIC_HZ, DoomEnv, isolate_workdir
 from expert import BEHAVIORS, PLAN_EVERY_TICS
@@ -60,6 +67,7 @@ from policy import (
     CRITIC,
     LAYOUTS,
     ORDERS,
+    TALK_TOKENS,
     WARM_MOMENT,
     WARM_STATE,
     engine_kwargs,
@@ -323,11 +331,11 @@ class AsyncPolicy:
         self.audio_id = self.tok.convert_tokens_to_ids(AUDIO_MARKER)
         # Temperature only (top-p autotunes a FlashInfer kernel on first use).
         self.talk_sp = SamplingParams(
-            max_tokens=32,  # ~15 words; the system prompt asks for one short line
+            max_tokens=TALK_TOKENS,  # a riff or a story runs long; no words banned
             temperature=0.8,
             stop=["\n", "Player:"],
-            bad_words=["reload", "Another"],
         )
+        self.system = system_of(model)  # the narrator's prompt, as the checkpoint says
 
     async def _one(self, ids: list[int], sp, audio: np.ndarray | None = None):
         """One request; ``audio`` (16 kHz) is spliced in, transcribed, at the
@@ -373,7 +381,14 @@ class AsyncPolicy:
         # The chat template's render (~5 ms at the full window), off the loop
         # that dispatches decisions.
         ids = await asyncio.get_running_loop().run_in_executor(
-            None, narrator_ids, self.ntok, conv, state, said, self.kit.talker
+            None,
+            narrator_ids,
+            self.ntok,
+            conv,
+            state,
+            said,
+            self.kit.talker,
+            self.system,
         )
         o = await self._one(ids, self.talk_sp, audio)
         heard = player if audio is None else self._transcript(ids, o)
@@ -812,7 +827,7 @@ async def serve(args) -> dict:
     )
     await pol.warmup()
     print(f"engine ready in {time.time() - t0:.0f}s ({pol.kit.placement})", flush=True)
-    talk = 0 if args.no_talk else args.idle_s
+    talk = 0 if args.no_talk else (args.idle_s or idle_of(args.model, IDLE_S))
     games: list[Game] = []
     tasks: list[asyncio.Task] = []
 
@@ -958,7 +973,9 @@ def main() -> None:
     for p in (run_p, serve_p):
         p.add_argument("--model", required=True)
         p.add_argument(
-            "--idle-s", type=float, default=IDLE_S, help="Silence before a remark"
+            "--idle-s",
+            type=float,
+            help="Silence before a remark (default: the checkpoint's, else IDLE_S)",
         )
         p.add_argument("--no-talk", action="store_true")
         p.add_argument("--temperature", type=float, default=1.0, help="Style, planner")

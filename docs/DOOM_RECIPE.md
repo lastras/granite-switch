@@ -200,6 +200,176 @@ writes `runs/r9/eval/<checkpoint>/` and `data/r9/orders/eval_<checkpoint>.json`.
   narr8 adds a round on the narrator's own samples (`rft.py`) that r9 has not
   had yet.
 
+## Round 10: a laser tag night, written on the Mellea fork
+
+Round 9's narration was accurate but formulaic: almost every line was a remark
+on what had just happened with a joke attached. Round 10 gives him a cast and a
+setting the viewer gets at once: **every bot is someone Granite knows**, and
+the match is a laser tag night with them. When one of them is in the news
+(killed him, got killed, took the lead), he ribs them about their thing, tied
+to what they just did, building on what he said about them before; between
+times he tells his partner how the match is going, in short bursts. (A version
+where he told long stories across the match asked too much of a viewer
+watching a game: it was dropped.)
+
+What changed, and where it lives:
+
+- **The cast** (`conversation.CAST`, `bots.cfg`'s `cast` tier, `doom_env.BOT_SETS["cast"]`):
+  seven people, each one line of who they are to him and what he needles them
+  about. Inkling-Small (Thinking Machines, Apache 2.0) proposed candidates
+  (`narrator_v10.py cast`), a person picked seven, two women and five men, and
+  checked each name in his voice (Kokoro). The v10 system prompt names them,
+  so the trained narrator knows them.
+- **Round 9's matches, renamed.** The v10 data plays back round 9's recorded
+  matches and split, each match's bots renamed after the cast in code as its
+  rows are read (`narrator_v10.cast_names`, `renamed`): nothing in the data
+  files is edited.
+- **The narrator is a compilable function on the Mellea fork**
+  (`github.ibm.com/lastrasl/mellea`, branch `feat/compile`, its
+  `docs/dev/compile.md`): `narrator_v10.Narrator.line(chat, *, turn)`. Its
+  signature is what the student reads: `chat`, the narrator's own
+  conversation, exactly as he is trained and served on it (the `v10` system
+  prompt and the `get_game_state` tool; `narrator_v10.py parity` checks it
+  against the live prompt byte for byte). `turn` is privileged: what the
+  driver knows and the student is never told (the question about the game as
+  data, what kind of thing the partner said, their words before speech
+  recognition, the talk clock); it steers the teacher and checks its line, and
+  every fact a line states is in the chat. Its body is the teacher: it reads
+  the turn from the chat, plans it in code (the act; for a rib, whom and why;
+  the answer or the order first), and has gpt-oss-120b write it as a chat
+  turn, with the plan, the code checks and the judge's questions as
+  requirements, repaired up to 3 tries. Mellea's `emulate` runs a match as one
+  episode of plain driver code, each line feeding the next moment of the live
+  talk clock, and writes every call as a record: the prompt the student reads,
+  the line, and whether the teacher's own loop passed it (`narrator_v10.score`).
+- **The teacher is gpt-oss-120b** (a second server beside the judge's).
+  Granite 4.2 30B, round 9's writer, wrote flat tactical commentary in this
+  role. No line or example comes from a frontier model's writing: the teacher
+  is shown no example lines.
+- **The partner talks less:** a third of the orders the recording's partner
+  gave are told (`narrator_v10.drop_orders`: the others leave what he reads,
+  in code; the game still played them out), questions about the game come at
+  12% of moments and other talk at 8% (against 55% and 15%): most of the time
+  the person watching says nothing, and he carries the talk.
+- **Prompted turns get their own volume** (`narrator_v10.branch_turn`). The
+  partner's live rates shape the conversations, and so his unprompted turns,
+  which are the persona; how well he answers needs more answers than a quiet
+  partner gives. So at half the moments (`--branch-rate`) the driver also puts
+  a *prompted branch* to him off the same conversation: a question about the
+  game, of the types asked least so far, or (`--branch-talk`, half of them)
+  partner talk, mostly the two kinds a live session showed missing: asking
+  about one of the cast ("what's your relationship with Ted") and asking again
+  after a non-answer. His answer is recorded and trained on, never said: the
+  conversation and what he carries on do not take it in (`TurnFacts.branch`).
+  Orders are never branched (the recording did not play them out). Round 10,
+  without branches, trained on 930 answers to game questions against round
+  9's 3,528, and its question battery fell from 90.2% to 81.3%.
+- **Preference pairs for his mistakes** (`narrator_v10.py pairs`, the
+  `pairs10` step; trained by DPO beside the lines, `train_alora.py --pairs`).
+  Each kept line is paired with a copy broken in code by swapping one name,
+  kept only if the copy fails the check it targets: one of the cast's thing
+  given to another (`checks.right_person`), a bot named that the game said
+  nothing about lately (`checks.stale_bot`), and an introduction said again to
+  someone already introduced in the conversation. A held-out match's pairs are
+  never trained on.
+- **Connected, by construction and by check.** When a turn is about someone he
+  has talked about tonight, 60% of the time it is given his earlier line about
+  them to build on (`narrator_v10.thread_for`; a rib's callback raises the
+  stakes, tops it or pays it off), and the judge asks whether it does
+  (`thread`). The priorities are connectedness and accuracy (the game state,
+  the orders) first, funny second; the style judge and a person's labels are
+  asked in that order.
+- **Accuracy:** a code check against saying what a bot is doing right now
+  (`checks.bot_now`: chasing him, on his tail; the game never says) and a
+  stricter `grounded` question.
+- **The judge is asked once per try, every question at once**
+  (`checks.ask_questions`, `narrator_v10.requirements`), and `true` and
+  `grounded` again, alone, of a second judge server: both must say yes. How to
+  take the turn is judged by its own questions (the order taken, the answer
+  the game state gives, the act), not as a checklist of its hint. One
+  requirement per question (Mellea's `LLMaJRequirement`, the conversation
+  quoted beside the line) was tried on the same 4 matches: it kept 58% of the
+  turns against 72%, and 76% of the answers to questions against 87%, without
+  keeping truer lines (true 96.2% against 95.4%, grounded 82.7% against
+  89.1%), at about six times the judge calls.
+- **The talk clock** waits 6 s of silence before he goes on (`--idle-s`; 12 s
+  before), each line taking as long as it takes to say. The narrator's run and
+  checkpoint record both the system prompt and the clock
+  (`narrator_prompt.json`), so he is served as he was trained.
+- **No comedy-shaped rules:** round 10's checks
+  (`checks.line_checks_v10`, `checks.JUDGE_V10`) keep every truth check, ask
+  for his voice as a conversation, and drop round 9's `funny`, `calm`,
+  `still_again` and the like. Live sampling allows 96 tokens and bans no word.
+- **The orders adapter** is round 9's: a hunt order's bot is read from the
+  words in code (`probes.bot_names`), which knows the cast.
+
+### What you need for it
+
+`DATA_PY10`, the round-10 writers' Python: Python 3.11 with the fork installed
+editable with its hooks extra, ViZDoom and transformers:
+
+```bash
+git clone -b feat/compile https://github.ibm.com/lastrasl/mellea.git
+python -m venv venv10
+venv10/bin/pip install -e "mellea[hooks]" vizdoom==1.3.1 transformers==5.17.0
+```
+
+### The steps
+
+| step | command (see `recipe.sh`) | reads | writes |
+|---|---|---|---|
+| `serve_writer` | `WRITER_MODEL=gpt-oss-120b`: `vllm serve openai/gpt-oss-120b` | the model | a server |
+| `serve_base` | `vllm serve $BASE` (eval_style's baseline only) | the base model | a server |
+| `check10` | `narrator_v10.py selfcheck`, `checks.py check`, `narrator_v10.py parity --n 500` (the compiled view of round 9's rows against the live prompt) | the code, round 9's rows | (pass or fail) |
+| `narrator10_text` | `narrator_v10.py write --shard k/$SHARDS --seed 0`, then `parity --n 500` (the records' prompts against the live prompt, and the training ids of both loaders) and `report` (`MATCHES=4`: a dry run) | round 9's matches and split (renamed after the cast), writer, judge | `$DATA/narrator/shard_*.jsonl`, `report.md` |
+| `pairs10` | `narrator_v10.py pairs` | the v10 records kept | `$DATA/narrator/pairs.jsonl`, `pairs.md` |
+| `train_narrator10` | `train_alora.py --adapter narrator --records --pairs` (round 9's settings; each record on its own prompt; the pairs by DPO) | the v10 records kept, the pairs | `$RUNS/narrator/` |
+| `compose10` | `build_model.py compose`, `policy.py --check-template`, `build_model.py verify` | `$GAME_RUNS`, round 9's orders adapter, the v10 narrator | `$MODEL` |
+| `eval`, `eval_style` | round 9's eval; `style_eval.py rollout`, `metrics`, `acts`, `truth`, `pairwise` | `$MODEL`, the rows, the judge | `$RUNS/eval/` |
+
+`recipe.sh v10` runs `check10` to `eval_style` in order; its `eval` reads round
+9's held-out sets and plays live against the cast (`EVAL_DATA`, `BOTS`).
+
+### How round 9 talks (the baselines)
+
+`recipe.sh eval_style` on round 9's narrator rows, its live log and test-partner
+runs, and two models zero-shot on round 9's moments with the v10 system
+prompt (`style_eval.py`; the act labels by gpt-oss-120b on 40 windows of 12
+exchanges per run):
+
+| | r9 rows | Granite 4.2 30B, zero-shot | Granite 4.1 3B, zero-shot | r9 live | r9 test partner | narr8 test partner |
+|---|---|---|---|---|---|---|
+| questions | 1.3% | 4.4% | 0.0% | 2.0% | 0.3% | 0.0% |
+| words: median, p90 | 8, 11 | 20, 51 | 21, 67 | 7, 10 | 7, 10 | 8, 11 |
+| distinct bigrams | 68% | 39% | 18% | 73% | 56% | 56% |
+| act entropy (bits) | 2.81 | 2.59 | 1.84 | 2.88 | 2.75 | 2.93 |
+| top act | tell 38% | tell 46% | tell 65% | riff 22% | tell 37% | tell 34% |
+| a story | 0% | 0% | 0% | 0% | 1% | 1% |
+| report + quip | 14% | 6% | 9% | 18% | 34% | 32% |
+| claims fail (code) | 0.0% | 11.0% | 36.8% | 5.0% | 3.9% | 0.8% |
+| judged true, grounded | 94%, 93% | 97%, 99% | 82%, 88% | 83%, 87% | 89%, 90% | 91%, 89% |
+
+The 3B base model, unadapted, talks long but repeats itself (18% distinct
+bigrams, one opening in six) and gets the game wrong (37% of its lines fail the
+claims check): the narrator's training is what makes him true.
+
+### The gates
+
+| | the data (a 16-match dry run) | the student (eval) |
+|---|---|---|
+| style | wins at least 70% of pairs against r9's rows (lower bound above 55%) | wins at least 65% against r9's live log |
+| connected | at least a quarter of his own turns pick up something from earlier (the judge's thread labels) | reported |
+| ribs | a fifth to a third of his lines rib one of the cast | reported |
+| act entropy, top act | at least 2.6 bits, at most 30% | at least 2.3 bits |
+| report + quip | at most 25% | at most 35% |
+| length | median 9 to 15 words, p90 at most 25, at most 30 | p90 at most 10 s of speech |
+| truth | judged true and grounded at least 95% | the question battery at least 90.2%; lines judged true and grounded at least 84% |
+| passed within 3 tries | at least 65% overall, 85% for questions | |
+
+The style gates count only once the judge agrees with a person's labels on at
+least 75% of 40 pairs (`style_eval.py pairwise --export-for-human`, then
+`agree`).
+
 ## Settings
 
 `recipe.sh` reads these environment variables. Relative paths are relative to
@@ -231,7 +401,12 @@ own sampling may still differ from run to run.
 | when he speaks | `talk.py` (`TalkClock`) |
 | what the partner says, and how often | `narrator_prompts.py` (`UTTERANCES`), `narrator_data.py` (`partner_turn`, `--probe-rate`, `--reply-rate`) |
 | what he talks about on his own | `narrator_data.py` (`remark_topic`), `checks.py` (`news`, `story_options`), `narrator_prompts.py` (`TOPICS`, `STORY_WEIGHTS`) |
-| every word the writer sees | `narrator_prompts.py` |
+| every word the writer sees | `narrator_prompts.py` (round 10: `narrator_v10_prompts.py`) |
+| the cast (who the bots are) | `conversation.py` (`CAST`), `bots.cfg` (the `cast` tier), `doom_env.py` (`BOT_SETS`) |
+| how a round-10 turn goes (the act, whom he ribs) | `narrator_v10.py` (`plan_turn`, `rib_target`), `narrator_v10_prompts.py` (`ACTS`, `ACT_WEIGHTS`) |
+| what the round-10 student reads, and what only the teacher knows | `narrator_v10.py` (`Narrator.line`'s signature, `TurnFacts`), `conversation.py` (`messages`) |
+| which round-10 lines are trained on | `narrator_v10.py` (`score`, `requirements`) |
+| how the talk is measured | `style_eval.py` |
 | a rule a line must pass | `checks.py`: a check in code, or a question in `JUDGE` |
 | the questions about the game state | `probes.py` |
 | what the orders data holds | `orders_data.py` (its lists and the two stubs) |

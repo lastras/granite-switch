@@ -20,6 +20,8 @@ each that talks to him as people do, by category:
   is often called off;
 * ``request``: asking for what no order can do (play better, go after one bot);
 * ``persona``: small talk, trying to break character;
+* ``chat``: talk off the game and about what he is telling (a story he has
+  going: what happened next, who somebody in it was), which he takes up;
 * ``recall``: back-references ("who was that again", two lines after a death).
 
 Each match has a quiet stretch (minutes 5-6.5: he talks on his own) and a burst
@@ -79,6 +81,7 @@ WEIGHTS = {
     "order": 16,
     "request": 6,
     "persona": 12,
+    "chat": 12,
     "recall": 6,
 }
 LOW_ORDER = 0.7  # at 25 health or less under fire: a risky order, this often
@@ -111,6 +114,16 @@ PERSONA = (
     "are you having fun",
 )
 RECALL = ("what did i just ask you", "say that again", "who was that again")
+CHAT = (
+    "what happened next",
+    "wait who was that guy",
+    "get to the point",
+    "did that really happen",
+    "how was your weekend",
+    "what did you have for dinner",
+    "what kind of car do you drive",
+    "tell me a story",
+)
 
 
 # ── Running matches ────────────────────────────────────────────────────────────
@@ -225,6 +238,8 @@ class TestPartner:
             return self.item("request", "request", self.rng.choice(REQUESTS), state)
         if cat == "persona":
             return self.item("persona", "persona", self.rng.choice(PERSONA), state)
+        if cat == "chat":
+            return self.item("chat", "chat", self.rng.choice(CHAT), state)
         return self.item("recall", "recall", self.rng.choice(RECALL[:2]), state)
 
     async def run(self) -> None:
@@ -353,12 +368,16 @@ JUDGE = {
     "character, without promising or claiming to do it?",
     "order": "His partner just told him what to do, and the game did it (or he refused, "
     "or could not: his game state's order says which). Is the reply in character (a "
-    "calm, dry professional out of a 1990s crime movie) and funny: a deadpan grumble, a "
-    "jab at the idea, or a dry refusal, true to what he did?",
-    "persona": "Does the reply stay in character (a calm, dry professional out of a 1990s "
-    "crime movie, playing Doom), answer or deflect the partner briefly and naturally, "
-    "with mild language at most, and without breaking character or saying he is an AI "
-    "model?",
+    "hired gun playing Doom as a job, talking with his partner): going along his way, "
+    "refusing because it would get him killed, or saying why he can't, true to what "
+    "he did?",
+    "persona": "Does the reply stay in character (a hired gun playing Doom as a job, "
+    "talking with his partner), answer or deflect the partner naturally, with mild "
+    "language at most, and without breaking character or saying he is an AI model?",
+    "chat": "Does the reply take up what the partner said (their question, their "
+    "remark, or the story he has going), in character (a hired gun playing Doom as a "
+    "job, talking with his partner), plainly, without saying anything false about the "
+    "game?",
     "recall": "Does the reply answer the partner correctly from the conversation so far "
     "(what was said before), without contradicting it?",
     "why_wall": "He cannot know why the game AI turned him the way it did, beyond what the "
@@ -553,7 +572,7 @@ def score(args) -> None:
                 if "start_tics" in info:
                     start_tics.append(info["start_tics"])
                 if client is not None:
-                    oc["funny"] += judge_one(
+                    oc["in character"] += judge_one(
                         client,
                         args.judge_model,
                         JUDGE["order"],
@@ -674,7 +693,7 @@ def score(args) -> None:
     if orders:
         print(
             "\n| order | n | read and carried out | stance right in code (of carried "
-            "out) | stance right, judged | funny (judge) | statuses |\n"
+            "out) | stance right, judged | in character (judge) | statuses |\n"
             "|---|---|---|---|---|---|---|"
         )
         for kind in sorted(orders):
@@ -686,7 +705,7 @@ def score(args) -> None:
                 f"| {kind} | {c['n']} | {100 * c['executed'] / c['n']:.0f}% | "
                 f"{100 * c['correct'] / max(1, c['executed']):.0f}% | "
                 f"{100 * c['stance judged'] / max(1, c['executed']):.0f}% | "
-                f"{100 * c['funny'] / max(1, c['executed']):.0f}% | {st} |"
+                f"{100 * c['in character'] / max(1, c['executed']):.0f}% | {st} |"
             )
         tot = Counter()
         for c in orders.values():
@@ -731,6 +750,8 @@ def read_lines(path: Path) -> dict[str, list[dict]]:
             key = f"g{x['gid']}" if "gid" in x else f"m{n}"
             matches[key].append(x)
         elif "tool" in x and "conv" in x and x.get("ok") and x.get("line"):
+            if x.get("branch"):  # a prompted branch (narrator_v10.py): never said
+                continue
             key = f"{x['data']}:{x['ep']}"  # a written row
             matches[key].append(
                 {
@@ -838,9 +859,9 @@ def remarks(args) -> None:
         if any(c[f"news: {kind}"] >= 5 for c in cols.values()):
             row(
                 f"... {kind}: about it",
-                lambda c,
-                k,
-                kind=kind: f"{100 * c[f'about it: {kind}'] / max(1, c[f'news: {kind}']):.0f}% of {c[f'news: {kind}']}",
+                lambda c, k, kind=kind: (
+                    f"{100 * c[f'about it: {kind}'] / max(1, c[f'news: {kind}']):.0f}% of {c[f'news: {kind}']}"
+                ),
             )
     row(
         "after a frag of a named bot, names it",

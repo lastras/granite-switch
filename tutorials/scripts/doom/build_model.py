@@ -43,7 +43,12 @@ import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from conversation import Conversation, narrator_ids
+from conversation import (
+    NARRATOR_SYSTEM_PROMPTS,
+    PROMPT_FILE,
+    Conversation,
+    narrator_ids,
+)
 from policy import ADAPTERS, NARRATOR, alora_invocation_ids
 
 DEFAULT_TARGETS = (
@@ -240,6 +245,7 @@ def verify_lines(pol, rows: list[dict]) -> dict:
                 r["tool"],
                 r["player"],
                 NARRATOR,
+                system=NARRATOR_SYSTEM_PROMPTS[r.get("system", "r9")],
             )
             + r["target_ids"]
             for r in chunk
@@ -458,6 +464,9 @@ def main() -> None:
         getattr(args, "asr_model", None),
         getattr(args, "asr_device", "cpu"),
     )
+    # The narrator's system prompt goes with the checkpoint (engine.py serves it).
+    if NARRATOR in adapters and (adapters[NARRATOR] / PROMPT_FILE).exists():
+        shutil.copy(adapters[NARRATOR] / PROMPT_FILE, args.out / PROMPT_FILE)
     print(f"\ncomposed {len(paths)} adapters ({', '.join(adapters)}) -> {args.out}")
 
 

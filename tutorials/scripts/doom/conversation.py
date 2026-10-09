@@ -6,7 +6,7 @@ chat of its own, in the OpenAI message format Granite's chat template renders,
 the game reaching him through a tool, ``get_game_state``, declared in the system
 turn (the template adds its tools block)::
 
-    system     {NARRATOR_SYSTEM_PROMPT} + the template's <tools>{GET_GAME_STATE}</tools>
+    system     {a NARRATOR_SYSTEM_PROMPTS prompt} + the template's <tools>{GET_GAME_STATE}</tools>
       per past exchange (the last CONV_EXCHANGES):
     user       who got you                                 <- his partner, if they spoke
     assistant  <tool_call>{"name": "get_game_state", "arguments": {}}</tool_call>
@@ -17,6 +17,11 @@ turn (the template adds its tools block)::
     assistant  <tool_call>{"name": "get_game_state", "arguments": {}}</tool_call>
     tool       {the whole state: talk.game_state}
     assistant  -> his line
+
+The system prompt is versioned (:data:`NARRATOR_SYSTEM_PROMPTS`): a narrator
+is trained and served on the one its data was written for (``r9``, or ``v10``,
+``narrator_v10.py``); a composed checkpoint records its key
+(:func:`system_of`).
 
 The harness writes every tool call; the model writes only his lines. A past
 exchange's tool output keeps that moment's time and what had happened since the
@@ -29,8 +34,9 @@ ammo, ...), so the only such numbers in the prompt are the current ones.
 at the last assistant header only, so the tool calls and outputs run on base
 weights). The dataset writer (``narrator_data.py``), training
 (``train_alora.py``) and live play (``engine.py``, ``record_video.py``) all
-build it here. This module imports nothing from the game: the writer runs in
-Mellea's environment, which has no ViZDoom.
+build it here; round 10's teacher reads it back (:func:`read`). This module
+imports nothing from the game: the writer runs in Mellea's environment, which
+has no ViZDoom.
 """
 
 from __future__ import annotations
@@ -49,7 +55,7 @@ CONV_EXCHANGES = 30
 STRETCH_GAP_S = 30.0
 TOOL_NAME = "get_game_state"
 
-NARRATOR_SYSTEM_PROMPT = (
+_R9_PROMPT = (
     "You are Granite, a calm, dry professional out of a 1990s crime movie, playing "
     "a Doom deathmatch against bots. Your partner sits next to you, watching your "
     "screen and talking to you. Your partner does not play, and the bots are not "
@@ -71,6 +77,76 @@ NARRATOR_SYSTEM_PROMPT = (
     "short line, in character, deadpan, mild language at most. Doom has no "
     "reloading."
 )
+# Round 10: the bots are people he knows (bots.cfg's cast tier): (name, who
+# they are to him, what he needles them about). Proposed by Inkling-Small
+# (narrator_v10.py cast), picked by a person.
+CAST = (
+    ("Gwen", "your sister", "she still thinks she can beat you at pool, and never has"),
+    ("Nora", "your old coach", "she makes you do warm-ups before every match"),
+    ("Milo", "your former partner", "he lost a bet and still owes you a case of beer"),
+    (
+        "Ted",
+        "your brother-in-law",
+        "he brings store-bought pies and claims he baked them",
+    ),
+    ("Hank", "your first boss", "he still calls you the kid"),
+    ("Vick", "your old roommate", "he hogs the bathroom mirror"),
+    (
+        "Lou",
+        "your fishing buddy",
+        "the fish in his stories gets bigger every time he tells them",
+    ),
+)
+CAST_TEXT = "; ".join(f"{n}, {who}: {needle}" for n, who, needle in CAST)
+# Round 10: the same facts and rules, without the one-short-deadpan-line form;
+# the bots are people he knows, and he talks with his partner about the match
+# and ribs them, in short bursts.
+_V10_PROMPT = (
+    "You are Granite, a hired gun, playing a Doom deathmatch against bots as a job. "
+    "Your partner of many years sits next to you, watching your screen and talking "
+    "with you. Your partner does not play, and the bots are not your partner. Before "
+    "you speak you call get_game_state: its result is the game itself telling you how "
+    "the match stands, and in it, you means you, the player. Take every fact you say "
+    "about the game from the latest result: names, numbers, weapons and what "
+    "happened. Earlier results in this conversation tell only what had just happened "
+    "then. When your partner asks about the game, answer first, exactly as the latest "
+    "result says (the name, the number, the weapon); when it does not say, say you "
+    "don't know. If your partner says something about the game that the result "
+    "contradicts, correct them. Your partner's words come as speech recognition "
+    "writes them: lower case, no punctuation, now and then a word misheard; read them "
+    "for what they most likely meant. Bots never take your weapons: when you die, you "
+    "respawn with a pistol. Say a number only when your partner asks for one. Your "
+    "partner can tell you what to do; order says what you were told and whether you "
+    "are doing it: never say you are doing what you refused or could not do. "
+    "Tonight's bots are people you know: " + CAST_TEXT + ". Talk with your partner "
+    "about the match and rib these people the way you always do, in short bursts. "
+    "Mild language at most. Doom has no reloading."
+)
+NARRATOR_SYSTEM_PROMPTS = {"r9": _R9_PROMPT, "v10": _V10_PROMPT}
+NARRATOR_SYSTEM_PROMPT = _R9_PROMPT  # the default: every narrator before round 10
+# A narrator's prompt key: in its training run and its composed checkpoint.
+PROMPT_FILE = "narrator_prompt.json"
+
+
+def _prompt_file(path) -> dict:
+    from pathlib import Path
+
+    f = Path(path) / PROMPT_FILE
+    return json.loads(f.read_text()) if f.exists() else {}
+
+
+def system_of(path) -> str:
+    """The narrator system prompt a training run or a composed checkpoint
+    (``path``) was made for: its :data:`PROMPT_FILE`'s key, else ``r9``."""
+    return NARRATOR_SYSTEM_PROMPTS[_prompt_file(path).get("system", "r9")]
+
+
+def idle_of(path, default: float) -> float:
+    """The talk clock's silence before he speaks unprompted that a narrator's
+    data was written with (:data:`PROMPT_FILE`'s ``idle_s``), else ``default``:
+    he is served on the clock he was trained on."""
+    return float(_prompt_file(path).get("idle_s", default))
+
 
 GET_GAME_STATE = {
     "type": "function",
@@ -181,13 +257,18 @@ def _checks(output: dict) -> list[dict]:
     ]
 
 
-def messages(conv: Conversation, state: dict, player: str | None = None) -> list[dict]:
-    """The narrator's chat in OpenAI messages, the system turn first: per past
-    exchange the partner's words (if any), the tool call and its short output,
-    and his line; then the partner's words now (or ``policy.AUDIO_MARKER``,
-    for speech the model transcribes itself), the call, and ``state`` (the
-    whole state, ``talk.game_state``)."""
-    out = [{"role": "system", "content": NARRATOR_SYSTEM_PROMPT}]
+def messages(
+    conv: Conversation,
+    state: dict,
+    player: str | None = None,
+    system: str = NARRATOR_SYSTEM_PROMPT,
+) -> list[dict]:
+    """The narrator's chat in OpenAI messages, the system turn (``system``)
+    first: per past exchange the partner's words (if any), the tool call and
+    its short output, and his line; then the partner's words now (or
+    ``policy.AUDIO_MARKER``, for speech the model transcribes itself), the
+    call, and ``state`` (the whole state, ``talk.game_state``)."""
+    out = [{"role": "system", "content": system}]
     for ex in conv:
         if ex.player:
             out.append({"role": "user", "content": ex.player})
@@ -198,16 +279,44 @@ def messages(conv: Conversation, state: dict, player: str | None = None) -> list
     return out + _checks(state)
 
 
+def read(msgs: list[dict]) -> tuple[str, Conversation, str | None, dict]:
+    """:func:`messages` read back: ``(system, conv, player, state)``. A past
+    exchange's tick is its tool output's time, to the second (all the chat
+    shows of it); ``messages(conv, state, player, system)`` gives ``msgs``
+    again. The narrator's teacher reads the turn this way, from the chat the
+    student reads."""
+    system, *past, _, now = msgs
+    player = past.pop()["content"] if past and past[-1]["role"] == "user" else None
+    exchanges, said = [], None
+    while past:
+        m = past.pop(0)
+        if m["role"] == "user":
+            said = m["content"]
+            continue
+        out, line = json.loads(past.pop(0)["content"]), past.pop(0)["content"]
+        mins, secs = out["time"].split(":")
+        tick = TIC_HZ * (60 * int(mins) + int(secs))
+        exchanges.append(Exchange(tick, out["events"], said, line))
+        said = None
+    conv = Conversation(exchanges, max(CONV_EXCHANGES, len(exchanges)))
+    return system["content"], conv, player, json.loads(now["content"])
+
+
 def narrator_text(
-    tok, conv: Conversation, state: dict, player: str | None = None, adapter=None
+    tok,
+    conv: Conversation,
+    state: dict,
+    player: str | None = None,
+    adapter=None,
+    system: str = NARRATOR_SYSTEM_PROMPT,
 ) -> str:
     """The narrator's prompt as the chat template renders it, up to and
     including the assistant header he writes after (``adapter``: the
     narrator's name in a composed checkpoint, for its control token; None:
-    the base model, as PEFT trains it)."""
+    the base model, as PEFT trains it; ``system``: his system prompt)."""
     kw = {"adapter_name": adapter} if adapter else {}
     return tok.apply_chat_template(
-        messages(conv, state, player),
+        messages(conv, state, player, system),
         tools=[GET_GAME_STATE],
         add_generation_prompt=True,
         tokenize=False,
@@ -216,8 +325,13 @@ def narrator_text(
 
 
 def narrator_ids(
-    tok, conv: Conversation, state: dict, player: str | None = None, adapter=None
+    tok,
+    conv: Conversation,
+    state: dict,
+    player: str | None = None,
+    adapter=None,
+    system: str = NARRATOR_SYSTEM_PROMPT,
 ) -> list[int]:
     """:func:`narrator_text`, as token ids."""
-    text = narrator_text(tok, conv, state, player, adapter)
+    text = narrator_text(tok, conv, state, player, adapter, system)
     return tok(text, add_special_tokens=False).input_ids

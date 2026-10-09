@@ -1498,7 +1498,9 @@ def verify(probe: dict, reply: str, state: dict) -> tuple[str, str]:
                 low,
             )
         )
-        named = set(_named(reply, [n for n in board(state) if n != "you"]))
+        # The answer is its first sentence: a rib after it names others.
+        first = re.split(r"(?<=[.!?])\s+", reply.strip())[0]
+        named = set(_named(first, [n for n in board(state) if n != "you"]))
         got = named | ({"you"} if said_me else set())
         if t == "top_n":
             wrong = named - want
@@ -2066,7 +2068,15 @@ def claims(
         rf"\b({names_rx})\s+(?:has|had|with|using|uses|used|packing|carrying|holding|"
         rf"swinging)\s+(?:the|a|an|his|her|its|that|this)\s+(?:\w+\s+)?(?:{any_gun})",
     ):
-        m = re.search(rx, reply, re.I)
+        # Not a bot he killed with his own gun ("I fragged Leone with the shotgun").
+        m = next(
+            (
+                x
+                for x in re.finditer(rx, reply, re.I)
+                if not re.search(rf"{_KILL_VERBS}\s+$", reply[: x.start()], re.I)
+            ),
+            None,
+        )
         if m:
             who = next(n for n in in_match if n.lower() == m.group(1).lower())
             gun = (weapons_said(m.group(0)) or [None])[-1]
@@ -2211,19 +2221,22 @@ def claims(
             cats = [
                 c for c, rx in _CATS.items() if re.fullmatch(rf"(?:{rx})", toks[a - 1])
             ]
-        # A bot's number: its name just before ("Rambo's thirteen", "Rambo has 13").
+        # A bot's number: its name just before ("Rambo's thirteen", "Rambo has 13",
+        # "Rambo's died 13 times"): its frags, or its deaths if it counts deaths.
         lead = " ".join(toks[max(0, a - 3) : a])
         who = [
             x
             for x in in_match
             if re.search(
-                rf"\b{x.lower()}(?:'s)?(?: (?:has|had|is|with|at|on|got|sitting at|leads with))?$",
+                rf"\b{x.lower()}(?:'s)?(?: (?:has|had|is|with|at|on|got|sitting at|"
+                r"leads with|died|has died|had died|been killed))?$",
                 lead,
             )
         ]
         ok = set().union(*(allowed[c] for c in cats)) if cats else set()
         for x in who:
-            ok |= {bd[x], (state.get("killed_by") or {}).get(x)}
+            mine = bot_deaths(state).get(x) if "deaths" in cats else bd[x]
+            ok |= {mine, (state.get("killed_by") or {}).get(x)}
         if not cats and not who:
             ok = every
         if n not in ok:
@@ -2783,6 +2796,7 @@ def check(moments: Path | None = None) -> None:
         ("I got Rambo. Nice and clean.", False, told),
         ("MacGyver got me with the plasma rifle.", True, told),
         ("MacGyver got me with the chaingun.", False, told),
+        ("I fragged Leone with the shotgun.", True, told),
     ]
     # The bots' war: a kill of a bot, a feud and a bot on a tear, in the
     # recent events and the storylines.

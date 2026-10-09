@@ -72,7 +72,10 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
-from conversation import Conversation, Exchange, narrator_ids, narrator_text
+from conversation import Conversation, Exchange, narrator_ids, narrator_text, system_of
+
+# The most a spoken line samples (about 60 words: a riff or a story runs long).
+TALK_TOKENS = 96
 from doom_env import ACTIONS, WEAPON_SLOTS, Observation
 from expert import BEHAVIORS, Expert
 from history import History, now_prefix
@@ -1017,6 +1020,8 @@ class VLLMPolicy:
         )
         self.tok = self.llm.get_tokenizer()
         self.base_model = base_model
+        # The narrator's system prompt, as the checkpoint records it.
+        self.system = system_of(model)
         kit = prompt_kit(
             self.tok,
             base_model=base_model,
@@ -1126,16 +1131,19 @@ class VLLMPolicy:
             best, probs.get(best, 0.0), (time.perf_counter() - t0) * 1000, probs
         )
 
-    def talk_params(self, max_tokens: int = 40, temperature: float = 0.8, **kw):
-        """Sampling for one spoken line from the base model (no adapter).
+    def talk_params(
+        self, max_tokens: int = TALK_TOKENS, temperature: float = 0.8, **kw
+    ):
+        """Sampling for one spoken line, as live play samples it.
 
         Temperature only: top-p sends sampling to a FlashInfer kernel that
-        autotunes on first use per shape, a multi-second stall mid-match.
+        autotunes on first use per shape, a multi-second stall mid-match. No
+        words are banned: what he says is the model's.
         """
         from vllm import SamplingParams
 
-        # "Player:": it would write the watcher next. No reloading in Doom.
-        opts = {"stop": ["\n", "Player:"], "bad_words": ["reload", "Another"], **kw}
+        # "Player:": it would write the watcher next.
+        opts = {"stop": ["\n", "Player:"], **kw}
         return SamplingParams(max_tokens=max_tokens, temperature=temperature, **opts)
 
     def talk(
@@ -1175,7 +1183,10 @@ class VLLMPolicy:
         watching just said), in one engine call: the narrator's own prompt
         (:func:`conversation.narrator_ids`), written by the narrator adapter if
         the checkpoint has one, else by the base model."""
-        prompts = [narrator_ids(self.tok, c, s, w, self.talker) for c, s, w in talks]
+        prompts = [
+            narrator_ids(self.tok, c, s, w, self.talker, self.system)
+            for c, s, w in talks
+        ]
         return self._lines(prompts, **kw)
 
     def _lines(self, prompts: list[list[int]], **kw) -> list[str]:

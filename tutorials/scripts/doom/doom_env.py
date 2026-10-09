@@ -72,6 +72,8 @@ BOT_SETS: dict[str, tuple[str, ...]] = {
         "Leone",
     ),
     "hard": ("Viper", "Cobra", "Mamba", "Python", "Taipan", "Krait", "Adder"),
+    # Round 10: the people Granite knows (conversation.CAST), at default skill.
+    "cast": ("Gwen", "Nora", "Milo", "Ted", "Hank", "Vick", "Lou"),
     "perfect": ("Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf"),
 }
 PLAYER_NAME = "AI"

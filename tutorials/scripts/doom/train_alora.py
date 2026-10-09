@@ -24,7 +24,9 @@ Adapters and their labels (rows from ``collect.py``):
   own prompt: its conversation with the partner, the game reaching him as the
   output of a ``get_game_state`` tool call, no game log
   (:func:`load_narration_rows`); the loss is cross-entropy on the line's
-  tokens and the end of the turn.
+  tokens and the end of the turn. Round 10's rows are compile records
+  (``narrator_v10.py``, ``--records``): each trains on the prompt it records,
+  the compiled view the student reads (:func:`load_record_rows`).
 
 ``--kind lora`` trains a plain LoRA on the same data and prompts: the baseline
 the aLoRA is compared against. ``--kind sr`` trains a Shadow Residual adapter
@@ -67,7 +69,13 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from conversation import CONV_EXCHANGES, Conversation, narrator_ids
+from conversation import (
+    CONV_EXCHANGES,
+    NARRATOR_SYSTEM_PROMPTS,
+    PROMPT_FILE,
+    Conversation,
+    narrator_ids,
+)
 from doom_env import TIC_HZ
 from history import PROBE_WORDS, History, said_entry
 from policy import (
@@ -261,8 +269,10 @@ def load_narration_rows(
     (``tool``). The prompt is :func:`conversation.narrator_ids` in its
     base-model form (the chat template, the tool declared, every call and
     output in place; PEFT's aLoRA activates at its last assistant header); the
-    target is the line and the end of the turn. ``extra``: rows of ``rft.py``
-    (several lines per prompt may pass), marked so they only ever train."""
+    target is the line and the end of the turn. The system prompt is the one
+    the row was written for (``system``: ``r9`` unless it says, ``v10`` for
+    ``narrator_v10.py``'s rows). ``extra``: rows of ``rft.py`` (several lines
+    per prompt may pass), marked so they only ever train."""
     eot = tok.encode(_EOT, add_special_tokens=False)
     out = []
     for p in paths:
@@ -294,9 +304,48 @@ def load_narration_rows(
                 "prev": r.get("prev", []),
                 "line": line,
                 "extra": extra,
+                "system": r.get("system", "r9"),
+                "idle_s": r.get("idle_s"),  # the talk clock it was written on
             }
-            ids = narrator_ids(tok, conv, r["tool"], player)
+            system = NARRATOR_SYSTEM_PROMPTS[meta["system"]]
+            ids = narrator_ids(tok, conv, r["tool"], player, system=system)
             target = tok.encode(line, add_special_tokens=False) + eot
+            out.append((None, 0, ids, target, key, meta))
+    return out
+
+
+# What a compile record keeps for evaluation, as load_narration_rows' meta.
+RECORD_META = ("t", "conv", "tool", "player", "utype", "probe", "moment", "order")
+RECORD_META += ("topic", "prev", "system", "idle_s")
+
+
+def load_record_rows(paths: list[Path], tok) -> list:
+    """Compile records (``narrator_v10.py``'s rows, ``--records``) as
+    :func:`load_narration_rows`' tuples, one per record kept (its ``score``).
+
+    The prompt is the record's own: the chat template on its ``prompt`` (the
+    compiled view: its messages and tools, the generation prompt added), what
+    the student reads; the target is its ``completion`` and the end of the
+    turn. The meta is the row's, as :func:`load_narration_rows` keeps it."""
+    eot = tok.encode(_EOT, add_special_tokens=False)
+    out = []
+    for p in paths:
+        for x in open(p):
+            r = json.loads(x)
+            if not (r["score"]["keep"] and r["completion"]):
+                continue
+            key = (r["data"], r["style"], r["ep"])
+            text = tok.apply_chat_template(
+                r["prompt"]["messages"],
+                tools=r["prompt"]["tools"],
+                add_generation_prompt=True,
+                tokenize=False,
+            )
+            ids = tok(text, add_special_tokens=False).input_ids
+            target = tok.encode(r["completion"], add_special_tokens=False) + eot
+            meta = {"data": key[0], "style": key[1], "ep": key[2]}
+            meta |= {k: r.get(k) for k in RECORD_META}
+            meta |= {"line": r["completion"], "extra": False}
             out.append((None, 0, ids, target, key, meta))
     return out
 
@@ -399,8 +448,10 @@ def seq_logps(model, prompts, targets, pad_id, device):
 
 
 def load_pairs(paths: list[Path], tok, conv_n: int = CONV_EXCHANGES) -> list[tuple]:
-    """DPO pairs (rft.py --pairs) as (prompt ids, chosen ids, rejected ids, why):
-    the narrator's base-form prompt, each line and the end of the turn."""
+    """DPO pairs (rft.py --pairs, narrator_v10.py pairs) as (prompt ids, chosen
+    ids, rejected ids, why, match key): the narrator's base-form prompt, each
+    line and the end of the turn; the match, so a held-out match's pairs stay
+    out of training."""
     eot = tok.encode(_EOT, add_special_tokens=False)
 
     def enc(line: str) -> list[int]:
@@ -415,16 +466,27 @@ def load_pairs(paths: list[Path], tok, conv_n: int = CONV_EXCHANGES) -> list[tup
                 if r["conv"]
                 else Conversation()
             )
-            ids = narrator_ids(tok, conv, r["tool"], r.get("player"))
-            out.append((ids, enc(r["chosen"]), enc(r["rejected"]), r.get("why")))
+            system = NARRATOR_SYSTEM_PROMPTS[r.get("system", "r9")]
+            ids = narrator_ids(tok, conv, r["tool"], r.get("player"), system=system)
+            key = (r.get("data"), r.get("style"), r.get("ep"))
+            out.append((ids, enc(r["chosen"]), enc(r["rejected"]), r.get("why"), key))
     return out
 
 
 def generate_lines(
-    model, tok, prompts, pad_id, device, *, adapter=True, temperature=0.8, batch=8
+    model,
+    tok,
+    prompts,
+    pad_id,
+    device,
+    *,
+    adapter=True,
+    temperature=0.8,
+    batch=8,
+    max_new_tokens=96,
 ) -> list[str]:
     """One sampled line per prompt, as the demo samples talk (temperature
-    only, at most 32 new tokens, up to the end of the turn or a newline);
+    only, at most ``max_new_tokens``, up to the end of the turn or a newline);
     ``adapter=False`` gives the base model's line for the same prompt."""
     import torch
 
@@ -443,7 +505,7 @@ def generate_lines(
             g = model.generate(
                 input_ids=ids.to(device),
                 attention_mask=mask.to(device),
-                max_new_tokens=32,
+                max_new_tokens=max_new_tokens,
                 do_sample=temperature > 0,
                 temperature=temperature if temperature > 0 else None,
                 top_k=0,
@@ -566,6 +628,13 @@ def main() -> None:
         default=CONV_EXCHANGES,
         help="Narrator: exchanges its conversation keeps (as doom_live.py serves it)",
     )
+    ap.add_argument(
+        "--records",
+        action="store_true",
+        help="Narrator: --data and --eval-data are compile records (narrator_v10.py), "
+        "each trained on its own prompt (load_record_rows; --conv-exchanges does "
+        "not apply)",
+    )
     ap.add_argument("--eval-data", type=Path, nargs="*", help="Explicit held-out set")
     ap.add_argument(
         "--styles",
@@ -676,12 +745,14 @@ def main() -> None:
     elif lines:
         label_ids = {}
         pb = None  # the narrator's prompts are rendered by the chat template
-        rows = load_narration_rows(args.data, tok, args.conv_exchanges)
-        val_rows = (
-            load_narration_rows(args.eval_data, tok, args.conv_exchanges)
-            if args.eval_data
-            else None
-        )
+
+        def load(paths):
+            if args.records:  # each on its own prompt, as the student reads it
+                return load_record_rows(paths, tok)
+            return load_narration_rows(paths, tok, args.conv_exchanges)
+
+        rows = load(args.data)
+        val_rows = load(args.eval_data) if args.eval_data else None
     else:
         label_ids = output_token_ids(tok, VOCAB[a])
         pb = PromptBuilder(tok, system_prompt(args.layout))
@@ -933,9 +1004,11 @@ def main() -> None:
     warm = max(1, total // 20)
     sched = torch.optim.lr_scheduler.LambdaLR(
         opt,
-        lambda s: min(1.0, (s + 1) / warm)
-        * 0.5
-        * (1 + math.cos(math.pi * min(1.0, s / total))),
+        lambda s: (
+            min(1.0, (s + 1) / warm)
+            * 0.5
+            * (1 + math.cos(math.pi * min(1.0, s / total)))
+        ),
     )
     step, t0, run_loss, history = 0, time.time(), 0.0, []
     train_curve: list[dict] = []  # training loss, every 50 steps
@@ -947,6 +1020,8 @@ def main() -> None:
     pairs = (
         load_pairs(args.pairs, tok, args.conv_exchanges) if lines and args.pairs else []
     )
+    held = {r[4] for r in val_rows}
+    pairs = [p for p in pairs if p[4] not in held]  # a held-out match: never trained on
     dpo_ref = None
     if pairs:
         args.out.mkdir(parents=True, exist_ok=True)
@@ -1224,7 +1299,7 @@ def main() -> None:
             if lines:
                 meta = r[5]
                 row = {  # the narrator's prompt, to rebuild (build_model.py verify)
-                    **{k: meta[k] for k in ("conv", "t", "tool", "player")},
+                    **{k: meta[k] for k in ("conv", "t", "tool", "player", "system")},
                     "line": meta["line"],
                     "target_ids": r[3],
                     "peft_ids": q[0],
@@ -1277,6 +1352,13 @@ def main() -> None:
         "best": best if args.keep_best else None,
     }
     (args.out / "metrics.json").write_text(json.dumps(metrics, indent=1))
+    if lines:  # the narrator's system prompt and talk clock, for compose and serving
+        keys = {(r[5]["system"], r[5]["idle_s"]) for r in train_rows}
+        if len(keys) > 1:
+            raise SystemExit(f"narrator rows written for several prompts: {keys}")
+        system, idle_s = keys.pop()
+        meta = {"system": system, **({"idle_s": idle_s} if idle_s else {})}
+        (args.out / PROMPT_FILE).write_text(json.dumps(meta))
     ref = (
         f"ppl {ev['ppl']:.3f}, first-token acc {ev['first_token_acc']:.4f}"
         if lines

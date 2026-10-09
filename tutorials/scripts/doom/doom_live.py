@@ -93,12 +93,12 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from conversation import CONV_EXCHANGES, Conversation
+from conversation import CONV_EXCHANGES, Conversation, idle_of
 from doom_env import BOT_SETS, TIC_HZ
 from engine import AUDIO_HZ, GAME_HZ, AsyncPolicy, Game, SharedFrame, SharedSound
 from expert import BEHAVIORS
 from policy import ARMS, CRITIC, NARRATOR, ORDERS, WARM_STATE
-from talk import sound_tag
+from talk import IDLE_S, sound_tag
 
 TTS_AUTHKEY = b"granite-switch-doom-tts"  # voice_video.TTS_AUTHKEY
 MODELS = ["base", *BEHAVIORS, ARMS, CRITIC, ORDERS, NARRATOR]
@@ -643,7 +643,8 @@ class Live:
             "sound": self.sound.name if self.sound else None,
         }
         self.seed += 1
-        g = Game(0, spec, self.pol, a.idle_s, autostart=start, conv_n=a.conv_exchanges)
+        idle = a.idle_s or idle_of(a.model, IDLE_S)  # the clock he was trained on
+        g = Game(0, spec, self.pol, idle, autostart=start, conv_n=a.conv_exchanges)
         g.on_decision, g.on_line, g.on_read = (
             self.on_decision,
             self.on_line,
@@ -1202,7 +1203,11 @@ def main() -> None:
     s.add_argument("--bots", default="default")
     s.add_argument("--n-bots", type=int, default=7)
     s.add_argument("--seed", type=int, default=5)
-    s.add_argument("--idle-s", type=float, default=12.0, help="Silence before a remark")
+    s.add_argument(
+        "--idle-s",
+        type=float,
+        help="Silence before a remark (default: the checkpoint's)",
+    )
     s.add_argument(
         "--base-talk",
         action="store_true",

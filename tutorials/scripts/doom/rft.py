@@ -138,7 +138,7 @@ def main() -> None:
         warmup=0,
         gpu_memory_utilization=args.gpu_mem,
     )
-    sp = pol.talk_params(max_tokens=32, temperature=args.temperature, n=args.n)
+    sp = pol.talk_params(temperature=args.temperature, n=args.n)
     judge = None
     if args.judge_url:
         from openai import OpenAI
@@ -208,7 +208,8 @@ def main() -> None:
         if not batch:
             break
         prompts = [
-            narrator_ids(pol.tok, c, m["tool"], p, NARRATOR) for _, m, c, _, p in batch
+            narrator_ids(pol.tok, c, m["tool"], p, NARRATOR, pol.system)
+            for _, m, c, _, p in batch
         ]
         outs = pol.run(prompts, [sp] * len(prompts))
         for (run, m, conv, probe, player), o in zip(batch, outs):

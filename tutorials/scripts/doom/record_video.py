@@ -39,7 +39,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from conversation import Conversation, Exchange
+from conversation import Conversation, Exchange, idle_of
 from doom_env import AUDIO_HZ, MATCH_TICS, TIC_HZ, TIC_MS, DoomEnv
 from expert import BEHAVIORS, PLAN_EVERY_TICS
 from history import History
@@ -90,7 +90,9 @@ def main() -> None:
         help="The player talks on its own: after salient events and silences",
     )
     ap.add_argument(
-        "--idle-s", type=float, default=IDLE_S, help="Silence before a remark"
+        "--idle-s",
+        type=float,
+        help="Silence before a remark (default: the checkpoint's)",
     )
     ap.add_argument(
         "--player",
@@ -145,7 +147,8 @@ def main() -> None:
     tracker = Tracker(match_s=MATCH_TICS / TIC_HZ)  # the game state's facts
     log, last_ex = EventLog(), None  # the match's events; his last exchange's tick
     fired = tracker.update(obs)
-    clock = TalkClock(args.idle_s) if args.talk else None
+    idle = args.idle_s or (idle_of(args.model, IDLE_S) if args.model else IDLE_S)
+    clock = TalkClock(idle) if args.talk else None
     partner = EventPartner(random.Random(args.seed)) if args.partner_events else None
     # Who writes spoken lines: the narrator adapter, or the base model without one.
     talker = getattr(pol, "talker", None) or "base"

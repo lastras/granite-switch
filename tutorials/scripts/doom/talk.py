@@ -1080,24 +1080,27 @@ def pick_runs(moments: list[dict], n: int, runs: int) -> list[dict]:
     return [m for s in starts for m in moments[s : s + size]]
 
 
-def match_moments(
+def live_moments(
     entries: list[str],
     rows: list[dict],
     idle_s: float = IDLE_S,
-    limit: int = 0,
     style: str | None = None,
-) -> list[dict]:
-    """The moments a live game speaks at, in order: the :class:`TalkClock`
-    over the match's rows (``limit``: the first so many, 0 for all), and every
-    order the partner gave (collect.py ``--orders``): his reply comes on the
-    first live tic the order's status is known, as the live game waits for
-    it (cue ``partner``, with ``order``: the order, its status and the
-    partner's words). ``rows``: one match's collect.py rows (tick, history
-    length, state, tracker facts); each moment carries its cue, the tool's
-    output (``tool``, :func:`game_state`), what happened since the moment
-    before (``moment``, :func:`moment_events`), the brief, the facts and the
-    last log lines."""
-    talk, log, out, prev, last = TalkClock(idle_s), EventLog(), [], -1, None
+):
+    """The moments a live game speaks at, in order, as a generator: the
+    :class:`TalkClock` over the match's rows, and every order the partner gave
+    (collect.py ``--orders``): his reply comes on the first live tic the
+    order's status is known, as the live game waits for it (cue ``partner``,
+    with ``order``: the order, its status and the partner's words). ``rows``:
+    one match's collect.py rows (tick, history length, state, tracker facts);
+    each moment carries its cue, the tool's output (``tool``,
+    :func:`game_state`), what happened since the moment before (``moment``,
+    :func:`moment_events`), the brief, the facts and the last log lines.
+
+    Send it the line said at each moment (``send(line)``, or ``send((line,
+    reply))`` when he answered his partner, who then gets room to go on): the
+    clock then counts the time it takes to say, as live play does. Iterating
+    sends None: a line not written yet, taken to last :data:`SPEAK_S`."""
+    talk, log, prev, last = TalkClock(idle_s), EventLog(), -1, None
     for r in sorted(rows, key=lambda r: r["t"]):
         news = r["facts"]["news"]
         log.add(news)
@@ -1114,21 +1117,35 @@ def match_moments(
             }
         elif n < 5 or (cue := talk.due(r["t"])) is None:
             continue
-        out.append(
-            {
-                "t": r["t"],
-                "hist_n": n,
-                "state": r["state"],
-                **cue,
-                "tool": game_state(r["state"], r["facts"], log.events, style),
-                "moment": moment_events(log.since(last, r["t"])),
-                "facts": r["facts"],
-                "brief": brief(entries[:n], r["state"], r["facts"]),
-                "recent": [e.strip() for e in entries[max(0, n - 3) : n]],
-            }
-        )
-        talk.said(r["t"], reply=cue["cue"] == "partner")  # its line: not written yet
+        said = yield {
+            "t": r["t"],
+            "hist_n": n,
+            "state": r["state"],
+            **cue,
+            "tool": game_state(r["state"], r["facts"], log.events, style),
+            "moment": moment_events(log.since(last, r["t"])),
+            "facts": r["facts"],
+            "brief": brief(entries[:n], r["state"], r["facts"]),
+            "recent": [e.strip() for e in entries[max(0, n - 3) : n]],
+        }
+        line, reply = said if isinstance(said, tuple) else (said, False)
+        talk.said(r["t"], line, reply=reply or cue["cue"] == "partner")
         last = r["t"]
+
+
+def match_moments(
+    entries: list[str],
+    rows: list[dict],
+    idle_s: float = IDLE_S,
+    limit: int = 0,
+    style: str | None = None,
+) -> list[dict]:
+    """:func:`live_moments` with no lines yet (each taken to last
+    :data:`SPEAK_S`): the speaking moments of a recorded match, precomputed
+    (``limit``: the first so many, 0 for all)."""
+    out = []
+    for m in live_moments(entries, rows, idle_s, style):
+        out.append(m)
         if limit and len(out) >= limit:
             break
     return out

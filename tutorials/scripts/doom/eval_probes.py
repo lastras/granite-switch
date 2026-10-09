@@ -149,7 +149,7 @@ def run(args) -> dict:
     )
     talkers = {"narrator": NARRATOR, "base": None}
     talkers = {k: v for k, v in talkers.items() if k in args.talkers.split(",")}
-    sp = pol.talk_params(max_tokens=32, temperature=args.temperature)
+    sp = pol.talk_params(temperature=args.temperature)
     runs = [
         {
             "mi": mi,
@@ -176,7 +176,9 @@ def run(args) -> dict:
             if probe is not None:
                 asked[run["who"]][probe["type"]] += 1
             adapter = talkers[run["who"]]
-            prompts.append(narrator_ids(pol.tok, conv, m["tool"], player, adapter))
+            prompts.append(
+                narrator_ids(pol.tok, conv, m["tool"], player, adapter, pol.system)
+            )
             meta.append(("main", run, m, conv, probe, player))
             # Side probes: the types this talker was asked least, not fed back.
             types = sorted(
@@ -186,7 +188,9 @@ def run(args) -> dict:
             for t in types[: args.side]:
                 p = probes.make(t, m["tool"], rng, "test")
                 prompts.append(
-                    narrator_ids(pol.tok, conv, m["tool"], p["text"], adapter)
+                    narrator_ids(
+                        pol.tok, conv, m["tool"], p["text"], adapter, pol.system
+                    )
                 )
                 meta.append(("side", run, m, conv, p, p["text"]))
                 asked[run["who"]][t] += 1
