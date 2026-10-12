@@ -38,16 +38,19 @@ reconnect):
 
 * down: ``b"J" + JPEG`` (a frame); ``b"A" + line id (4 bytes) + int16 PCM`` (a
   piece of his line); ``b"S" + int16 PCM`` (the game's own sound, mono at the
-  hello's ``sfx_hz``, every 40 ms; ``--no-sound``: none); JSON ``{"type":
+  hello's ``sfx_hz``, every 40 ms, only with ``--game-sound``); JSON ``{"type":
   "hello" | "line" | "heard" | "audio" | "audio_end" | "event" | "latency" |
   "quality" | "pong" | "replaced", ...}`` (the hello carries the page's
   schema; a line, the game state he answered from; events: ``died``, with the
   killer; ``frag``; ``match_over``; quality: the stream stepped down or up),
   and in the client view ``{"type": "tics" | "panel" | "match_start", ...}``
   (:func:`tic_column`, :func:`panel_fields`).
-* up: ``b"U" + int16 PCM, 16 kHz`` (one utterance); JSON ``{"type":
-  "speaking"}`` (you started: he holds his remarks and drops what he had not
-  said yet), ``{"type": "reset"}`` (a new match), ``{"type": "ack"}`` (a frame
+* up: ``b"U" + int16 PCM, 16 kHz`` (one utterance); ``b"T" + int16 PCM``
+  (what you said so far, at a pause: answered at once, his reply held), then
+  ``{"type": "confirm"}`` (you had finished: the held reply is played) or
+  ``{"type": "resumed"}`` (you went on: it is dropped; the whole utterance
+  comes again); JSON ``{"type": "speaking"}`` (you started: he holds his
+  remarks and drops what he had not said yet), ``{"type": "reset"}`` (a new match), ``{"type": "ack"}`` (a frame
   arrived: the next may be sent; ``{"type": "acking"}`` first says acks will
   come), ``{"type": "ping", "t": ...}`` (answered with a pong carrying ``t``).
 
@@ -481,13 +484,16 @@ class Live:
         )
         self.renderer.start()
         # The game's sound, as the worker writes it every tic, and how far it was sent.
-        self.sound = None if args.no_sound else SharedSound()
+        self.sound = SharedSound() if args.game_sound else None
         self.sound_mark = 0
         self.ws = None
         self.game: Game | None = None
         self.seed = args.seed
         self.line_id = 0
         self.cancelled: set[int] = set()
+        # Answers to words heard at a pause, voiced and held until you are known to
+        # have finished: the engine's tentative id -> (line id, released when said).
+        self.held: dict[int, tuple[int, asyncio.Event]] = {}
         self.said_at: deque[float] = deque()  # when each utterance arrived
         self.last_death, self.frags = None, 0  # for the client's events
         self.rng = random.Random(args.seed)  # which lines get a sound tag
@@ -502,7 +508,14 @@ class Live:
         self._panel: str | None = None
         self._tele_sending = False
         # What happened in the last stats window (see stats()).
-        self.n = {"frames": 0, "frame_kb": 0, "tele_b": 0, "voiced": 0, "heard": 0}
+        self.n = {
+            "frames": 0,
+            "frame_kb": 0,
+            "tele_b": 0,
+            "voiced": 0,
+            "heard": 0,
+            "retracted": 0,
+        }
         self.ms: list[float] = []
         self._tasks: set[asyncio.Task] = set()
         self._left = 0  # how many times the last client has left
@@ -629,6 +642,10 @@ class Live:
             # Nothing of the old match is said any more: not a line it is still
             # writing, nor the queued lines his voice has not reached.
             old.on_line = old.on_decision = old.on_read = None
+            old.on_confirm = old.on_retract = None
+            for _, gate in self.held.values():
+                gate.set()  # its waiters see it cancelled
+            self.held.clear()
             self.cancelled.update(range(1, self.line_id + 1))
             self.said_at.clear()
             if not old.done:
@@ -650,6 +667,7 @@ class Live:
             self.on_line,
             self.on_read,
         )
+        g.on_confirm, g.on_retract = self.on_confirm, self.on_retract
         self.game, self.last_death, self.frags = g, None, 0
         self.record(
             {
@@ -756,20 +774,58 @@ class Live:
             print(f"  order {order['kind']!r} from {order['heard']!r}", flush=True)
 
     def on_line(self, x: dict) -> None:
-        keys = ("tick", "cue", "heard", "order", "line", "ms", "state", "moment")
-        self.record({"type": "line", **{k: x[k] for k in (*keys, "brief")}})
         self.line_id += 1
         lid = self.line_id
-        if x["heard"]:
-            self.tell(("cap", x["tick"], "player", x["heard"]))
-        self.tell(("cap", x["tick"], "bot", x["line"]))
+        gate = None
+        if x.get("tentative"):  # an answer at a pause: voiced, held until confirmed
+            gate = asyncio.Event()
+            self.held[x["tentative"]] = (lid, gate)
+        else:
+            self._said(x)
         since = None
         if x["cue"] == "partner" and self.said_at:
             since = time.perf_counter() - self.said_at.popleft()
-        self.spawn(self._speak(lid, x, since))
+        self.spawn(self._speak(lid, x, since, gate))
 
-    async def _speak(self, lid: int, x: dict, since: float | None) -> None:
+    def _said(self, x: dict) -> None:
+        """A line he says: into the log and the captions."""
+        keys = ("tick", "cue", "heard", "order", "line", "ms", "state", "moment")
+        self.record({"type": "line", **{k: x[k] for k in (*keys, "brief")}})
+        if x["heard"]:
+            self.tell(("cap", x["tick"], "player", x["heard"]))
+        self.tell(("cap", x["tick"], "bot", x["line"]))
+
+    def on_confirm(self, tid: int) -> None:
+        """You had finished: the held answer is played."""
+        _, gate = self.held.pop(tid, (None, None))
+        if gate is not None:
+            gate.set()
+
+    def on_retract(self, tid: int) -> None:
+        """You went on: the held answer is dropped, never played."""
+        lid, gate = self.held.pop(tid, (None, None))
+        if lid is not None:
+            self.cancelled.add(lid)
+            gate.set()
+        self.n["retracted"] += 1
+
+    async def _speak(
+        self, lid: int, x: dict, since: float | None, gate: asyncio.Event | None = None
+    ) -> None:
         t0 = time.perf_counter()
+        parts = _SENTENCE.split(
+            sound_tag(x["brief"], self.rng) + x["line"]
+            if self.voice is not None and self.args.tts == "turbo"
+            else x["line"]
+        )
+        first_pcm = None
+        if gate is not None:  # held: voice its first piece meanwhile, then wait
+            if self.voice is not None:
+                first_pcm = await self.voice.say(parts[0])
+            await gate.wait()
+            if lid in self.cancelled:
+                return
+            self._said(x)
         await self.send(
             {
                 "type": "line",
@@ -794,16 +850,14 @@ class Live:
         )
         if self.voice is None:
             return
-        text = (
-            sound_tag(x["brief"], self.rng) + x["line"]
-            if self.args.tts == "turbo"
-            else x["line"]
-        )
         first = None
-        for part in _SENTENCE.split(text):
+        for k, part in enumerate(parts):
             if lid in self.cancelled:
                 break
-            pcm, sr, _ = await self.voice.say(part)
+            if k == 0 and first_pcm is not None:
+                pcm, sr, _ = first_pcm
+            else:
+                pcm, sr, _ = await self.voice.say(part)
             self.n["voiced"] += 1
             if lid in self.cancelled:
                 break
@@ -875,17 +929,24 @@ class Live:
         else:
             self.game.start()
         async for msg in ws:
-            if msg.type == WSMsgType.BINARY and msg.data[:1] == b"U":
+            if msg.type == WSMsgType.BINARY and msg.data[:1] in (b"U", b"T"):
                 pcm = np.frombuffer(msg.data[1:], np.int16).astype(np.float32) / 32768
                 if len(pcm) >= AUDIO_HZ // 5 and self.game is not None:
                     self.said_at.append(time.perf_counter())
                     self.n["heard"] += 1
-                    self.game.player_said(pcm)
+                    self.game.player_said(pcm, tentative=msg.data[:1] == b"T")
             elif msg.type == WSMsgType.TEXT:
                 m = json.loads(msg.data)
                 if m.get("type") == "speaking" and self.game is not None:
                     self.game.hush(True)
                     self.cancelled.update(range(1, self.line_id + 1))
+                elif m.get("type") == "confirm" and self.game is not None:
+                    self.game.confirm()  # you had finished: his held answer plays
+                elif m.get("type") == "resumed" and self.game is not None:
+                    # You went on: his held answer is dropped (and, if it was not
+                    # written yet, the time those words arrived with it).
+                    if self.game.retract() is False and self.said_at:
+                        self.said_at.pop()
                 elif m.get("type") == "reset":
                     await self.new_game()
                 elif m.get("type") == "ack":  # a frame arrived
@@ -1229,7 +1290,12 @@ def main() -> None:
     s.add_argument(
         "--fps", type=float, default=20.0, help="Stream frame rate (on a good link)"
     )
-    s.add_argument("--no-sound", action="store_true", help="Not the game's own sound")
+    s.add_argument(
+        "--game-sound",
+        action="store_true",
+        help="Also stream the game's own sound (off by default: even mixed low and "
+        "ducked, its effects reach the microphone and the ASR hears them)",
+    )
     s.add_argument(
         "--view",
         choices=VIEWS,

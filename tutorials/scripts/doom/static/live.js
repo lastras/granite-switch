@@ -42,6 +42,9 @@ async function start(withMic) {
       .catch(() => ({ iceServers: [] }));
     pc = new RTCPeerConnection(ice);
     if (withMic) {
+      // Made in the click (a browser starts an audio context only on a gesture): what
+      // times the replies you hear (earStart).
+      ear.a = new AudioContext();
       // The browser's own echo cancellation, noise suppression and gain.
       mic = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -71,6 +74,7 @@ async function start(withMic) {
     pc.ontrack = (e) => {
       remote.addTrack(e.track);
       $("screen").play().catch(() => {});
+      if (e.track.kind === "audio" && mic) earStart(mic, new MediaStream([e.track]));
     };
     pc.onconnectionstatechange = () => put("status", pc.connectionState);
     await pc.setLocalDescription(await pc.createOffer());
@@ -114,7 +118,10 @@ function on(m) {
     case "panel":
       return S && panel(m);
     case "line":
-      if (m.heard) said("you", m.heard);
+      if (m.heard) {
+        said("you", m.heard);
+        earReply(); // his answer to you: the next sound of his is it
+      }
       return said("him", m.line);
     case "match_start":
       return newMatch("New match");
@@ -437,8 +444,88 @@ function said(who, text) {
 
 const note = (text) => append(entry("note", "", text));
 
+// ── What you hear: when his reply reaches your ears, and when he stops ────────
+// Timed here, from the levels of your microphone and of his incoming voice (each sampled
+// every 20 ms): from your last word to his answer becoming audible (the first sound of his
+// after the line that answers you arrives), and from your first word over him to his voice
+// going quiet. What you hear, to within a few tens of milliseconds (level-based; with
+// speakers, the echo canceller's leftovers of his voice can read as you).
+const EAR = { youDb: -42, voiceDb: -50, quietMs: 250, hush: 5000 };
+const ear = { a: null, you: null, voice: null, buf: null };
+const st = { loud: 0, start: 0, end: 0, speaking: false, his: false, hisQuiet: 0, expect: 0, over: 0 };
+
+function earStart(micStream, voiceStream) {
+  if (!ear.a || ear.you) return;
+  ear.a.resume().catch(() => {});
+  const tap = (stream) => {
+    const n = ear.a.createAnalyser();
+    n.fftSize = 1024;
+    ear.a.createMediaStreamSource(stream).connect(n);
+    return n;
+  };
+  ear.you = tap(micStream);
+  ear.voice = tap(voiceStream);
+  ear.buf = new Float32Array(1024);
+  setInterval(earTick, 20);
+}
+
+const level = (node) => {
+  node.getFloatTimeDomainData(ear.buf);
+  let e = 0;
+  for (const x of ear.buf) e += x * x;
+  return 10 * Math.log10(e / ear.buf.length + 1e-12);
+};
+
+function earTick() {
+  const now = performance.now();
+  const you = level(ear.you) > EAR.youDb,
+    his = level(ear.voice) > EAR.voiceDb;
+  // You: a word starts you speaking; quiet for quietMs ends it, at the last loud sample.
+  if (you) {
+    if (!st.speaking) {
+      st.speaking = true;
+      st.start = now;
+      if (st.his) st.over = now; // you started over him
+    }
+    st.loud = now;
+  } else if (st.speaking && now - st.loud > EAR.quietMs) {
+    st.speaking = false;
+    st.end = st.loud;
+  }
+  // His voice: its first sound after the answering line is the reply reaching you.
+  if (his) {
+    if (!st.his && st.expect && now - st.expect < 10000 && st.end && now - st.end < 15000) {
+      earTell("reply", now - st.end);
+      st.expect = 0;
+    }
+    st.his = true;
+    st.hisQuiet = 0;
+  } else if (st.his) {
+    st.hisQuiet = st.hisQuiet || now;
+    if (now - st.hisQuiet > 150) {
+      st.his = false;
+      if (st.over) earTell("stop", st.hisQuiet - st.over); // he went quiet after you started
+      st.over = 0;
+    }
+  }
+  if (st.over && now - st.over > EAR.hush) {
+    earTell("stop", null); // he went on talking over you
+    st.over = 0;
+  }
+}
+
+function earReply() {
+  st.expect = performance.now();
+}
+
+function earTell(kind, ms) {
+  const v = ms == null ? EAR.hush : Math.round(ms); // null: he went on past EAR.hush
+  link[kind === "reply" ? "heard" : "stopped"] = v;
+  tell("ear", { kind, ms: v, went_on: ms == null });
+}
+
 // ── The link: the call's round trip and bitrate, and the GPU side's ───────────
-const link = { gpu: null, q: null, reply: null, prev: null };
+const link = { gpu: null, q: null, reply: null, prev: null, told: 0, heard: null, stopped: null };
 $("link").append(document.createElement("i"), document.createElement("span"));
 
 async function linkStats() {
@@ -447,7 +534,9 @@ async function linkStats() {
     bytes = 0,
     ts = 0,
     fps = null,
-    abytes = 0;
+    abytes = 0,
+    ajb = 0, // his voice's time in the jitter buffer (s, summed), and the samples it covers
+    ajn = 0;
   (await pc.getStats()).forEach((s) => {
     if (s.type === "candidate-pair" && s.nominated && s.state === "succeeded" && s.currentRoundTripTime != null)
       rtt = 1000 * s.currentRoundTripTime;
@@ -456,12 +545,20 @@ async function linkStats() {
       ts = s.timestamp;
       fps = s.framesPerSecond;
     }
-    if (s.type === "inbound-rtp" && s.kind === "audio") abytes = s.bytesReceived; // his voice, the game's sound
+    if (s.type === "inbound-rtp" && s.kind === "audio") {
+      abytes = s.bytesReceived; // his voice, the game's sound
+      ajb = s.jitterBufferDelay || 0;
+      ajn = s.jitterBufferEmittedCount || 0;
+    }
   });
   const per = (b, prev) => (link.prev && ts > link.prev.ts ? (8 * (b - prev)) / (ts - link.prev.ts) : null);
   const kbps = per(bytes, link.prev && link.prev.bytes),
     akbps = per(abytes, link.prev && link.prev.abytes);
-  link.prev = { bytes, abytes, ts };
+  // How long his voice waits in the browser before it plays, over the last second: what a
+  // late reply, or his voice going on after you talk over him, mostly is.
+  const dn = link.prev ? ajn - link.prev.ajn : 0;
+  const voiceMs = dn > 0 ? (1000 * (ajb - link.prev.ajb)) / dn : null;
+  link.prev = { bytes, abytes, ts, ajb, ajn };
   const g = link.gpu,
     q = link.q;
   const parts = [
@@ -469,15 +566,32 @@ async function linkStats() {
     kbps == null ? "" : `${(kbps / 1000).toFixed(2)} Mbps`,
     fps == null ? "" : `${Math.round(fps)} fps`,
     akbps == null ? "" : `audio ${Math.round(akbps)} kbps`, // 0: no sound is reaching the page
+    voiceMs == null ? "" : `voice +${Math.round(voiceMs)} ms`,
     "│",
     !g || g.state !== "up" ? `GPU ${g ? g.state : "–"}` : `GPU ${g.rtt == null ? "–" : g.rtt} ms`,
     q ? `q${q.q}/${q.fps}` : "",
     link.reply == null ? "" : `· reply ${(link.reply / 1000).toFixed(1)} s`,
+    link.heard == null ? "" : `· heard ${(link.heard / 1000).toFixed(1)} s`,
+    link.stopped == null ? "" : `· stops ${(link.stopped / 1000).toFixed(1)} s`,
   ];
   $("link").lastChild.textContent = parts.filter(Boolean).join(" ");
   const slow = (rtt != null && rtt > 250) || (g && g.rtt > 250) || (q && q.level > 0) || akbps === 0;
   const state = !g || g.state !== "up" ? "red" : slow ? "amber" : "green";
   $("link").firstChild.style.background = `var(--${state})`;
+  // Every 5 s, to the page server's log: what this browser sees of the call.
+  if (Date.now() - link.told > 5000) {
+    link.told = Date.now();
+    tell("stats", {
+      rtt_ms: rtt == null ? null : Math.round(rtt),
+      voice_buffer_ms: voiceMs == null ? null : Math.round(voiceMs),
+      video_kbps: kbps == null ? null : Math.round(kbps),
+      audio_kbps: akbps == null ? null : Math.round(akbps),
+      fps: fps == null ? null : Math.round(fps),
+      reply_ms: link.reply,
+      heard_reply_ms: link.heard,
+      stops_ms: link.stopped,
+    });
+  }
 }
 setInterval(() => linkStats().catch(() => {}), 1000);
 

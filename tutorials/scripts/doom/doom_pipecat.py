@@ -12,6 +12,13 @@ speech-to-text, LLM or text-to-speech service runs here. When you start talking
 over him, his line stops (an interruption) and the GPU side drops what he had
 not said yet.
 
+His answer starts at a pause, before the VAD is sure you have finished: after
+``--eager-secs`` of quiet, what you said so far goes up as a tentative
+utterance, which he answers at once, the answer held; when the VAD then ends
+your utterance (``--stop-secs`` of quiet) the held answer plays, and if you go
+on talking instead it is dropped and your whole utterance goes up as usual.
+An order in a tentative utterance is carried out at once.
+
 The page at ``/`` (``static/live.html``, ``live.js``, ``live.css``) shows the
 game's video with the dashboard around it, drawn in the browser from the
 telemetry (crisp at any size): the panel, which model runs, the action
@@ -73,7 +80,7 @@ from PIL import Image
 from pipecat.audio.mixers.base_audio_mixer import BaseAudioMixer
 from pipecat.audio.utils import create_stream_resampler, is_silence
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.audio.vad.vad_analyzer import VADParams
+from pipecat.audio.vad.vad_analyzer import VADAnalyzer, VADParams, VADState
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
@@ -208,9 +215,20 @@ class DoomLink(FrameProcessor):
     is kept: when it drops, it is made again (:meth:`_keep_link`), unless a
     newer call replaced this one there."""
 
-    def __init__(self, url: str, sound: GameSound | None = None):
+    def __init__(
+        self,
+        url: str,
+        sound: GameSound | None = None,
+        vad: VADAnalyzer | None = None,
+        eager_s: float = 0.0,
+    ):
         super().__init__()
         self.url, self.sound = url, sound
+        # The VAD's own analyzer (its state on each frame: STOPPING is a pause) and
+        # the quiet after which what you said so far goes up tentatively (0: never).
+        self.vad, self.eager_s = vad, eager_s
+        self._quiet_s = 0.0
+        self._tentative = False  # what you said so far went up; its answer is held
         self._sfx_hz = SFX_HZ
         self._session: aiohttp.ClientSession | None = None
         self._ws = None
@@ -252,6 +270,10 @@ class DoomLink(FrameProcessor):
                 logger.info(f"game sound {'on' if self.sound.on else 'off'}")
             elif frame.type == "sfx_gain" and self.sound is not None:  # the slider
                 self.sound.gain = min(1.0, max(0.0, float((frame.data or {})["gain"])))
+            elif frame.type == "stats":  # what the browser sees of the call (live.js)
+                logger.info(f"page stats {json.dumps(frame.data)}")
+            elif frame.type == "ear":  # what you heard: a reply's delay, his stopping
+                logger.info(f"page ear {json.dumps(frame.data)}")
             elif frame.type == "hello":  # the page's channel opened: what it missed
                 if self._hello is not None:
                     await self._to_page(self._hello)
@@ -260,6 +282,7 @@ class DoomLink(FrameProcessor):
         if isinstance(frame, InputAudioRawFrame):  # the microphone: up, not out
             if self._speaking:
                 self._utt.append(frame.audio)
+                await self._pause(frame)
             else:
                 self._pre.append(frame.audio)
                 keep = int(PRE_ROLL_S * frame.sample_rate * 2)
@@ -268,6 +291,7 @@ class DoomLink(FrameProcessor):
             return
         if isinstance(frame, VADUserStartedSpeakingFrame):
             self._speaking, self._utt, self._pre = True, list(self._pre), []
+            self._quiet_s, self._tentative = 0.0, False
             if self.sound is not None:
                 self.sound.you_speak = True
             self._dropped_upto = self._last_line
@@ -279,13 +303,39 @@ class DoomLink(FrameProcessor):
             if self.sound is not None:
                 self.sound.you_speak = False
             pcm, self._utt = b"".join(self._utt), []
-            if await self._send(b"U" + pcm):
+            if self._tentative:  # it went up at the pause: its held answer plays
+                self._tentative = False
+                await self._send({"type": "confirm"})
+                logger.info("utterance confirmed (it went up at the pause)")
+            elif await self._send(b"U" + pcm):
                 logger.info(f"utterance sent: {len(pcm) / (2 * MIC_HZ):.1f} s")
         elif isinstance(frame, BotStartedSpeakingFrame):
             self._bot_speaking = True
         elif isinstance(frame, BotStoppedSpeakingFrame):
             self._bot_speaking = False
         await self.push_frame(frame, direction)
+
+    async def _pause(self, frame: InputAudioRawFrame) -> None:
+        """While you speak: after ``eager_s`` of quiet (the VAD stopping), what
+        you said so far goes up tentatively; if you go on, its answer is dropped."""
+        if self.vad is None or not self.eager_s:
+            return
+        state = getattr(self.vad, "_vad_state", None)
+        if state == VADState.STOPPING:
+            self._quiet_s += len(frame.audio) / (2 * frame.sample_rate)
+            if not self._tentative and self._quiet_s >= self.eager_s:
+                pcm = b"".join(self._utt)
+                if await self._send(b"T" + pcm):
+                    self._tentative = True
+                    logger.info(
+                        f"utterance sent at a pause: {len(pcm) / (2 * MIC_HZ):.1f} s"
+                    )
+        elif state == VADState.SPEAKING:
+            self._quiet_s = 0.0
+            if self._tentative:  # you went on: the held answer is dropped
+                self._tentative = False
+                await self._send({"type": "resumed"})
+                logger.info("went on talking: the answer at the pause is dropped")
 
     async def _send(self, msg: dict | bytes) -> bool:
         """To the GPU side, if connected (False if not, or it just dropped)."""
@@ -498,12 +548,10 @@ async def run_call(conn: SmallWebRTCConnection, args) -> None:
             video_out_framerate=args.fps,
         ),
     )
-    vad = VADProcessor(
-        vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=args.stop_secs))
-    )
-    pipeline = Pipeline(
-        [transport.input(), vad, DoomLink(args.cluster, sound), transport.output()]
-    )
+    analyzer = SileroVADAnalyzer(params=VADParams(stop_secs=args.stop_secs))
+    vad = VADProcessor(vad_analyzer=analyzer)
+    link = DoomLink(args.cluster, sound, analyzer, args.eager_secs)
+    pipeline = Pipeline([transport.input(), vad, link, transport.output()])
     task = PipelineTask(pipeline)
 
     @transport.event_handler("on_client_disconnected")
@@ -588,7 +636,14 @@ def main() -> None:
         help="The relay's password (default: $TURN_PASS)",
     )
     ap.add_argument(
-        "--stop-secs", type=float, default=0.45, help="Silence that ends an utterance"
+        "--stop-secs", type=float, default=0.3, help="Silence that ends an utterance"
+    )
+    ap.add_argument(
+        "--eager-secs",
+        type=float,
+        default=0.1,
+        help="Quiet after which what you said so far goes up and is answered, the "
+        "answer held until the utterance ends, dropped if you go on (0: off)",
     )
     ap.add_argument(
         "--sfx-gain",

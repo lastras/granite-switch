@@ -556,8 +556,15 @@ class Game:
     Hooks for the live demo (``doom_live.py``): ``on_decision(tick, dists,
     ms)`` after every decision, ``on_read(tick, order)`` when the orders
     adapter has read the watcher's words, ``on_line(line_info)`` after every
-    spoken line;
+    spoken line (with ``tentative``: its id, the line held, see below),
+    ``on_confirm(id)`` and ``on_retract(id)`` when a held line is said or
+    dropped;
     :meth:`hush` holds back remarks while the watcher is talking;
+    ``player_said(..., tentative=True)``: words heard at a pause, before the
+    watcher is known to have finished: answered at once, the line held (not in
+    the conversation, its audio not played) until :meth:`confirm`, dropped by
+    :meth:`retract` (they went on talking); an order in them goes to the game
+    at once, as an order should;
     ``autostart=False`` holds the match's clock until :meth:`start`.
     ``conv_n``: how many exchanges the narrator's conversation keeps."""
 
@@ -595,8 +602,13 @@ class Game:
         self.lines: list[tuple[float, str, int, str | None]] = []
         self.stats: dict = {}
         self.lags: list[int] = []
-        # What the watcher said, unanswered: (text or speech, its order or None).
+        # What the watcher said, unanswered: (text or speech, its order or None,
+        # its tentative or None).
         self.player_queue: list[tuple] = []
+        # Words heard at a pause, answered before the watcher is known to have
+        # finished: {"id", "state": pending | confirmed | retracted, "held"}.
+        self.tentative: dict | None = None
+        self._tentatives = 0
         self.orders: list[dict] = []
         self.order_log: list[dict] = []
         self._orders_sent = 0
@@ -607,6 +619,7 @@ class Game:
         self.tick = 0
         self.done = self.lost = False
         self.on_decision = self.on_line = self.on_read = None
+        self.on_confirm = self.on_retract = None
         self.autostart, self.ready = autostart, False
         self._tasks: set[asyncio.Task] = set()  # keep running tasks referenced
 
@@ -724,29 +737,75 @@ class Game:
         """While the watcher talks, the player holds its own remarks."""
         self.hushed = on
 
-    def player_said(self, what) -> None:
+    def player_said(self, what, tentative: bool = False) -> int | None:
         """The person watching spoke (text, or 16 kHz float32 speech): the
         player answers as soon as it can (after the line it may be writing).
         With the orders adapter, its request reads the words first (and
         transcribes speech): an order goes to the game at once, not after the
-        line he may be writing."""
+        line he may be writing. ``tentative``: heard at a pause (see the
+        class): returns its id."""
         self.hushed = False
+        t = None
+        if tentative:
+            self.retract()  # an earlier one they went on from
+            self._tentatives += 1
+            t = self.tentative = {
+                "id": self._tentatives,
+                "state": "pending",
+                "held": None,
+            }
         if self.pol.kit.orders:
-            self._spawn(self._hear(what, time.perf_counter()))
+            self._spawn(self._hear(what, time.perf_counter(), t))
         else:
-            self._queue(what, None)
+            self._queue(what, None, t)
+        return None if t is None else t["id"]
 
-    def _queue(self, what, order: dict | None) -> None:
-        self.player_queue.append((what, order))
+    def confirm(self) -> None:
+        """The watcher had finished: the tentative's line is said (into the
+        conversation; ``on_confirm``, its audio played)."""
+        t, self.tentative = self.tentative, None
+        if t is None or t["state"] != "pending":
+            return
+        t["state"] = "confirmed"
+        if t["held"] is not None:
+            self._commit(*t["held"])
+            t["held"] = None
+            if self.on_confirm is not None:
+                self.on_confirm(t["id"])
+
+    def retract(self) -> bool | None:
+        """The watcher went on talking: the tentative's line is dropped, never
+        said (``on_retract``); an order it read stays given. Returns whether its
+        line had been written (None: no tentative was pending)."""
+        t, self.tentative = self.tentative, None
+        if t is None or t["state"] != "pending":
+            return None
+        t["state"] = "retracted"
+        held, t["held"] = t["held"], None
+        self.hushed = True  # they are talking again
+        if held is not None and self.on_retract is not None:
+            self.on_retract(t["id"])
+        return held is not None
+
+    def _commit(self, tick: int, ex: Exchange, ms: int) -> None:
+        """A line said: into the conversation, and the lines of the match."""
+        self.conv.add(ex)
+        self.last_ex = tick
+        self.lines.append((round(tick / TIC_HZ, 1), ex.line, ms, ex.player))
+
+    def _queue(self, what, order: dict | None, t: dict | None = None) -> None:
+        self.player_queue.append((what, order, t))
         if not self.talking and self.state is not None:
             self.talking = True
             self._spawn(self._talk(self.tick, self.state, "partner"))
 
-    async def _hear(self, what, t0: float) -> None:
+    async def _hear(self, what, t0: float, t: dict | None = None) -> None:
         async with self._hearing:
             order = await self._order(what, t0)
+        if t is not None and t["state"] == "retracted":
+            return  # they went on talking: the whole utterance comes again
         # The narrator reads the words as text (no second transcription).
-        self._queue(what if order is None else order["heard"], order)
+        self._queue(what if order is None else order["heard"], order, t)
 
     async def _order(self, what, t0: float) -> dict | None:
         """The orders adapter on the watcher's words; an order is sent to the
@@ -797,7 +856,9 @@ class Game:
         return info
 
     async def _talk(self, tick: int, state: str, cue: str) -> None:
-        player, order = self.player_queue.pop(0) if self.player_queue else (None, None)
+        player, order, t = (
+            self.player_queue.pop(0) if self.player_queue else (None, None, None)
+        )
         if player is not None:
             cue = "partner"  # the watcher spoke: whatever woke it, this is a reply
         if self.clock is not None:
@@ -814,12 +875,17 @@ class Game:
             line, heard = "", player if isinstance(player, str) else None
         ms = int((time.perf_counter() - t0) * 1000)
         spoken = line and not (self.hushed and player is None)  # a remark talked over
+        if t is not None and t["state"] == "retracted":
+            spoken = ""  # they went on talking: never said
         if self.clock is not None:  # he talks until it is said (none: he does not)
             self.clock.said(tick, line if spoken else "", reply=player is not None)
         if spoken:
-            self.conv.add(Exchange(tick, moment, heard, line))
-            self.last_ex = tick
-            self.lines.append((round(tick / TIC_HZ, 1), line, ms, heard))
+            ex = Exchange(tick, moment, heard, line)
+            held = t is not None and t["state"] == "pending"
+            if held:  # said once they are known to have finished (confirm)
+                t["held"] = (tick, ex, ms)
+            else:
+                self._commit(tick, ex, ms)
             if self.on_line is not None:
                 self.on_line(
                     {
@@ -832,6 +898,7 @@ class Game:
                         "moment": moment,
                         "brief": brief(self.hist.entries, state, self.facts),
                         "ms": ms,
+                        "tentative": t["id"] if held else None,
                     }
                 )
         if self.player_queue and self.state is not None:
