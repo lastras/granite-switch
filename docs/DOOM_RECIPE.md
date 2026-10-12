@@ -373,6 +373,86 @@ The style gates count only once the judge agrees with a person's labels on at
 least 75% of 40 pairs (`style_eval.py pairwise --export-for-human`, then
 `agree`).
 
+## Tutorial step 1: fast decisions from the chat template
+
+The tutorial's first step ([fast_decisions.md](../tutorials/guides/fast_decisions.md))
+teaches Granite the per-tic decision (35 a second, one output token) from the
+match as its own chat template renders it. Each match is one conversation
+whose key events reach the model as tool results; each decision appends the
+tic's `look` (the RL actor's view, as JSON) and the adapter's control token.
+The teacher is the RL teacher, at a compilable boundary on the Mellea fork.
+Two aLoRAs come out of it, `move` and `weapon`, in their own checkpoint.
+
+- **The conversation, the look, and its ids live in one place,**
+  `game_chat.py`, for writing, training and serving (no Mellea).
+- **The teacher and the records are in `decide.py`,** about 60 lines:
+  - `Player.move` and `Player.weapon` are compilable methods; the student reads
+    the conversation, and the teacher's memory is `self`;
+  - every output is a completion, scored by the teacher's probability.
+- **What the records hold, their parity and the checks** are in `decide_tools.py`.
+- **Composing, verifying, timing and playing** are in `decide_model.py`.
+
+### What you need for it
+
+`DATA_PY10` as for round 10, with torch added (the teacher plays):
+`venv10/bin/pip install torch`. The teacher is `$TEACHER`. Nothing is served
+while the data is written: a 32-process run writes the 100 matches in about
+8 minutes on CPU.
+
+### The steps
+
+| step | command (see `recipe.sh`) | reads | writes | compute |
+|---|---|---|---|---|
+| `check_s1` | `game_chat.py check` (the look gives the actor's input exactly; the prompt ids are the template's); `decide_tools.py selfcheck` (the view holds the conversation only; 20 completions summing to 1; a scripted student drives) | the code, `$TEACHER` | (pass or fail) | CPU |
+| `decide_data` | `decide.py --matches 100 --seed0 920000 --shard k/$SHARDS`, 2 more matches for the bench (`--seed0 930000`), then `decide_tools.py parity --n 500`, `report`, `floor` | `$TEACHER` | `$S1/decide/shard_*.jsonl.gz`, `$S1/bench.jsonl.gz`, `report.md` | CPU |
+| `train_move`, `train_weapon` | `train_alora.py --adapter move/weapon --records --epochs 1 --batch 16 --micro 2 --grad-ckpt` | the records | `$S1_RUNS/{move,weapon}/` | `$NGPU` GPUs each |
+| `compose_s1` | `decide_model.py compose`, `game_chat.py check --model`, `decide_model.py verify` | the two runs | `$S1_MODEL` | 1 GPU |
+| `eval_s1` | `decide_model.py bench` (1 and 8 games), `play` (the student, then the teacher, 12 matches each against the cast and the default bots), `engine.py run --decider chat` | `$S1_MODEL`, `$TEACHER` | `$S1_RUNS/eval/` | 1 GPU |
+
+`recipe.sh s1` runs them in order.
+
+### What the data holds
+
+These numbers are `decide_data`'s report on the 100 matches.
+
+- **Rows:** 413k: 293k `move` (one every 7 tics) and 121k `weapon` (every
+  planner tic). Each is 1.1 KB gzipped, 25 KB as JSON (22x).
+- **The prompt:**
+  - its length: p50 5.6k tokens, p99 10.3k, at most 11.0k;
+  - a match's last call: 8.5k to 11.4k;
+  - a look's turn: p50 167 tokens.
+- **The events:**
+  - pushes: 11.6 a minute (9.6 to 13.2 by match);
+  - a match holds 128 frags, 47 streaks, 13.5 deaths, 8 close calls and
+    1.6 lead changes on average.
+- **The teacher's entropy:**
+  - `move`: 2.04 nats (its top-1 probability 0.35 on average);
+  - `weapon`: 1.55 nats (0.44).
+- **The floor:** a memoryless MLP on the look alone, trained on 80 matches
+  and measured on the other 20 (KL to the teacher):
+  - `move`: 0.18 nats, against 0.90 for the teacher's mean distribution
+    (top-1 agreement 0.58, ECE 0.004);
+  - `weapon`: 0.033, against 0.20 (0.94, 0.010).
+
+  This bounds what the teacher's recurrent memory adds, which no prompt
+  shows.
+
+The plan estimated the conversation at 4–8k tokens by a match's end. In a dry
+run with every new gun pushed it reached 13k: a respawn restarts the guns, so
+a match has some 60. The guns were dropped from the events (the look has
+them), which brought it to about 10k.
+
+### The gates
+
+| | gate |
+|---|---|
+| the look | the actor's input, exactly, on every live tic (`game_chat.py check`) |
+| the records | the template on 500 records = the served ids = the training ids (`decide_tools.py parity`) |
+| the student | held-out KL to the teacher, top-1 agreement, ECE: reported beside the floor |
+| the checkpoint | at least 99% argmax agreement with PEFT; live against cold, mean TV under 0.02 (`decide_model.py verify`) |
+| latency | p50 and p99 under one tic (28.6 ms), one game; push tics shown apart (`bench`) |
+| play | frags, deaths, margin and rank against the teacher's, same seeds and settings (`play`) |
+
 ## Settings
 
 `recipe.sh` reads these environment variables. Relative paths are relative to
@@ -390,6 +470,9 @@ least 75% of 40 pairs (`style_eval.py pairwise --export-for-human`, then
 | `WORKERS`, `PART` | 32, all | collection workers per part; one part only |
 | `PY`, `DATA_PY` | `python` | the two environments' Python |
 | `PORT` | 8000 | the port `serve_writer` and `serve_judge` serve on |
+| `S1`, `S1_RUNS`, `S1_MODEL` | `data/s1`, `runs/s1`, `models/decide-s1` | tutorial step 1's data, runs and checkpoint |
+| `S1_MATCHES` | 100 | `decide_data`: the teacher's matches |
+| `FIGHTER_MODEL` | (none) | `eval_s1`: a checkpoint whose fighter reads the game log, to play the same matches |
 
 Every random choice is seeded: the matches, the moments' split, the partner's
 turn at each moment and every request to the writer and the judge (from the
@@ -413,6 +496,8 @@ own sampling may still differ from run to run.
 | a rule a line must pass | `checks.py`: a check in code, or a question in `JUDGE` |
 | the questions about the game state | `probes.py` |
 | what the orders data holds | `orders_data.py` (its lists and the two stubs) |
+| what the decisions read (step 1): the conversation, its events, the look | `game_chat.py` (`SYSTEM_PROMPTS`, `GET_GAME_EVENTS`, `LOOK`, `KEY_KINDS`, `look`) |
+| what the decision student is trained to match, and what only the teacher knows | `decide.py` (`Player`, `score`, `alternatives`) |
 
 ## The inputs the recipe does not rebuild
 

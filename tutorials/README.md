@@ -27,6 +27,7 @@ Step-by-step walkthroughs covering adapter function invocation, pipeline constru
 | [Using Mellea with Granite Switch](guides/mellea_with_granite_switch.md) | Connect Mellea to a Granite Switch model |
 | [Bring Your Own Adapter](guides/build_your_own_adapter.md) | Train, compose, and use custom adapters |
 | [Compare Inference Throughput](guides/compare_inference_throughput.md) | Compare LoRA vs aLoRA based models in an inference race setup |
+| [Fast Decisions in the Chat Template](guides/fast_decisions.md) | A decision every Doom tic (35 Hz) from Granite's own chat template: an RL teacher at a compilable boundary, soft labels, aLoRA prefix sharing |
 
 
 ## Learning Paths

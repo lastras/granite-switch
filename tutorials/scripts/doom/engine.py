@@ -22,7 +22,14 @@ requests go to one vLLM ``AsyncLLM``: its engine core runs in its own process,
 so a spoken request (including the watcher's audio, transcribed by the model's
 ASR cascade inside the narrator's request) never holds up a reflex decision.
 
+``--decider chat`` (the fast-decision tutorial, step 1): the decisions come
+instead from the ``move`` and ``weapon`` adapters, each tic, on the match's
+conversation in the chat template (:class:`game_chat.GameChat`: the key
+events as tool results, then the tic's look), the game sending its look with
+every live tic.
+
     python engine.py run --model models/doom-f-alora --games 8 --seconds 120
+    python engine.py run --model models/decide-s1 --decider chat --no-talk --bots cast
     # model on a GPU node, games on a CPU node:
     python engine.py serve --model models/doom-f-lora --games 8 --addr-file out/addr
     python engine.py play --games 8 --addr-file out/addr
@@ -47,6 +54,7 @@ import uuid
 from collections import Counter
 from pathlib import Path
 
+import game_chat
 import numpy as np
 from conversation import (
     CONV_EXCHANGES,
@@ -87,6 +95,20 @@ from talk import (
 
 TIC_S = 1.0 / TIC_HZ
 AUDIO_HZ = 16_000  # the watcher's speech, as the ASR takes it
+# A look for warming up the chat decider (game_chat.look's form).
+WARM_LOOK = {
+    "hp": 100,
+    "armor": 0,
+    "weapon": "pistol",
+    "ammo": 50,
+    "arms": {"1": 0, "2": 50},
+    "at": [41, 17],
+    "face": 90,
+    "see": [["bot", -12, 8]],
+    "walls": {"l": 3, "f": 9, "r": 9, "b": 2},
+    "hit": 0,
+    "last": ["forward", "forward"],
+}
 
 
 # ── Game side (one process per match) ──────────────────────────────────────────
@@ -186,9 +208,10 @@ class SharedSound:
 
 def game_worker(conn, spec: dict) -> None:
     """Play one match in real time. Messages to the server:
-    ``("obs", tick, state | None, entry | None, events, facts, fired)`` every
-    tic (``entry`` is the history entry the previous tic produced; ``facts``
-    and ``fired``: the match tracker's snapshot and this tic's events), then
+    ``("obs", tick, state | None, entry | None, events, facts, fired, look |
+    None)`` every tic (``entry`` is the history entry the previous tic
+    produced; ``facts`` and ``fired``: the match tracker's snapshot and this
+    tic's events; ``look``: the tic's :func:`game_chat.look`), then
     ``("done", stats, lags, order_log)``. From the server: ``("act", tick,
     action, slot | None)``, and ``("order", kind, arg, said)``: the partner's
     order (:class:`orders.Orders`: given at once, played instead of the
@@ -230,10 +253,11 @@ def game_worker(conn, spec: dict) -> None:
     t_tic = time.perf_counter()
     while not obs.done:
         state = None if obs.dead else state_text(obs)
+        lk = None if obs.dead else game_chat.look(obs)
         if frames is not None:
             frames.put(obs.tick, env.frame())
-        msg = ("obs", obs.tick, state, entry, list(obs.events), tracker.facts(), fired)
-        conn.send(msg)
+        facts = tracker.facts()
+        conn.send(("obs", obs.tick, state, entry, list(obs.events), facts, fired, lk))
         deadline = t_tic + TIC_S - (step_ms + 1.0) / 1000
         while True:
             # Alive: wait for this tic's decision until the tic is due. Dead: no
@@ -294,7 +318,10 @@ class AsyncPolicy:
     ``base_talk``: the base model writes the spoken lines, on the narrator's
     prompt, even if the checkpoint has the narrator adapter.
     ``max_model_len``: room for the narrator's conversation (30 exchanges
-    reach ~4.5k tokens when the partner talks a lot)."""
+    reach ~4.5k tokens when the partner talks a lot).
+    ``decider``: ``log`` (the game adapters on the game log) or ``chat``
+    (``move`` and ``weapon`` on the match's conversation, :mod:`game_chat`;
+    the checkpoint's aLoRAs, sampled at ``temperature``)."""
 
     def __init__(
         self,
@@ -306,6 +333,7 @@ class AsyncPolicy:
         layout: str = "log",
         base_talk: bool = False,
         max_model_len: int = 8192,
+        decider: str = "log",
     ):
         from transformers import AutoTokenizer
         from vllm import AsyncEngineArgs, SamplingParams
@@ -336,6 +364,30 @@ class AsyncPolicy:
             stop=["\n", "Player:"],
         )
         self.system = system_of(model)  # the narrator's prompt, as the checkpoint says
+        self.decider = decider
+        if decider == "chat":
+            from policy import output_token_ids
+
+            if game_chat.placement(self.tok) != "alora":
+                raise SystemExit(
+                    f"{model}: --decider chat needs the move/weapon aLoRAs"
+                )
+            self.pieces = game_chat.Pieces(self.tok)
+            vocab = {
+                a: output_token_ids(self.tok, w) for a, w in game_chat.OUTPUTS.items()
+            }
+            self.chat_words = {
+                a: {i: w for w, i in v.items()} for a, v in vocab.items()
+            }
+            self.chat_sp = {
+                a: SamplingParams(
+                    max_tokens=1,
+                    temperature=temperature,
+                    allowed_token_ids=list(v.values()),
+                    logprobs=len(v),
+                )
+                for a, v in vocab.items()
+            }
 
     async def _one(self, ids: list[int], sp, audio: np.ndarray | None = None):
         """One request; ``audio`` (16 kHz) is spliced in, transcribed, at the
@@ -358,6 +410,20 @@ class AsyncPolicy:
         res = {}
         for a, o in zip(adapters, outs):
             words = self.kit.words[a]
+            res[a] = (words[o.outputs[0].token_ids[0]], dict(output_dist(o, words)))
+        return res
+
+    async def decide_chat(self, chat, lk: dict, adapters: list[str]) -> dict:
+        """The decision adapters on the match's conversation and the tic's
+        look (``--decider chat``): one request each, sharing the conversation's
+        cached prefix."""
+        prompts = [chat.prompt_ids(lk, a) for a in adapters]  # this tic's, now
+        outs = await asyncio.gather(
+            *(self._one(p, self.chat_sp[a]) for a, p in zip(adapters, prompts))
+        )
+        res = {}
+        for a, o in zip(adapters, outs):
+            words = self.chat_words[a]
             res[a] = (words[o.outputs[0].token_ids[0]], dict(output_dist(o, words)))
         return res
 
@@ -408,6 +474,18 @@ class AsyncPolicy:
         return words[o.outputs[0].token_ids[0]], heard, dict(output_dist(o, words))
 
     async def warmup(self) -> None:
+        if self.decider == "chat":  # the decision path at a few batch sizes
+            chat = game_chat.GameChat(["Gwen", "Milo"], self.pieces)
+            chat.observe([], 0)
+            lk = {**WARM_LOOK, "weapon_tic": True}
+            for n in (1, 4, 16):
+                await asyncio.gather(
+                    *(
+                        self.decide_chat(chat, lk, list(game_chat.OUTPUTS))
+                        for _ in range(n)
+                    )
+                )
+            return
         state = (
             "now t1.0 | hp 100 armor 0 | pistol 50 | arms 2:50 | see bot -12 8m | "
             "wall l3 f9 r9 b2 | hit 0 | last forward forward"
@@ -503,6 +581,9 @@ class Game:
         self.clock = TalkClock(idle_s) if idle_s else None
         self.style = spec.get("style", BEHAVIORS[0])
         self.hist = History(pol.tok)  # the game log: what every game adapter reads
+        # --decider chat: the match's conversation the decisions read (made on
+        # the first tic, which names the players).
+        self.chat: game_chat.GameChat | None = None
         self.conv = Conversation(n=conv_n)  # what the narrator reads, and the state
         self.log = EventLog()  # the match's events, for the state and each exchange
         self.last_ex: int | None = None  # the tick of his last exchange
@@ -565,9 +646,14 @@ class Game:
                     with contextlib.suppress(OSError):
                         self.conn.send(("bye",))
                     return
-                _, tick, state, entry, _events, self.facts, fired = msg
+                _, tick, state, entry, _events, self.facts, fired, lk = msg
                 if entry is not None:
                     self.hist.append(entry)
+                if self.pol.decider == "chat":
+                    if self.chat is None:
+                        players = game_chat.players_of(self.facts)
+                        self.chat = game_chat.GameChat(players, self.pol.pieces)
+                    self.chat.observe(fired, tick)
                 self.log.add(fired)
                 if self.clock is not None:
                     self.clock.event(fired)
@@ -583,7 +669,7 @@ class Game:
                 else:
                     self.inflight = True
                     self.decided += 1
-                    self._spawn(self._decide(tick, state))
+                    self._spawn(self._decide(tick, state, lk))
                 if (
                     self.clock is not None
                     and not self.talking
@@ -596,22 +682,30 @@ class Game:
         finally:
             loop.remove_reader(fd)
 
-    async def _decide(self, tick: int, state: str) -> None:
+    async def _decide(self, tick: int, state: str, lk: dict | None = None) -> None:
         # The style this decision asks: a style order can switch self.style while
         # the request runs, and takes effect from the next one. The next one is
         # asked whatever happens to this one (inflight), or the player stops.
         style = self.style
+        plan = tick % PLAN_EVERY_TICS == 0
         try:
             t0 = time.perf_counter()
-            want = [style, CRITIC] + ([ARMS] if tick % PLAN_EVERY_TICS == 0 else [])
             talking = self.talking
-            d = await self.pol.decide(self.hist.ids, state, want)
+            if self.chat is not None:  # the decision adapters, on the conversation
+                move, weapon = game_chat.MOVE, game_chat.WEAPON
+                d = await self.pol.decide_chat(
+                    self.chat, lk, [move, weapon] if plan else [move]
+                )
+                action, slot = d[move][0], int(d[weapon][0]) if weapon in d else None
+            else:
+                want = [style, CRITIC] + ([ARMS] if plan else [])
+                d = await self.pol.decide(self.hist.ids, state, want)
+                action, slot = d[style][0], int(d[ARMS][0]) if ARMS in d else None
             ms = (time.perf_counter() - t0) * 1000
             self.lat_ms.append(ms)
             self.lat_talking.append(talking or self.talking)
-            slot = int(d[ARMS][0]) if ARMS in d else None
             try:
-                self.conn.send(("act", tick, d[style][0], slot))
+                self.conn.send(("act", tick, action, slot))
             except (BrokenPipeError, OSError):
                 pass  # the match just ended
         finally:
@@ -818,12 +912,16 @@ def play(args) -> None:
 
 async def serve(args) -> dict:
     t0 = time.time()
+    chat = args.decider == "chat"
     pol = AsyncPolicy(
         args.model,
         max_num_seqs=max(16, 5 * args.games),
         gpu_mem=args.gpu_mem,
         temperature=args.temperature,
         layout=args.layout,
+        # A ten-minute match's conversation reaches ~10k tokens.
+        max_model_len=16384 if chat else 8192,
+        decider=args.decider,
     )
     await pol.warmup()
     print(f"engine ready in {time.time() - t0:.0f}s ({pol.kit.placement})", flush=True)
@@ -986,6 +1084,13 @@ def main() -> None:
             default="log",
             choices=sorted(LAYOUTS),
             help="The game adapters' prompt layout",
+        )
+        p.add_argument(
+            "--decider",
+            default="log",
+            choices=("log", "chat"),
+            help="Who decides each tic: the game adapters on the game log, or "
+            "move/weapon on the match's conversation (game_chat.py)",
         )
         p.add_argument(
             "--player-lines",

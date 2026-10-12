@@ -16,6 +16,11 @@
 # check10 narrator10_text train_narrator10 compose10 eval_style; recipe.sh v10 runs them in order (the
 # servers apart).
 #
+# Tutorial step 1, fast decisions from the chat template (game_chat.py,
+# decide.py, decide_tools.py, decide_model.py; tutorials/guides/fast_decisions.md): check_s1
+# decide_data train_move train_weapon compose_s1 eval_s1; recipe.sh s1 runs them
+# in order.
+#
 # Settings (environment variables; paths are relative to this directory):
 #   WRITER_URL, JUDGE_URL  the writer (granite-4.2-30b; round 10's, gpt-oss-120b)
 #                          and the judge (gpt-oss-120b), OpenAI-compatible
@@ -36,6 +41,11 @@
 #              its hooks extra, ViZDoom and transformers (docs/DOOM_RECIPE.md)
 #   R9, R9_RUNS  round 9's data and runs, which round 10 reuses (data/r9, runs/r9)
 #   MATCHES    narrator10_text: the first so many matches only (a dry run; 0: all)
+#   S1, S1_RUNS, S1_MODEL  step 1's data, runs and checkpoint
+#                          (data/s1, runs/s1, models/decide-s1)
+#   S1_MATCHES  decide_data: the teacher's matches (100)
+#   FIGHTER_MODEL  eval_s1: a checkpoint whose fighter reads the game log (round 9's),
+#              to play the same matches (optional)
 #   BASE_URL   eval_style: the base model's server (serve_base), for its baseline
 #   EVAL_DATA, BOTS  eval: the held-out sets' data dir ($DATA) and the bots live
 #              (default; round 10: $R9 and cast)
@@ -58,6 +68,9 @@ DATA_PY10=${DATA_PY10:-python}
 WRITER_MODEL=${WRITER_MODEL:-granite-4.2-30b}
 R9=${R9:-data/r9}
 R9_RUNS=${R9_RUNS:-runs/r9}
+S1=${S1:-data/s1}
+S1_RUNS=${S1_RUNS:-runs/s1}
+S1_MODEL=${S1_MODEL:-models/decide-s1}
 WRITER="--writer-url ${WRITER_URL:-} --judge-url ${JUDGE_URL:-}"
 ASR=ibm-granite/granite-speech-5.0-470m-turboctc
 # The matches: 4 parts of 50, two with the default bots, two with a random tier
@@ -267,10 +280,81 @@ step_eval_style() {  # how he talks: the baselines, round 9 and v10's data and s
   fi
 }
 
+# ── Tutorial step 1: fast decisions from the chat template ─────────────────────
+step_check_s1() {  # the look is the actor's input; the records are the served prompts
+  $PY game_chat.py check --tokenizer $BASE
+  $DATA_PY10 decide_tools.py selfcheck --teacher $TEACHER --tokenizer $BASE
+}
+
+step_decide_data() {  # the teacher's 100 ten-minute matches, every decision recorded
+  [ -f $S1/decide/report.md ] && return
+  mkdir -p $S1/decide
+  local pids=() k
+  for k in $(seq 0 $((SHARDS - 1))); do
+    $DATA_PY10 decide.py --teacher $TEACHER --matches ${S1_MATCHES:-100} \
+      --seed0 920000 --shard $k/$SHARDS --out $S1/decide/shard_$k.jsonl.gz \
+      > $S1/decide/log_$k.txt 2>&1 &
+    pids+=($!)
+  done
+  local failed=0
+  for k in "${!pids[@]}"; do wait ${pids[$k]} || { say "shard $k failed"; failed=1; }; done
+  [ $failed = 0 ] || { say "a shard failed (see its log); run the step again"; exit 1; }
+  # Two more matches, never trained on: the latency bench replays them.
+  $DATA_PY10 decide.py --teacher $TEACHER --matches 2 --seed0 930000 \
+    --out $S1/bench.jsonl.gz > $S1/bench_log.txt 2>&1
+  $DATA_PY10 decide_tools.py parity --rows $S1/decide/shard_0.jsonl.gz --n 500 --tokenizer $BASE
+  { $DATA_PY10 decide_tools.py report --rows $S1/decide/shard_*.jsonl.gz --tokenizer $BASE
+    $DATA_PY10 decide_tools.py floor --rows $S1/decide/shard_*.jsonl.gz; } | tee $S1/decide/report.md
+}
+
+train_decide() {  # $1: move or weapon, on the teacher's distributions
+  [ -f $S1_RUNS/$1/metrics.json ] && return
+  $PY -m torch.distributed.run --standalone --nproc_per_node $NGPU train_alora.py \
+    --adapter $1 --kind alora --records --data $S1/decide/shard_*.jsonl.gz --base $BASE \
+    --epochs 1 --batch 16 --micro 2 --grad-ckpt --eval-every 500 --eval-n 500 \
+    --max-heldout 1500 --ckpt-every 200 --seed 0 --out $S1_RUNS/$1
+}
+step_train_move() { train_decide move; }
+step_train_weapon() { train_decide weapon; }
+
+step_compose_s1() {  # the two decision adapters: one checkpoint, checked against PEFT
+  if [ ! -f $S1_MODEL/config.json ]; then
+    rm -rf $S1_MODEL.part
+    $PY decide_model.py compose --runs $S1_RUNS --base $BASE --out $S1_MODEL.part
+    mv $S1_MODEL.part $S1_MODEL
+  fi
+  $PY game_chat.py check --tokenizer $BASE --model $S1_MODEL
+  [ -f $S1_MODEL/verify.json ] || $PY decide_model.py verify --runs $S1_RUNS \
+    --model $S1_MODEL --json $S1_MODEL/verify.json
+}
+
+step_eval_s1() {  # latency; lockstep matches, the student and the teacher; real time
+  local O=$S1_RUNS/eval
+  mkdir -p $O
+  for g in 1 8; do
+    [ -f $O/bench_$g.json ] || $PY decide_model.py bench --model $S1_MODEL \
+      --rows $S1/bench.jsonl.gz --games $g --json $O/bench_$g.json
+  done
+  for b in cast default; do  # the same seeds and settings for each player
+    [ -f $O/play_$b.json ] || $PY decide_model.py play --model $S1_MODEL --matches 12 \
+      --bots $b --json $O/play_$b.json
+    [ -f $O/teacher_$b.json ] || $PY decide_model.py play --policy teacher \
+      --teacher $TEACHER --matches 12 --bots $b --json $O/teacher_$b.json
+    [ -z "${FIGHTER_MODEL:-}" ] || [ -f $O/fighter_$b/stats.jsonl ] || $PY collect.py \
+      --policy vllm --model $FIGHTER_MODEL --teacher $TEACHER --behaviors fighter \
+      --stats-only --episodes 12 --bots $b --seed 5000 --workers 12 --out $O/fighter_$b
+  done
+  [ -f $O/engine.json ] || VLLM_ENABLE_V1_MULTIPROCESSING=1 $PY engine.py run \
+    --model $S1_MODEL --decider chat --games 4 --seconds 600 --bots cast --no-talk \
+    --json $O/engine.json
+}
+
 STEPS=(check orders_text collect moments narrator_text train_narrator train_orders compose eval)
 STEPS10=(check10 narrator10_text train_narrator10 compose10 eval)
-[ $# -gt 0 ] || { sed -n 3,37p "$0"; exit 1; }
+STEPS_S1=(check_s1 decide_data train_move train_weapon compose_s1 eval_s1)
+[ $# -gt 0 ] || { sed -n 3,52p "$0"; exit 1; }
 [ "$1" = all ] && set -- "${STEPS[@]}"
+[ "$1" = s1 ] && set -- "${STEPS_S1[@]}"
 # Round 10 is evaluated on round 9's held-out sets, live against the cast.
 [ "$1" = v10 ] && set -- "${STEPS10[@]}" eval_style && export EVAL_DATA=${EVAL_DATA:-$R9} BOTS=${BOTS:-cast}
 for s in "$@"; do

@@ -200,8 +200,13 @@ function on the Mellea fork, whose body is the teacher, and every word its teach
 sees; the bots are the cast of `conversation.CAST`),
 `checks.py` (every rule a line must pass, and the judge's questions), `orders_data.py`,
 `router_data.py`, `rft.py`. It is fed by `collect.py` (the matches) and `talk.py` (the
-speaking moments); `style_eval.py` measures how he talks. The recipe is `recipe.sh`,
-documented in `docs/DOOM_RECIPE.md`.
+speaking moments); `style_eval.py` measures how he talks. The tutorial's step 1 (fast
+decisions from the chat template) adds `game_chat.py` (the match's conversation, its
+key events and the look, for writing, training and serving alike) and `decide.py` (the
+RL teacher's move and weapon as compilable functions, every output scored by the
+teacher's probability; `decide_tools.py` holds its report, parity, floor and
+self-check); `decide_model.py` composes and measures its checkpoint. The
+recipe is `recipe.sh`, documented in `docs/DOOM_RECIPE.md`.
 
 The data itself may or may not be committed. What the repo must hold is the recipe: the
 commands that recreate every dataset an adapter trains on, in order, from the matches to the

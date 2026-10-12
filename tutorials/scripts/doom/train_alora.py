@@ -27,6 +27,12 @@ Adapters and their labels (rows from ``collect.py``):
   tokens and the end of the turn. Round 10's rows are compile records
   (``narrator_v10.py``, ``--records``): each trains on the prompt it records,
   the compiled view the student reads (:func:`load_record_rows`).
+* ``move`` / ``weapon``: the fast-decision tutorial's adapters (step 1), on
+  ``decide.py``'s compile records (``--records``): the match's conversation
+  in the chat template, the game as tool results, and the tic's look; the
+  label is the RL teacher's whole distribution, each completion's score
+  (:func:`load_record_dists`). Held out: KL to the teacher, top-1 agreement
+  and calibration error (ECE) beside the soft CE.
 
 ``--kind lora`` trains a plain LoRA on the same data and prompts: the baseline
 the aLoRA is compared against. ``--kind sr`` trains a Shadow Residual adapter
@@ -69,6 +75,8 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import game_chat
+import numpy as np
 from conversation import (
     CONV_EXCHANGES,
     NARRATOR_SYSTEM_PROMPTS,
@@ -101,7 +109,9 @@ from talk import brief
 PROBE = "probe"
 DEFAULT_TARGETS = "q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj"
 SR_CROSS = "cross_stream"
-VOCAB = {**OUTPUTS, PROBE: PROBE_WORDS}
+VOCAB = {**OUTPUTS, PROBE: PROBE_WORDS, **game_chat.OUTPUTS}
+# The decision adapters and the compilable function whose records each reads.
+RECORD_FUNCTIONS = {game_chat.MOVE: "Player.move", game_chat.WEAPON: "Player.weapon"}
 
 
 # ── Data ───────────────────────────────────────────────────────────────────────
@@ -385,6 +395,61 @@ def load_record_pairs(paths: list[Path], tok) -> list:
     return out
 
 
+def load_record_dists(paths: list[Path], tok, adapter: str) -> list:
+    """Decision records (``decide.py``'s rows, ``--records``) as (None, 0,
+    prompt, target, match key, meta), one per call of the adapter's function
+    (:data:`RECORD_FUNCTIONS`).
+
+    The prompt is the record's own: its messages and tools as the chat
+    template renders them, the generation prompt added (the base-model form;
+    PEFT's aLoRA activates at its last assistant header). It is assembled
+    from the template's own pieces as live play assembles it
+    (:class:`game_chat.Pieces`: ``decide_tools.py parity`` proves the ids equal to
+    ``apply_chat_template`` on the record), each match's conversation
+    tokenized once per push and shared by its calls: prompt ``(conversation
+    ids, suffix ids)``, :func:`record_prompt`. The target is the teacher's
+    distribution: each completion's score ``value``."""
+    pieces = game_chat.Pieces(tok)
+    fn = RECORD_FUNCTIONS[adapter]
+    out = []
+    chat, ep, heads, last_call = None, None, {}, -1
+    for r in game_chat.iter_rows(paths, fn):
+        if r["episode"] != ep or (chat and r["call"] < last_call):
+            chat, ep, heads = game_chat.GameChat([], pieces), r["episode"], {}
+        last_call = r["call"]
+        lk = chat.follow(r["prompt"]["messages"])
+        n = len(chat.messages)
+        if n not in heads:  # the conversation as it stood: shared by its calls
+            heads[n] = np.asarray(chat.ids, dtype=np.int32)
+        tail = np.asarray(pieces.suffix(lk), dtype=np.int32)
+        target = {c["completion"]: c["score"]["value"] for c in r["completions"]}
+        meta = {"call_id": r["call_id"], "t": r["meta"]["t"]}
+        out.append((None, 0, (heads[n], tail), target, r["episode"], meta))
+    return out
+
+
+def record_prompt(r) -> list[int]:
+    """A decision record's prompt ids (:func:`load_record_dists`)."""
+    head, tail = r[2]
+    return [*head.tolist(), *tail.tolist()]
+
+
+def teacher_ece(probs: list[list[float]], targets: list[list[float]], bins=10) -> float:
+    """Calibration against a stochastic teacher: the student's top-1
+    probability, in bins, against the teacher's probability of that same
+    output (how often a teacher's draw is it). 0: the student's confidence
+    means what it says."""
+    q, p = np.asarray(probs), np.asarray(targets)
+    i = q.argmax(1)
+    conf, hit = q[np.arange(len(q)), i], p[np.arange(len(p)), i]
+    out = 0.0
+    for b in range(bins):
+        m = (conf > b / bins) & (conf <= (b + 1) / bins)
+        if m.any():
+            out += m.mean() * abs(conf[m].mean() - hit[m].mean())
+    return float(out)
+
+
 def split_by_episode(rows: list, val_frac: float, seed: int) -> tuple[list, list]:
     """Hold out whole matches: consecutive tics are near-duplicates."""
     eps = sorted({r[4] for r in rows})
@@ -433,6 +498,28 @@ def collate(prompts: list[list[int]], targets: list[list[float]], pad_id: int, d
     pos = (mask.cumsum(-1) - 1).clamp(min=0)
     tgt = torch.tensor(targets, dtype=torch.float32)
     return input_ids.to(device), mask.to(device), pos.to(device), tgt.to(device)
+
+
+@contextlib.contextmanager
+def no_checkpointing(model):
+    """Gradient checkpointing off, for forwards with no backward (an
+    evaluation): PEFT's aLoRA hooks a checkpointed layer until the backward,
+    and refuses a second forward before one. An evaluation in eval mode does
+    not checkpoint anyway."""
+    from transformers.modeling_layers import GradientCheckpointingLayer
+
+    layers = [
+        m
+        for m in model.modules()
+        if isinstance(m, GradientCheckpointingLayer) and m.gradient_checkpointing
+    ]
+    for m in layers:
+        m.gradient_checkpointing = False
+    try:
+        yield
+    finally:
+        for m in layers:
+            m.gradient_checkpointing = True
 
 
 def last_logits(model, input_ids, mask, pos, allowed):
@@ -564,11 +651,12 @@ def check_tokenizer(tok, serve_dir: str, rows: list, n: int = 50) -> None:
     ref = AutoTokenizer.from_pretrained(serve_dir)
     bad = 0
     for r in rows[:n]:
-        ids = (
-            r[2]
-            if isinstance(r[2], list)
-            else tok.encode(r[2], add_special_tokens=False)
-        )
+        if isinstance(r[2], tuple):  # a decision record's
+            ids = record_prompt(r)
+        elif isinstance(r[2], list):
+            ids = r[2]
+        else:
+            ids = tok.encode(r[2], add_special_tokens=False)
         text = tok.decode(ids)
         if ref(text, add_special_tokens=False).input_ids != ids:
             bad += 1
@@ -674,7 +762,7 @@ def main() -> None:
         action="store_true",
         help="Narrator: --data and --eval-data are compile records (narrator_v10.py), "
         "each trained on its own prompt (load_record_rows; --conv-exchanges does "
-        "not apply)",
+        "not apply); move, weapon: decide.py's records (load_record_dists)",
     )
     ap.add_argument("--eval-data", type=Path, nargs="*", help="Explicit held-out set")
     ap.add_argument(
@@ -778,7 +866,15 @@ def main() -> None:
     tok = AutoTokenizer.from_pretrained(args.base)
     a = args.adapter
     lines = a == NARRATOR
-    if a == ORDERS:
+    dists = a in RECORD_FUNCTIONS  # the teacher's distribution, from decide.py
+    if dists:
+        if not args.records:
+            raise SystemExit(f"--adapter {a} trains on decide.py's records: --records")
+        label_ids = output_token_ids(tok, VOCAB[a])
+        pb = None  # the prompt is the record's own
+        rows = load_record_dists(args.data, tok, a)
+        val_rows = load_record_dists(args.eval_data, tok, a) if args.eval_data else None
+    elif a == ORDERS:
         label_ids = order_token_ids(tok)
         pb = PromptBuilder(tok, ORDERS_SYSTEM_PROMPT, align=False)
         rows = load_order_rows(args.data)
@@ -854,6 +950,8 @@ def main() -> None:
         stream, n, state = r[0], r[1], r[2]
         if lines:
             return state  # the narrator's prompt, assembled when loaded
+        if dists:
+            return record_prompt(r)
         if stream is None:
             return pb.ids(state, None)
         return pb.game_ids(stream.ids(n), state, [None])[0]
@@ -979,8 +1077,10 @@ def main() -> None:
         }, preds
 
     def evaluate(items: list) -> tuple[dict, list[list[float]]]:
-        if lines:
-            return evaluate_lines(items)
+        with no_checkpointing(raw):
+            return evaluate_lines(items) if lines else evaluate_choices(items)
+
+    def evaluate_choices(items: list) -> tuple[dict, list[list[float]]]:
         # On the unwrapped model (rank 0 only): DDP's forward would wait for
         # the other ranks.
         raw.eval()
@@ -1023,6 +1123,14 @@ def main() -> None:
                 if any(g == ci for g in gold)
             },
         }
+        if dists:  # against the teacher: soft CE = KL + the teacher's entropy
+            h = sum(
+                -sum(t_i * math.log(t_i) for t_i in t if t_i > 0) for t in tg
+            ) / max(1, len(items))
+            ev["kl"] = round(ce - h, 4)
+            ev["teacher_entropy"] = round(h, 4)
+            ev["top1_agree"] = ev["acc"]  # gold is the teacher's most likely
+            ev["ece"] = round(teacher_ece(probs, tg), 4)
         if a == CRITIC:
             hi, lo = DANGER_LEVELS.index("high"), DANGER_LEVELS.index("low")
             ev["auc_damage_1s"] = auc(
@@ -1152,6 +1260,8 @@ def main() -> None:
     lengths = [
         len(r[2])
         if lines
+        else sum(map(len, r[2]))
+        if dists
         else (r[0].length(r[1]) if r[0] is not None else 0) + len(r[2]) // 3
         for r in train_rows
     ]
@@ -1291,13 +1401,16 @@ def main() -> None:
                 run_loss = 0.0
             if step % args.eval_every == 0 and val_rows and main_rank:
                 ev, _ = evaluate(val_rows[: args.eval_n])
-                history.append({"step": step, **{k: ev[k] for k in ("acc", "soft_ce")}})
+                keys = ("acc", "soft_ce", *(("kl", "ece") if dists else ()))
+                history.append({"step": step, **{k: ev[k] for k in keys}})
                 if args.keep_best and ev["soft_ce"] < best["soft_ce"]:
                     best = {"soft_ce": ev["soft_ce"], "acc": ev["acc"], "step": step}
                     raw.save_pretrained(str(args.out / "best"))
                 ref = (
                     f"ppl {ev['ppl']:.3f}"
                     if lines
+                    else f"KL {ev['kl']:.4f}, ECE {ev['ece']:.4f}"
+                    if dists
                     else f"majority {ev['majority_baseline']:.4f}"
                 )
                 print(
@@ -1347,6 +1460,15 @@ def main() -> None:
                     "target_ids": r[3],
                     "peft_ids": q[0],
                     "peft_margin": [round(x, 4) for x in q[1]],
+                }
+            elif dists:  # the record's prompt, base form (decide_model.py verify)
+                row = {
+                    "call_id": r[5]["call_id"],
+                    "prompt_ids": record_prompt(r),
+                    "teacher": {c: round(x, 5) for c, x in zip(classes, target(r))},
+                    "label": max(r[3], key=r[3].get),
+                    "peft": classes[max(range(len(q)), key=q.__getitem__)],
+                    "peft_probs": {c: round(x, 5) for c, x in zip(classes, q)},
                 }
             else:
                 row = {
@@ -1405,6 +1527,9 @@ def main() -> None:
     ref = (
         f"ppl {ev['ppl']:.3f}, first-token acc {ev['first_token_acc']:.4f}"
         if lines
+        else f"(top-1 agreement with the teacher); KL to the teacher {ev['kl']:.4f}, "
+        f"the teacher's entropy {ev['teacher_entropy']:.4f}, ECE {ev['ece']:.4f}"
+        if dists
         else f"vs majority {ev['majority_baseline']:.4f} ({ev['majority_class']})"
     )
     print(

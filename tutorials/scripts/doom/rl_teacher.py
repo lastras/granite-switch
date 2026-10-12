@@ -575,6 +575,21 @@ class RLPolicy:
         self.first = False
         return pm, pw
 
+    def labels(
+        self, obs: Observation, style: str, digits: int = 6
+    ) -> dict[str, dict[str, float]]:
+        """:meth:`step`'s distributions by the words a student answers with,
+        rounded: ``move`` over the actions, ``weapon`` over the slot digits
+        (keeping the current weapon is its slot)."""
+        pm, pw = self.step(obs, style)
+        weapon = {str(s): 0.0 for s in WEAPON_SLOTS}
+        for i, p in enumerate(pw):
+            weapon[str(obs.slot if i == KEEP else WEAPON_SLOTS[i])] += float(p)
+        return {
+            "move": {a: round(float(p), digits) for a, p in zip(ACTIONS, pm)},
+            "weapon": {s: round(p, digits) for s, p in weapon.items()},
+        }
+
     @staticmethod
     def weapon_slot(pw: np.ndarray, obs: Observation, sample: bool, rng) -> int:
         i = rng.choices(range(N_WEAPON), weights=pw)[0] if sample else int(pw.argmax())
