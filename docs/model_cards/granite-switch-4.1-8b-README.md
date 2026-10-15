@@ -37,7 +37,7 @@ Granite Switch is also available in [granite-switch-4.1-30b](https://huggingface
 
 ### Speech-to-Text (Audio Input)
 
-Transcription runs on the same endpoint as chat and decisions, so you don't need a separate speech server and how the model is called doesn't change. Incoming audio is transcribed by the embedded [**Granite Speech 5.0 TurboCTC**](https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc) model (470M params, English, non-autoregressive conformer CTC encoder), the fastest ASR model on the [OpenASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard) <!-- TODO: add "as of <date>" -->. The transcript is spliced into the chat context in place of the audio content part. This is an **alpha** cascade (no trained projection coupling the encoder to the LLM yet); see [docs/AUDIO.md](https://github.com/generative-computing/granite-switch/blob/main/docs/AUDIO.md) in the granite-switch repo for the full design and limitations (English only, lowercase/unpunctuated output, no decode-time steering).
+Transcription runs on the same endpoint as chat and decisions, so you don't need a separate speech server and how the model is called doesn't change. Incoming audio is transcribed by the embedded [**Granite Speech 5.0 TurboCTC**](https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc) model (470M params, English, non-autoregressive conformer CTC encoder), the fastest ASR model on the [OpenASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard) <!-- TODO: add "as of <date>" -->. The transcript is spliced into the chat context in place of the audio content part. The speech encoder and the LLM are not yet jointly trained — there is no trained projection coupling them together yet; see [docs/AUDIO.md](https://github.com/generative-computing/granite-switch/blob/main/docs/AUDIO.md) in the granite-switch repo for the full design and limitations (English only, lowercase/unpunctuated output, no decode-time steering).
 
 ```python
 from openai import OpenAI
@@ -74,7 +74,7 @@ pip install -e ".[dev]"       # Everything
 
 [Mellea](https://github.com/generative-computing/mellea) is the preferred way to run Granite Switch adapters in applications. It wraps **every adapter in the Granite Libraries family** (guardian, rag, core) as a direct operation instead of raw prompt engineering — see the full [Mellea + Granite Switch guide](https://github.com/generative-computing/granite-switch/blob/main/tutorials/guides/mellea_with_granite_switch.md) for the complete set of intrinsics (e.g. `policy_guardrails`, `factuality_detection`, if composed into a checkpoint). Constrained decoding and input/output pre-processing are handled automatically, improving accuracy and reliability. The `guardian_check` call below works unchanged for `guardian-core` in this checkpoint.
 
-`decision` is **not** part of Granite Libraries and has **no Mellea intrinsic yet** — use the low-level section below for it meanwhile. Mellea support for `decision` is planned and will later collapse it to a single call too. An Adapter SDK for training your own custom and third-party adapters in [Mellea](https://docs.mellea.ai/advanced/lora-and-alora-adapters) is planned.
+`decision` is now part of Granite Libraries — it ships in [`granitelib-core-r1.0`](https://huggingface.co/ibm-granite/granitelib-core-r1.0) — but has **no Mellea intrinsic yet**: use the low-level section below for it meanwhile. Mellea support for `decision` is planned and will later collapse it to a single call too. An Adapter SDK for training your own custom and third-party adapters in [Mellea](https://docs.mellea.ai/advanced/lora-and-alora-adapters) is planned.
 
 ```bash
 pip install mellea
@@ -331,7 +331,7 @@ This model inherits the safety profile of the base Granite 4.1 model. The embedd
 - Monitor adapter outputs, especially for safety-critical applications
 - Treat the `decision` adapter's option probabilities as a prior to inform a decision, not a certified classification, on domains it wasn't trained for
 
-The speech-to-text cascade is an **alpha** feature: it is English-only, produces lowercase/unpunctuated transcripts, and the ASR model is not fine-tuned jointly with the LLM or adapters — a mistranscription can silently change what the model (or an adapter) responds to.
+The speech-to-text cascade has known limitations: it is English-only, produces lowercase/unpunctuated transcripts, and the ASR model is not fine-tuned jointly with the LLM or adapters — a mistranscription can silently change what the model (or an adapter) responds to.
 
 ### License
 
