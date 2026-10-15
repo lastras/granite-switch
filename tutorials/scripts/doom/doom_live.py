@@ -56,7 +56,7 @@ reconnect):
 
 ::
 
-    # his voice: Kokoro's am_michael, 2 semitones down
+    # his voice: Kokoro's am_michael, unshifted
     python doom_live.py serve --model models/doom-h-alora-narr4-audio --port 8765 \\
         --tts-python kokoro-env/bin/python
     # or Chatterbox-Turbo, cloning a clip
@@ -1322,17 +1322,13 @@ def main() -> None:
     s.add_argument(
         "--voice-ref", type=Path, help="Chatterbox: the clip his voice clones"
     )
-    s.add_argument(
-        "--pitch", type=float, help="Semitones (default: -2 for kokoro, else 0)"
-    )
+    s.add_argument("--pitch", type=float, default=0.0, help="Semitones")
     k = sub.add_parser("smoke", help="A scripted client")
     k.add_argument("--url", default="ws://localhost:8765/ws")
     k.add_argument("--questions", type=Path, required=True, help="q_<name>.wav files")
     k.add_argument("--seconds", type=float, default=300.0)
     k.add_argument("--out", type=Path, default=Path("out/smoke"))
     args = ap.parse_args()
-    if args.cmd == "serve" and args.pitch is None:
-        args.pitch = -2.0 if args.tts == "kokoro" else 0.0
     asyncio.run(serve(args) if args.cmd == "serve" else smoke(args))
 
 
