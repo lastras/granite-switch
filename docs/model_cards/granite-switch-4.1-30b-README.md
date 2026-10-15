@@ -86,6 +86,25 @@ pip install -e ".[audio]"     # Audio input (adds vLLM's audio deps)
 pip install -e ".[dev]"       # Everything
 ```
 
+#### Recreating this checkpoint
+
+This checkpoint is produced by composing the base model with `guardian-core` from the Guardian
+library and `decision` from the Core library — `--include-adapters` drops every other adapter each
+library ships — plus the ASR cascade (`--enable-audio`, default Granite Speech 5.0 TurboCTC):
+
+```bash
+python -m granite_switch.composer.compose_granite_switch \
+  --base-model ibm-granite/granite-4.1-30b \
+  --adapters ibm-granite/granitelib-guardian-r1.0 ibm-granite/granitelib-core-r1.0 \
+  --include-adapters guardian-core decision \
+  --enable-audio \
+  --output ./granite-switch-4.1-30b
+```
+
+See [BUILD.md](BUILD.md) for the exact adapter ranks/targets this checkpoint ships with, and the
+[adapter catalog](https://generative-computing.github.io/granite-switch/adapter_catalog.html) for
+every other adapter available to compose into your own checkpoint.
+
 ### Using with Mellea
 
 [Mellea](https://github.com/generative-computing/mellea) is the preferred way to run Granite Switch adapters in applications. It wraps **every adapter in the Granite Libraries family** (guardian, rag, core) as a direct operation instead of raw prompt engineering — see the full [Mellea + Granite Switch guide](https://github.com/generative-computing/granite-switch/blob/main/tutorials/guides/mellea_with_granite_switch.md) for the complete set of intrinsics (e.g. `policy_guardrails`, `factuality_detection`, if composed into a checkpoint). Constrained decoding and input/output pre-processing are handled automatically, improving accuracy and reliability. The `guardian_check` call below works unchanged for `guardian-core` in this checkpoint.
