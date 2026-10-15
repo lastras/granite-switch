@@ -54,6 +54,22 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
+### Decision Index (JEV) — decision aLoRA
+
+The `decision` activated-LoRA adapter was evaluated on the public Decision Index fast subset (1,068
+rows) in the edition-v0.3 scoring, using the adapter's documented invocation recipe: a fixed
+decision-engine system prompt, a `State:` turn (run on the frozen base), and a `### DECISION` turn
+presenting the question and single-token-labelled options, with the first assistant token read as a
+softmax over the option-label logits. Each configuration was measured two ways — the adapter served
+locally and the same adapter served behind a hosted vLLM endpoint — which agree to within ~0.6 points,
+confirming the serving path is faithful; hosted-serving numbers are shown below.
+
+| Overall | Knowledge | Language | Retrieval | Tools | Arts |
+|---|---|---|---|---|---|
+| 50.1 | 32.4 | 58.6 | 49.8 | 76.5 | 26.4 |
+
+Scores are the Decision Index v0.3 public component (0–100); per-area skills are shown ×100.
+
 ---
 
 ### Generation
