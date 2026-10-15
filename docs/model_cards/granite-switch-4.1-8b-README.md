@@ -130,7 +130,10 @@ Each adapter is read back the way its own training actually documents, not a one
 their softmax — so ask the server for exactly those tokens' logprobs with `logprob_token_ids` (a vLLM
 extension, passed via `extra_body`; it returns the logprob of exactly the ids you name, so a
 low-probability option can't be missed the way asking for "top-K by probability" could — see vLLM's
-`SamplingParams.logprob_token_ids`):
+`SamplingParams.logprob_token_ids`). The request itself is just two `user` turns — a state turn and a
+question turn — with no system prompt: that keeps the state turn's tokens identical to a plain chat
+request about the same state, so vLLM's prefix cache can share them instead of every decision request
+paying for its own separate prefix:
 
 ```python
 import math
@@ -149,10 +152,6 @@ label_ids = [tokenizer(label, add_special_tokens=False)["input_ids"][0] for labe
 response = client.chat.completions.create(
     model=MODEL_ID,
     messages=[
-        {"role": "system", "content": (
-            "You are a decision engine. Read the state, then answer the question by "
-            "replying with exactly one option label from the list. Do not explain."
-        )},
         {"role": "user", "content": (
             "State:\nMy payouts have failed three times. The bank says everything is "
             "fine. Can someone please fix this?"
