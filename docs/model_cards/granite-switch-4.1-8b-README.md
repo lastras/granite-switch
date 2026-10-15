@@ -9,52 +9,35 @@ tags:
 
 # Granite Switch 4.1 8B
 
-*Guardian safety detection + a general-purpose decision engine + speech-to-text input*
+*Chat, decisions, and speech from one endpoint*
 
-**Model Summary:** Granite Switch 4.1 8B is a modular LLM built on [IBM Granite 4.1 8B](https://huggingface.co/ibm-granite/granite-4.1-8b) with two embedded adapters, activated on demand via control tokens in the chat template: `guardian-core`, a safety-risk detector from the [Granite Libraries](https://huggingface.co/collections/ibm-granite/granite-libraries) Guardian collection, and `decision`, a general-purpose aLoRA decision engine for arbitrary multiple-choice / classification questions. The checkpoint also accepts spoken audio input through a cascaded speech-to-text front end, [Granite Speech 5.0 TurboCTC](https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc).
+📝 **Read the launch blog:** [Granite Switch 4.1: Chat, Decisions, and Speech from One Endpoint](https://huggingface.co/blog/ibm-granite/granite-switch-4-1)
 
-This is a **focused** release: rather than the full Granite Libraries bundle (rag + core + guardian, 12 adapters), it showcases just the safety-detection and decision-engine categories, plus audio, in a single checkpoint. For the complete adapter bundle (no audio), see [granite-switch-4.1-8b-preview](https://huggingface.co/ibm-granite/granite-switch-4.1-8b-preview).
+**Model Summary:** Granite Switch 4.1 8B is a modular LLM that composes three capabilities into one model on top of [IBM Granite 4.1 8B](https://huggingface.co/ibm-granite/granite-4.1-8b), so a single hosted endpoint can move between natural-language responses, general and specialized decisions, and speech-to-text.
 
-For full details on model composition and adapter configuration, see [BUILD.md](BUILD.md).
+Adapters are activated on demand via control tokens in the chat template. For full details on model composition and adapter configuration, see [BUILD.md](BUILD.md).
 
 - **Base Model:** `ibm-granite/granite-4.1-8b` (8B params, 128K context)
-- **Adapters:** 2 — `guardian-core` (aLoRA, from `granitelib-guardian-r1.0`) and `decision` (aLoRA, decision engine)
-- **Audio:** speech-to-text cascade via `ibm-granite/granite-speech-5.0-470m-turboctc` (470M params, English)
+- **Adapters:** 2 — `decision` (aLoRA, general-purpose Decisions) and `guardian-core` (aLoRA, from `granitelib-guardian-r1.0`)
+- **Audio:** embedded speech-to-text via `ibm-granite/granite-speech-5.0-470m-turboctc` (470M params, English)
 - **License:** [Apache 2.0](https://www.apache.org/licenses/LICENSE-2.0)
 - **Release Date:** October 14, 2026
 - **Backends:** HuggingFace Transformers, vLLM
 - **Automatically Composed with:** [granite-switch](https://github.com/generative-computing/granite-switch)
 
-Granite Switch is also available in [granite-switch-4.1-30b](https://huggingface.co/ibm-granite/granite-switch-4.1-30b) (same two adapters + audio, 30B base), and with the complete Granite Libraries bundle (no audio) in [granite-switch-4.1-8b-preview](https://huggingface.co/ibm-granite/granite-switch-4.1-8b-preview), [-30b-preview](https://huggingface.co/ibm-granite/granite-switch-4.1-30b-preview), and [-3b-preview](https://huggingface.co/ibm-granite/granite-switch-4.1-3b-preview).
+Granite Switch is also available in [granite-switch-4.1-30b](https://huggingface.co/ibm-granite/granite-switch-4.1-30b) (same Chat + Decisions + Guardian + speech configuration, 30B base), and with the complete Granite Libraries bundle (no audio) in [granite-switch-4.1-8b-preview](https://huggingface.co/ibm-granite/granite-switch-4.1-8b-preview), [-30b-preview](https://huggingface.co/ibm-granite/granite-switch-4.1-30b-preview), and [-3b-preview](https://huggingface.co/ibm-granite/granite-switch-4.1-3b-preview).
 
-**Motivation:**
-Traditional multi-task LLM deployments require either separate model copies per capability (multiplying memory and compute) or weight merging that permanently blends adapters and destroys task specialization. Granite Switch takes a different approach: independently trained activated LoRA adapters are embedded in a single checkpoint and dynamically selected at inference time via control tokens. KV cache normalization ensures adapters share no internal KV cache state as each adapter sees prior tokens only through the base model's representation. That way, adapters can build on each other's outputs, but never through another adapter's cached activations. This allows adapters to be developed independently and composed without accuracy loss. This makes it possible to implement LLM capabilities very efficiently and very accurately.
+## Included Adapters & Encoders
 
-## Included Adapters
-
-Granite Switch is best used with [Mellea](https://mellea.ai/).
-
-### Guardian Library (`ibm-granite/granitelib-guardian-r1.0`)
-
-Safety risk detection.
-
-| Adapter | Description |
+| Switch Component | Description |
 |---|---|
-| [**Guardian Core**](https://huggingface.co/ibm-granite/granitelib-guardian-r1.0/tree/main/guardian-core) | Detects safety risks: harm, jailbreaking, profanity, violence, sexual content, social bias, unethical behavior |
-
-The Guardian Library ships 3 additional adapters not included in this checkpoint — [**Factuality Detection**](https://huggingface.co/ibm-granite/granitelib-guardian-r1.0/tree/main/factuality-detection), [**Factuality Correction**](https://huggingface.co/ibm-granite/granitelib-guardian-r1.0/tree/main/factuality-correction), and [**Policy Guardrails**](https://huggingface.co/ibm-granite/granitelib-guardian-r1.0/tree/main/policy-guardrails) — see the library page for the full set.
-
-### Decision Engine (aLoRA)
-
-A general-purpose decision engine: given a short state description and a question with 2 or more single-token-labelled options (`A`, `B`, ...), one forward pass returns a calibrated probability distribution over the option labels — usable for intent routing, escalation/urgency flags, or any other classification question framed as labelled options. Unlike the Guardian Library, this adapter isn't currently published as a standalone adapter on the Hub — it is embedded only in this checkpoint (and its `-30b` sibling).
-
-| Adapter | Description |
-|---|---|
-| **Decision** | Given a state + a question with labelled options, returns a softmax probability distribution over the option labels in one forward pass |
+| [**Guardian Core aLoRA**](https://huggingface.co/ibm-granite/granitelib-guardian-r1.0/tree/main/guardian-core) | Detects safety risks: harm, jailbreaking, profanity, violence, sexual content, social bias, unethical behavior |
+| **Decisions aLoRA** | Given a state + a question with labelled options, returns a softmax probability distribution over the option labels in one forward pass |
+| [**Granite Speech 5.0 TurboCTC Encoder**](https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc) | An ASR model for quick speech to text transcription tasks |
 
 ### Speech-to-Text (Audio Input)
 
-This checkpoint also accepts spoken audio: incoming audio is transcribed by a cascaded speech-to-text model, [**Granite Speech 5.0 TurboCTC**](https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc) (470M params, English, non-autoregressive conformer CTC encoder), and the transcript is spliced into the chat context in place of the audio content part — no separate speech server, no change to how the model is called. This is an **alpha** cascade (no trained projection coupling the encoder to the LLM yet); see [docs/AUDIO.md](https://github.com/generative-computing/granite-switch/blob/main/docs/AUDIO.md) in the granite-switch repo for the full design and limitations (English only, lowercase/unpunctuated output, no decode-time steering).
+Transcription runs on the same endpoint as chat and decisions, so you don't need a separate speech server and how the model is called doesn't change. Incoming audio is transcribed by the embedded [**Granite Speech 5.0 TurboCTC**](https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc) model (470M params, English, non-autoregressive conformer CTC encoder), the fastest ASR model on the [OpenASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard) <!-- TODO: add "as of <date>" -->. The transcript is spliced into the chat context in place of the audio content part. This is an **alpha** cascade (no trained projection coupling the encoder to the LLM yet); see [docs/AUDIO.md](https://github.com/generative-computing/granite-switch/blob/main/docs/AUDIO.md) in the granite-switch repo for the full design and limitations (English only, lowercase/unpunctuated output, no decode-time steering).
 
 ```python
 from openai import OpenAI
@@ -91,7 +74,7 @@ pip install -e ".[dev]"       # Everything
 
 [Mellea](https://github.com/generative-computing/mellea) is the preferred way to run Granite Switch adapters in applications. It wraps **every adapter in the Granite Libraries family** (guardian, rag, core) as a direct operation instead of raw prompt engineering — see the full [Mellea + Granite Switch guide](https://github.com/generative-computing/granite-switch/blob/main/tutorials/guides/mellea_with_granite_switch.md) for the complete set of intrinsics (e.g. `policy_guardrails`, `factuality_detection`, if composed into a checkpoint). Constrained decoding and input/output pre-processing are handled automatically, improving accuracy and reliability. The `guardian_check` call below works unchanged for `guardian-core` in this checkpoint.
 
-`decision` is **not** part of Granite Libraries and has **no Mellea intrinsic yet** — use the low-level section below for it meanwhile. Mellea support for `decision` is planned and will later collapse it to a single call too.
+`decision` is **not** part of Granite Libraries and has **no Mellea intrinsic yet** — use the low-level section below for it meanwhile. Mellea support for `decision` is planned and will later collapse it to a single call too. An Adapter SDK for training your own custom and third-party adapters in [Mellea](https://docs.mellea.ai/advanced/lora-and-alora-adapters) is planned.
 
 ```bash
 pip install mellea
@@ -328,6 +311,17 @@ Each adapter is activated by passing its name to the chat template using an argu
 
 ---
 
+### Resources
+
+- [Speech to Decisions demo](https://huggingface.co/spaces/ibm-granite/speech-to-decisions)
+- [aLoRA vs. LoRA race notebook (Colab)](https://colab.research.google.com/github/generative-computing/granite-switch/blob/main/tutorials/notebooks/alora_vs_lora_race.ipynb)
+- [Adapter catalog: compose your own Granite Switch model](https://generative-computing.github.io/granite-switch/adapter_catalog.html)
+- [Granite Switch GitHub repo](https://github.com/generative-computing/granite-switch)
+- [Original Granite Switch release blog](https://research.ibm.com/blog/granite-libraries-project-switch)
+- [Granite Switch 4.1 blog](https://huggingface.co/blog/ibm-granite/granite-switch-4-1)
+
+---
+
 ### Ethical Considerations and Limitations
 
 This model inherits the safety profile of the base Granite 4.1 model. The embedded `guardian-core` adapter provides an additional safety layer but is not a substitute for application-level safety testing, and this checkpoint does **not** include the Guardian Library's factuality-detection, factuality-correction, or policy-guardrails adapters. Deployers should:
@@ -335,7 +329,7 @@ This model inherits the safety profile of the base Granite 4.1 model. The embedd
 - Test adapter behavior on their specific use cases before production deployment
 - Apply appropriate content filtering for their domain
 - Monitor adapter outputs, especially for safety-critical applications
-- Treat the `decision` engine's option probabilities as a prior to inform a decision, not a certified classification, on domains it wasn't trained for
+- Treat the `decision` adapter's option probabilities as a prior to inform a decision, not a certified classification, on domains it wasn't trained for
 
 The speech-to-text cascade is an **alpha** feature: it is English-only, produces lowercase/unpunctuated transcripts, and the ASR model is not fine-tuned jointly with the LLM or adapters — a mistranscription can silently change what the model (or an adapter) responds to.
 
