@@ -179,6 +179,48 @@ print(probs)
 # => {"A": 0.982, "B": 0.0035, "C": 0.014}  -- the softmax over option labels `decision` is trained to produce
 ```
 
+#### Decisions with more than 128 options
+
+`decision` reads its calibrated distribution by requesting per-token logprobs for the option labels
+via the `logprob_token_ids` field above. vLLM caps that field at 128 token ids per request, so a single
+decision question with more than 128 options returns `HTTP 400: Requested logprob_token_ids of length
+N, which is greater than max allowed: 128`.
+
+To handle such questions, split the label ids into chunks of ≤128 and issue one request per chunk with
+the identical prompt. Because the returned logprobs are over the full vocabulary, each label's logprob
+is independent of which chunk requested it, so the per-chunk results can be concatenated and a single
+softmax applied over the complete label set — mathematically identical to an uncapped call, at the cost
+of one extra request per 128 options:
+
+```python
+import math
+
+ALL_LABEL_IDS = [...]  # single-token ids for every option, however many there are
+
+chunks = [ALL_LABEL_IDS[i : i + 128] for i in range(0, len(ALL_LABEL_IDS), 128)]
+logprob_by_id = {}
+for chunk in chunks:
+    response = client.chat.completions.create(
+        model=MODEL_ID,
+        messages=messages,  # the identical prompt for every chunk
+        extra_body={
+            "chat_template_kwargs": {"adapter_name": "decision"},
+            "logprob_token_ids": chunk,
+        },
+        max_completion_tokens=1,
+        logprobs=True,
+        top_logprobs=1,
+        temperature=0,
+    )
+    for t in response.choices[0].logprobs.content[0].top_logprobs:
+        logprob_by_id[t.token] = t.logprob
+
+# One softmax over the full label set, built from the per-chunk logprobs.
+unnormalized = {tok: math.exp(lp) for tok, lp in logprob_by_id.items()}
+total = sum(unnormalized.values())
+probs = {tok: p / total for tok, p in unnormalized.items()}
+```
+
 #### `guardian-core` — read its yes/no verdict out of its JSON envelope
 
 `guardian-core` always answers inside a fixed JSON shape, `{"score": "yes"}` or `{"score": "no"}` —
