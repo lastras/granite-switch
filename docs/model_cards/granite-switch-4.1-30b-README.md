@@ -32,7 +32,7 @@ Granite Switch is also available in [granite-switch-4.1-8b](https://huggingface.
 | Switch Component | Description |
 |---|---|
 | [**Guardian Core aLoRA**](https://huggingface.co/ibm-granite/granitelib-guardian-r1.0/tree/main/guardian-core) | Detects safety risks: harm, jailbreaking, profanity, violence, sexual content, social bias, unethical behavior |
-| **Decisions aLoRA** | Given a state + a question with labelled options, returns a softmax probability distribution over the option labels in one forward pass |
+| [**Decisions aLoRA**](https://huggingface.co/ibm-granite/granitelib-core-r1.0/tree/main/decision) | Given a state + a question with labelled options, returns a softmax probability distribution over the option labels in one forward pass |
 | [**Granite Speech 5.0 TurboCTC Encoder**](https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc) | An ASR model for quick speech to text transcription tasks |
 
 ### Speech-to-Text (Audio Input)
@@ -109,7 +109,7 @@ every other adapter available to compose into your own checkpoint.
 
 [Mellea](https://github.com/generative-computing/mellea) is the preferred way to run Granite Switch adapters in applications. It wraps **every adapter in the Granite Libraries family** (guardian, rag, core) as a direct operation instead of raw prompt engineering — see the full [Mellea + Granite Switch guide](https://github.com/generative-computing/granite-switch/blob/main/tutorials/guides/mellea_with_granite_switch.md) for the complete set of intrinsics (e.g. `policy_guardrails`, `factuality_detection`, if composed into a checkpoint). Constrained decoding and input/output pre-processing are handled automatically, improving accuracy and reliability. The `guardian_check` call below works unchanged for `guardian-core` in this checkpoint.
 
-`decision` is now part of Granite Libraries — it ships in [`granitelib-core-r1.0`](https://huggingface.co/ibm-granite/granitelib-core-r1.0) — but has **no Mellea intrinsic yet**: use the low-level section below for it meanwhile. Mellea support for `decision` is planned and will later collapse it to a single call too. An Adapter SDK for training your own custom and third-party adapters in [Mellea](https://docs.mellea.ai/advanced/lora-and-alora-adapters) is planned.
+`decision` is now part of Granite Libraries — it ships in [`granitelib-core-r1.0`](https://huggingface.co/ibm-granite/granitelib-core-r1.0/tree/main/decision) — but has **no Mellea intrinsic yet**: use the low-level section below for it meanwhile. Mellea support for `decision` is planned and will later collapse it to a single call too. An Adapter SDK for training your own custom and third-party adapters in [Mellea](https://docs.mellea.ai/advanced/lora-and-alora-adapters) is planned.
 
 ```bash
 pip install mellea
